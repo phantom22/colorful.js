@@ -1,0 +1,12 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "outFile":"../js/index.js"
+    },
+    "files": [
+        "searchParams.ts",
+        "webgl_helpers.ts",
+        "colorful.ts",
+        "main.ts"
+    ]
+}

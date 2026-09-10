@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Colorful</title>
+<style>
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevents scrollbars entirely */
+    background-color: black;
+}
+
+#container {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+#screen {
+    display: block; /* Removes baseline inline spacing gap */
+    width: 100%;
+    height: 100%;
+}
+</style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="screen"></canvas>
+    </div>
+    <script src="js/index.js"></script>
+<script type="x-shader/vs" id="vertex-shader">
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+
+uniform mat4 u_proj;
+flat out uint v_id;
+
+out vec2 v_local_pos;
+
+void main() {
+    v_local_pos = pos;
+
+    v_id = id;
+    gl_Position = u_proj * vec4(pos, 0.0, 1.0);
+}
+</script>
+<script type="x-shader/fs" id="fragment-shader">
+#version 300 es
+precision mediump float;
+
+flat in uint v_id;
+in vec2 v_local_pos;
+
+uniform sampler2D u_texture;
+uniform uint u_vertex_count;
+uniform float u_texture_size;
+
+out vec4 color;
+
+void main() {
+    float id = float(v_id);
+
+    float col = mod(id, u_texture_size);
+    float row = floor(id / u_texture_size);
+
+    vec2 uv = vec2((col + 0.5) / u_texture_size, (row + 0.5) / u_texture_size);
+
+    vec2 p = abs(v_local_pos);
+    float max_dist = max(p.x * 0.8660254 + p.y * 0.5, p.y);
+
+    if (max_dist > 0.86235) {
+        color = vec4(1.0, 1.0, 1.0, 1.0);
+    }
+    else {  
+        color = texture(u_texture, uv);
+    }
+}
+</script>
+<script type="x-shader/vs" id="mask-vertex">
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+
+uniform mat4 u_proj;
+
+flat out uint v_id;
+
+void main() {
+    v_id = id;
+    gl_Position = u_proj * vec4(pos, 0.0, 1.0);
+}
+</script>
+<script type="x-shader/fs" id="mask-fragment">
+#version 300 es
+precision highp float;
+precision highp int;
+
+flat in uint v_id;
+
+out uvec4 color;
+
+void main() {
+    color = uvec4(v_id, 0u, 0u, 1u);
+}
+</script>
+</body>
+</html>
