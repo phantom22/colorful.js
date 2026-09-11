@@ -12,27 +12,50 @@ let gl: WebGL2RenderingContext,
     height:number,
     vao:WebGLVertexArrayObject,
     vertex_color_data:Uint8Array,
-    color_texture:WebGLTexture;
+    color_texture:WebGLTexture,
+    mask_vao:WebGLVertexArrayObject,
+    force_render_mask = true,
+    mouse_down = false,
+    shift_down = false,
+    hovered_id = undefined as undefined|number,
+    wave_queue = new Set() as Set<number>;
 
-const side_length = searchParams.getNumber("side_length", 20),
-      blend_value = searchParams.getNumber("blend_value", 0),
-      wave_delay = searchParams.getNumber("wave_delay", 20),
-      wave_decay = searchParams.getNumber("wave_decay", 0.99),
+window.onkeydown = (e:KeyboardEvent) => {
+    if (e.key === "Shift") {
+        shift_down = true;
+    }
+};
+
+window.onkeyup = (e:KeyboardEvent) => {
+    if (e.key === "Shift") {
+        shift_down = false;
+        for (const id of wave_queue) {
+            wave_start(id);
+            wave_queue.delete(id);
+        }
+    }
+};
+
+const side_length = searchParams.getNumber("side_length", 32, 1),
+      blend_value = searchParams.getNumber("blend_value", 0.008, 0,1),
+      wave_delay = searchParams.getNumber("wave_delay", 20, 1),
+      wave_decay = searchParams.getNumber("wave_decay", 0.99, 0,1),
       decay_min_radius = searchParams.getNumber("decay_min_radius", -2),
-      new_wave_delay = searchParams.getNumber("new_wave_delay", 500),
-      new_wave_p = searchParams.getNumber("new_wave_p", 0.00015),
-      new_color_p = searchParams.getNumber("new_color_p", 0.1),
-      new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5),
+      new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1),
+      new_wave_p = searchParams.getNumber("new_wave_p", 0.00015, 0,1),
+      new_color_p = searchParams.getNumber("new_color_p", 0.1, 0,1),
+      new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0,1),
+      grid_bg = searchParams.getUint8Color("grid_bg"),
       params = new URLSearchParams([
-        ["side_length", String(side_length)],
-        ["blend_value",String(blend_value)],
-        ["wave_delay", String(wave_delay)],
-        ["wave_decay", String(wave_decay)],
-        ["decay_min_radius", String(decay_min_radius)],
-        ["new_wave_delay", String(new_wave_delay)],
-        ["new_wave_p", String(new_wave_p)],
-        ["new_color_p", String(new_color_p)],
-        ["new_color_compl_p", String(new_color_compl_p)],
+        ["side_length", `${side_length}`],
+        ["blend_value",`${blend_value}`],
+        ["wave_delay", `${wave_delay}`],
+        ["wave_decay", `${wave_decay}`],
+        ["decay_min_radius", `${decay_min_radius}`],
+        ["new_wave_delay", `${new_wave_delay}`],
+        ["new_wave_p", `${new_wave_p}`],
+        ["new_color_p", `${new_color_p}`],
+        ["new_color_compl_p", `${new_color_compl_p}`]
       ]),
       palette = [
         new Uint8Array([255, 107, 107]), // coral red
@@ -55,7 +78,7 @@ const side_length = searchParams.getNumber("side_length", 20),
       palette_size = palette.length;
 
 window.history.replaceState({}, '',
-    window.location.pathname + "?" + params.toString()
+    window.location.pathname + "?" + params.toString() + `&grid_bg=[${grid_bg}]`
 );
 
 window.onload = () => {
@@ -64,7 +87,7 @@ canvas = document.getElementById("screen") as HTMLCanvasElement;
 if (!(canvas instanceof HTMLCanvasElement))
     throw "Colorful.js: couldn't find canvas#screen element.";
 
-gl = canvas.getContext("webgl2");
+gl = canvas.getContext("webgl2") as WebGL2RenderingContext;
 
 //////////////////////////////////
 //       MAIN SHADER            //
@@ -86,7 +109,7 @@ canvas.style.width = width.toString();
 canvas.style.height = height.toString();
 gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 
-grid = new ColorfulGrid(side_length, new Uint8Array([0,0,0,255]));
+grid = new ColorfulGrid(side_length, grid_bg);
 vertex_count = grid.vertex_count;
 
 vao = gl.createVertexArray();
@@ -134,7 +157,7 @@ mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment",
 mask_p.useProgram();
 gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
 
-const mask_vao = gl.createVertexArray();
+mask_vao = gl.createVertexArray();
 gl.bindVertexArray(mask_vao);
 
 const mask_pos_buffer = gl.createBuffer();
@@ -169,37 +192,77 @@ gl.framebufferTexture2D(
 )
 gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-canvas.onclick = (e:MouseEvent) => {
+canvas.onmouseleave = () => { mouse_down = false; hovered_id = undefined; }
+canvas.onmousedown = (e:MouseEvent) => {
+    if (mouse_down === true || e.button !== 0)
+        return;
+
+    palette_color = ++palette_color % palette_size;
+    mouse_down = true;
+
+    if (force_render_mask)
+        return;
+
     const rect = canvas.getBoundingClientRect(),
           pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
           pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
-    
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-    gl.viewport(0, 0, width, height);
-
-    gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
-
-    mask_p.useProgram();
-    gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
-
-    gl.bindVertexArray(mask_vao);
-    gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-
     const pixel_data = new Uint32Array(1);
-
     gl.readPixels(
         pixelX, pixelY, 1, 1,
         gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
     );
-
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    const id = pixel_data[0];
-    if (id === 0)
+    const hovered = pixel_data[0];
+    if (hovered !== 0 && hovered !== hovered_id) {
+        if (shift_down)
+            wave_queue.add(hovered);
+        else
+            wave_start(hovered);
+        hovered_id = hovered;
+    }
+}
+
+canvas.onmousemove = (e:MouseEvent) => {
+    if (mouse_down === false || force_render_mask)
         return;
 
-    wave_start(id);
-};
+    const rect = canvas.getBoundingClientRect(),
+          pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
+          pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
+    const pixel_data = new Uint32Array(1);
+    gl.readPixels(
+        pixelX, pixelY, 1, 1,
+        gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    const hovered = pixel_data[0];
+    if (hovered !== 0 && hovered !== hovered_id) {
+        if (shift_down)
+            wave_queue.add(hovered);
+        else
+            wave_start(hovered);
+        hovered_id = hovered;
+    }
+}
+
+canvas.onmouseup = (e:MouseEvent) => {
+    if (e.button !== 0)
+        return;
+
+    mouse_down = false;
+    hovered_id = undefined;
+}
+
+canvas.onmouseleave = () => {
+    mouse_down = false;
+    hovered_id = undefined;
+}
 
 draw();
 
@@ -233,7 +296,11 @@ function update_viewport() {
         gl.uniformMatrix4fv(p.uniforms["u_proj"], false, proj_mat);
         
         mask_p.useProgram();
-        gl.uniformMatrix4fv(mask_p["u_proj"], false, proj_mat);
+        gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+
+        force_render_mask = true;
+        mouse_down = false;
+        hovered_id = undefined;
     }
 }
 
@@ -241,16 +308,34 @@ window.onresize = update_viewport;
 
 function draw() {
     p.useProgram();
+
     gl.bindVertexArray(vao);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
+
+    if (force_render_mask) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
+        gl.viewport(0, 0, width, height);
+
+        gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
+
+        mask_p.useProgram();
+        gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+
+        gl.bindVertexArray(mask_vao);
+        gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        force_render_mask = false;
+    }
+
     requestAnimationFrame(draw);
 }
 
 let wave_id = 0,
-    last_palette_color = -1;
+    palette_color = -1;
 
 function wave_start(
     id:number, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array
@@ -258,9 +343,7 @@ function wave_start(
     grid.adj_graph[id].state = ++wave_id;
     
     if (color_packed === undefined) {
-        last_palette_color = ++last_palette_color % palette_size;
-
-        color = palette[last_palette_color];
+        color = palette[palette_color];
         fcolor = new Float32Array([
             color[0] / 255, color[1] / 255, color[2] / 255
         ]);
@@ -302,15 +385,16 @@ function wave_propagate(
         factor *= wave_decay ** Math.max(depth-decay_min_radius-1, 0);
 
     for (const node of ids) {
-        if (node.state > state) {
+        if (node.state >= state) {
             ids.delete(node);
             continue;
         }
+
         if (Math.random() <= new_wave_p)
             new_wave.add(node);
 
         node.state = state;
-
+        
         let avg_adj_col = [0, 0, 0];
         for (const next of node.next) {
             const offset = next.id*4;
@@ -391,9 +475,10 @@ function wave_propagate(
                     1
                 ]);
             }
-            new_color = undefined;
-            new_color_packed = undefined;
-            new_fcolor = undefined;
+            else {
+                // @ts-ignore
+                new_color = new_color_packed = new_fcolor = undefined;
+            }
         }
         
         setTimeout(wave_start, new_wave_delay, 
@@ -408,5 +493,4 @@ function wave_propagate(
         wave_propagate, wave_delay, collected,
         state, color_packed, color, fcolor, depth+1
     );
-
 }

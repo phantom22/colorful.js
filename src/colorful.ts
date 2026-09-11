@@ -15,6 +15,7 @@ class adj_node {
 interface ColorfulGrid {
     mesh: Float32Array;
     ids: Uint32Array;
+    side_length: number;
     adj_map: number[][];
     adj_graph: adj_node[];
     /** color map  */
@@ -30,6 +31,7 @@ class ColorfulGrid {
     constructor(side_length:number, color=new Uint8Array([255,255,255,255])) {
         if (!Number.isInteger(side_length) || side_length < 1)
             throw `ColorfulGrid: side_length must be an integer greater than 1`;
+        this.side_length = side_length;
 
         const num_triangles = 6*side_length**2;
         this.vertex_count = num_triangles * 3;
