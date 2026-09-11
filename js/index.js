@@ -277,7 +277,7 @@ class ColorfulGrid {
         }
     }
 }
-let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, hovered_id = undefined, wave_queue = new Set(), texture_is_dirty = false, frame = 0, last_mouse_sample_frame = -1, mouse_x, mouse_y, pixel_data = new Uint32Array(1), request_sample = false;
+let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, hovered_id = undefined, wave_queue = new Set(), texture_is_dirty = false, frame = 0, last_mouse_sample_frame = -1, mouse_x, mouse_y, pixel_data = new Uint32Array(1), request_sample = false, request_clear = false, queued_wave_count = 0, prevent_waves_last_id = 0;
 window.onkeydown = (e) => {
     if (e.key === "Shift") {
         shift_down = true;
@@ -291,6 +291,8 @@ window.onkeyup = (e) => {
     }
     else if (e.key === "p")
         ring_wave();
+    else if (e.key === "c")
+        request_clear = true;
 };
 const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = searchParams.getNumber("blend_value", 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", 0.99, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), params = new URLSearchParams([
     ["side_length", `${side_length}`],
@@ -462,6 +464,15 @@ function update_viewport() {
 window.onresize = update_viewport;
 function draw() {
     ++frame;
+    if (request_clear) {
+        const clear_color = packUint8(new Uint8Array([0, 0, 0, 255]));
+        for (let i = 0; i < grid.adj_graph.length; ++i)
+            grid.texture_u32view[i] = clear_color;
+        prevent_waves_last_id = wave_id + queued_wave_count;
+        wave_id = prevent_waves_last_id + 1;
+        request_clear = false;
+        texture_is_dirty = true;
+    }
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -524,6 +535,13 @@ function draw() {
 }
 let wave_id = 0, palette_color = -1;
 function wave_start(ids, color_packed, color, fcolor, _wave_id) {
+    --queued_wave_count;
+    queued_wave_count = Math.max(queued_wave_count, 0);
+    const _state = _wave_id === undefined
+        ? ++wave_id
+        : _wave_id;
+    if (_state <= prevent_waves_last_id)
+        return;
     if (color_packed === undefined || color === undefined || fcolor == undefined) {
         color = palette[palette_color];
         fcolor = new Float32Array([
@@ -531,9 +549,6 @@ function wave_start(ids, color_packed, color, fcolor, _wave_id) {
         ]);
         color_packed = packUint8(color);
     }
-    let _state = _wave_id === undefined
-        ? ++wave_id
-        : _wave_id;
     let next;
     if (typeof ids === "number") {
         grid.adj_graph[ids].state = _state;
@@ -562,9 +577,14 @@ function wave_start(ids, color_packed, color, fcolor, _wave_id) {
         }
     }
     texture_is_dirty = true;
+    ++queued_wave_count;
     setTimeout(wave_propagate, wave_delay, next, _state, color_packed, color, fcolor, 0);
 }
 function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
+    --queued_wave_count;
+    queued_wave_count = Math.max(queued_wave_count, 0);
+    if (state <= prevent_waves_last_id)
+        return;
     const collected = new Set(), new_wave = new Set();
     let factor = blend_value;
     if (wave_decay < 1)
@@ -644,8 +664,14 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
                 ]));
         }
     }
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
+    texture_is_dirty = true;
+    // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // gl.texSubImage2D(
+    //     gl.TEXTURE_2D, 0,
+    //     0, 0,
+    //     grid.texture_size, grid.texture_size,
+    //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+    // );
     for (const new_start of new_wave) {
         const new_id = new_start.id, offset = new_id * 4, is_hovered = wave_queue.has(new_id);
         let new_color, new_color_packed;
@@ -692,10 +718,12 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
                 new_color = new_color_packed = new_fcolor = undefined;
             }
         }
+        ++queued_wave_count;
         setTimeout(wave_start, new_wave_delay, new_id, new_color_packed, new_color, new_fcolor, ++wave_id);
     }
     if (collected.size === 0)
         return;
+    ++queued_wave_count;
     setTimeout(wave_propagate, wave_delay, collected, state, color_packed, color, fcolor, depth + 1);
 }
 function ring_wave() {

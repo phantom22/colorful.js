@@ -25,7 +25,10 @@ let gl: WebGL2RenderingContext,
     mouse_x: number,
     mouse_y: number,
     pixel_data = new Uint32Array(1),
-    request_sample = false;
+    request_sample = false,
+    request_clear = false,
+    queued_wave_count = 0,
+    prevent_waves_last_id = 0;
 
 window.onkeydown = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
@@ -41,6 +44,8 @@ window.onkeyup = (e:KeyboardEvent) => {
     }
     else if (e.key === "p")
         ring_wave();
+    else if (e.key === "c")
+        request_clear = true;
 };
 
 const side_length = searchParams.getNumber("side_length", 32, 1),
@@ -296,6 +301,16 @@ window.onresize = update_viewport;
 function draw() {
     ++frame;
 
+    if (request_clear) {
+        const clear_color = packUint8(new Uint8Array([0, 0, 0, 255]));
+        for (let i=0; i<grid.adj_graph.length; ++i)
+            grid.texture_u32view[i] = clear_color;
+        prevent_waves_last_id = wave_id + queued_wave_count;
+        wave_id = prevent_waves_last_id + 1;
+        request_clear = false;
+        texture_is_dirty = true;
+    }
+
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -388,6 +403,16 @@ function wave_start(
     ids:number|Set<number>, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,
     _wave_id?:number
 ) {
+    --queued_wave_count;
+    queued_wave_count = Math.max(queued_wave_count, 0);
+
+    const _state = _wave_id === undefined 
+            ? ++wave_id
+            : _wave_id;
+
+    if (_state <= prevent_waves_last_id)
+        return;
+
     if (color_packed === undefined || color === undefined || fcolor == undefined) {
         color = palette[palette_color];
         fcolor = new Float32Array([
@@ -395,10 +420,6 @@ function wave_start(
         ]);
         color_packed = packUint8(color);
     }
-
-    let _state = _wave_id === undefined 
-            ? ++wave_id
-            : _wave_id;
 
     let next: Set<adj_node>;
     if (typeof ids === "number") {
@@ -432,6 +453,7 @@ function wave_start(
 
     texture_is_dirty = true;
 
+    ++queued_wave_count;
     setTimeout(wave_propagate, wave_delay, 
         next, _state, color_packed, color, fcolor, 0
     );
@@ -441,6 +463,12 @@ function wave_propagate(
     ids:Set<adj_node>, state:number, color_packed:number, color:Uint8Array,
     fcolor:Float32Array, depth:number
 ) {
+    --queued_wave_count;
+    queued_wave_count = Math.max(queued_wave_count, 0);
+
+    if (state <= prevent_waves_last_id)
+        return;
+
     const collected = new Set() as Set<adj_node>,
           new_wave = new Set() as Set<adj_node>;
 
@@ -536,13 +564,15 @@ function wave_propagate(
         }
     }
 
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    gl.texSubImage2D(
-        gl.TEXTURE_2D, 0,
-        0, 0,
-        grid.texture_size, grid.texture_size,
-        gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-    );
+    texture_is_dirty = true;
+
+    // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // gl.texSubImage2D(
+    //     gl.TEXTURE_2D, 0,
+    //     0, 0,
+    //     grid.texture_size, grid.texture_size,
+    //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+    // );
 
     for (const new_start of new_wave) {
         const new_id = new_start.id,
@@ -597,6 +627,7 @@ function wave_propagate(
             }
         }
         
+        ++queued_wave_count;
         setTimeout(wave_start, new_wave_delay, 
             new_id, new_color_packed, new_color, new_fcolor, ++wave_id
         );
@@ -605,6 +636,7 @@ function wave_propagate(
     if (collected.size === 0)
         return;
 
+    ++queued_wave_count;
     setTimeout(
         wave_propagate, wave_delay, collected,
         state, color_packed, color, fcolor, depth+1
