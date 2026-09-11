@@ -104,10 +104,10 @@ precision highp int;
 
 flat in uint v_id;
 
-out uvec4 color;
+out uint color;
 
 void main() {
-    color = uvec4(v_id, 0u, 0u, 1u);
+    color = v_id;
 }
 </script>
 </body>
