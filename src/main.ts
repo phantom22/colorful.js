@@ -192,7 +192,14 @@ gl.framebufferTexture2D(
 )
 gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-canvas.onmouseleave = () => { mouse_down = false; hovered_id = undefined; }
+canvas.onmouseleave = () => { 
+    mouse_down = false;
+    hovered_id = undefined;
+    if (wave_queue.size !== 0) {
+        wave_start(wave_queue);
+        wave_queue.clear();
+    }
+}
 canvas.onmousedown = (e:MouseEvent) => {
     if (mouse_down === true || e.button !== 0)
         return;
@@ -218,22 +225,24 @@ canvas.onmousedown = (e:MouseEvent) => {
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
         if (shift_down) {
-            if (wave_queue.has(hovered))
-                return;
-            wave_queue.add(hovered);
-
-            const offset = hovered*4;
-            grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
-            grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
-            grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+            if (!wave_queue.has(hovered)) {
+                wave_queue.add(hovered);
+                const offset = hovered*4;
+                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
+            }
 
             for (const adj of grid.adj_graph[hovered].next) {
                 const id = adj.id,
                       offset = id*4;
+                if (wave_queue.has(id))
+                    continue;
+
                 wave_queue.add(id);
-                grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
-                grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
-                grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
             }
 
             gl.bindTexture(gl.TEXTURE_2D, color_texture);
@@ -273,22 +282,24 @@ canvas.onmousemove = (e:MouseEvent) => {
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
         if (shift_down) {
-            if (wave_queue.has(hovered))
-                return;
-            wave_queue.add(hovered);
+            if (!wave_queue.has(hovered)) {
+                wave_queue.add(hovered);
 
-            const offset = hovered*4;
-            grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
-            grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
-            grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+                const offset = hovered*4;
+                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
+            }
 
             for (const adj of grid.adj_graph[hovered].next) {
                 const id = adj.id,
                       offset = id*4;
+                if (wave_queue.has(id))
+                    continue;
                 wave_queue.add(id);
-                grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
-                grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
-                grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
             }
 
             gl.bindTexture(gl.TEXTURE_2D, color_texture);
@@ -627,3 +638,9 @@ function wave_propagate(
         state, color_packed, color, fcolor, depth+1
     );
 }
+
+//    3
+// 4     2
+// 5     1 8
+//    6
+//         7

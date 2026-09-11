@@ -1,7 +1,6 @@
 {
     "compilerOptions": {
         "target": "esnext",
-        "ignoreDeprecations": "6.0",
         "outFile":"../js/index.js"
     },
     "files": [

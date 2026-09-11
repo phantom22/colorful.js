@@ -144,7 +144,7 @@ class ColorfulGrid {
                             [t1+1, t1+triangle_count-1, t1+next_layer_adj];
                     else
                         this.adj_map[t1] = [t1-1, t1+1, t1+next_layer_adj];
-
+                    
                     this.mesh[v+6] = v1[0];
                     this.mesh[v+7] = v1[1];
 
@@ -177,15 +177,19 @@ class ColorfulGrid {
                 this.mesh[v+5] = v3[1];                
 
                 const t = ++triangle_id;
-
+ 
                 if (s === 0)
-                    this.adj_map[t] = [t+1, t+triangle_count-1];
+                    if (d === 0)
+                        this.adj_map[t] =
+                            [t+1, t+triangle_count-1, t+next_layer_adj];
+                    else
+                        this.adj_map[t] = [t-1, t+1, t+next_layer_adj];
                 else if (s !== 5)
                     this.adj_map[t] = [t-1, t+1];
                 else
                     this.adj_map[t] = [t-triangle_count+1, t-1];
 
-                if (!last_layer)
+                if (!last_layer && s !== 0)
                     this.adj_map[t][2] = t+next_layer_adj;
 
                 v = v+6;
