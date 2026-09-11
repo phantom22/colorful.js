@@ -29,11 +29,8 @@ window.onkeydown = (e:KeyboardEvent) => {
 window.onkeyup = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
         shift_down = false;
-        let i = 0;
-        for (const id of wave_queue) {
-            setTimeout(wave_start, wave_delay * i++, id);
-            wave_queue.delete(id);
-        }
+        wave_start(wave_queue);
+        wave_queue.clear();
     }
 };
 
@@ -79,11 +76,9 @@ const side_length = searchParams.getNumber("side_length", 32, 1),
       palette_size = palette.length;
 
 window.history.replaceState({}, '',
-    window.location.origin === "null" ? "" : window.location.origin
-        + window.location.pathname
-        + "?"
-        + params.toString()
-        + `&grid_bg=[${grid_bg}]`
+    (window.location.origin === "null" ? "" : window.location.origin) + 
+        window.location.pathname + 
+        "?" + params.toString() + `&grid_bg=[${grid_bg}]`
 );
 
 window.onload = () => {
@@ -222,10 +217,39 @@ canvas.onmousedown = (e:MouseEvent) => {
 
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down)
+        if (shift_down) {
+            if (wave_queue.has(hovered))
+                return;
             wave_queue.add(hovered);
-        else
-            wave_start(hovered);
+
+            const offset = hovered*4;
+            grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
+            grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
+            grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+
+            for (const adj of grid.adj_graph[hovered].next) {
+                const id = adj.id,
+                      offset = id*4;
+                wave_queue.add(id);
+                grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
+                grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
+                grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+            }
+
+            gl.bindTexture(gl.TEXTURE_2D, color_texture);
+            gl.texSubImage2D(
+                gl.TEXTURE_2D, 0,
+                0, 0,
+                grid.texture_size, grid.texture_size,
+                gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+            );
+        }
+        else {
+            const brush = new Set([hovered]);
+            for (const adj of grid.adj_graph[hovered].next)
+                 brush.add(adj.id);
+            wave_start(brush);
+        }
         hovered_id = hovered;
     }
 }
@@ -248,10 +272,39 @@ canvas.onmousemove = (e:MouseEvent) => {
 
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down)
+        if (shift_down) {
+            if (wave_queue.has(hovered))
+                return;
             wave_queue.add(hovered);
-        else
-            wave_start(hovered);
+
+            const offset = hovered*4;
+            grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
+            grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
+            grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+
+            for (const adj of grid.adj_graph[hovered].next) {
+                const id = adj.id,
+                      offset = id*4;
+                wave_queue.add(id);
+                grid.texture[offset] = (grid.texture[offset] + 255) * 0.5, 255;
+                grid.texture[offset+1] = (grid.texture[offset+1] + 255) * 0.5, 255;
+                grid.texture[offset+2] = (grid.texture[offset+2] + 255) * 0.5, 255;
+            }
+
+            gl.bindTexture(gl.TEXTURE_2D, color_texture);
+            gl.texSubImage2D(
+                gl.TEXTURE_2D, 0,
+                0, 0,
+                grid.texture_size, grid.texture_size,
+                gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+            );
+        }
+        else {
+            const brush = new Set([hovered]);
+            for (const adj of grid.adj_graph[hovered].next)
+                 brush.add(adj.id);
+            wave_start(brush);
+        }
         hovered_id = hovered;
     }
 }
@@ -343,30 +396,50 @@ let wave_id = 0,
     palette_color = -1;
 
 function wave_start(
-    id:number, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,
+    ids:number|Set<number>, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,
     _wave_id?:number
 ) {
-    grid.adj_graph[id].state = _wave_id === undefined 
-        ? ++wave_id
-        : _wave_id;
-    
-    if (color_packed === undefined) {
+    if (color_packed === undefined || color === undefined || fcolor == undefined) {
         color = palette[palette_color];
         fcolor = new Float32Array([
             color[0] / 255, color[1] / 255, color[2] / 255
         ]);
-
-        // fcolor = new Float32Array([Math.random(),Math.random(),Math.random()]);
-        // color = new Uint8Array([
-        //     Math.floor(fcolor[0]*256),
-        //     Math.floor(fcolor[1]*256),
-        //     Math.floor(fcolor[2]*256),
-        //     255
-        // ]);
         color_packed = packUint8(color);
     }
 
-    grid.texture_u32view[id] = color_packed;
+    let _state = _wave_id === undefined 
+            ? ++wave_id
+            : _wave_id;
+
+    let next: Set<adj_node>;
+    if (typeof ids === "number") {
+        grid.adj_graph[ids].state = _state;
+        if (wave_queue.has(ids)) {
+            const offset = ids*4;
+            grid.texture[offset] = Math.floor((color[0] + 255) * 0.5);
+            grid.texture[offset+1] = Math.floor((color[1] + 255) * 0.5);
+            grid.texture[offset+2] = Math.floor((color[2] + 255) * 0.5);
+            grid.texture[offset+3] = 255;
+        }
+        else
+            grid.texture_u32view[ids] = color_packed;
+        
+        next = new Set(grid.adj_graph[ids].next);
+    }
+    else {
+        next = new Set();
+        for (const id of ids) {
+            grid.adj_graph[id].state = _state;
+            grid.texture_u32view[id] = color_packed;
+
+            const node = grid.adj_graph[id];
+            for (const nnext of node.next) {
+                if (next.has(nnext))
+                    continue;
+                next.add(nnext);
+            }
+        }
+    }
 
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
     gl.texSubImage2D(
@@ -377,7 +450,7 @@ function wave_start(
     );
 
     setTimeout(wave_propagate, wave_delay, 
-        grid.adj_graph[id].next, wave_id, color_packed, color, fcolor, 0
+        next, _state, color_packed, color, fcolor, 0
     );
 }
 
@@ -401,18 +474,31 @@ function wave_propagate(
         if (Math.random() <= new_wave_p)
             new_wave.add(node);
 
+        const node_id = node.id,
+              is_hovered = wave_queue.has(node_id);
         node.state = state;
         
         let avg_adj_col = [0, 0, 0];
-        for (const next of node.next) {
-            const offset = next.id*4;
-            avg_adj_col[0] += grid.texture[offset];
-            avg_adj_col[1] += grid.texture[offset+1];
-            avg_adj_col[2] += grid.texture[offset+2];
+        for (const adj_node of node.next) {
+            const adj_id = adj_node.id,
+                  offset = adj_id*4;
 
-            if (ids.has(next) || next.state >= state)
+            if (wave_queue.has(adj_id)) {
+                // remove applied white highlight color from adjacent nodes 
+                avg_adj_col[0] += Math.max(Math.floor(2*grid.texture[offset] - 255), 0);
+                avg_adj_col[1] += Math.max(Math.floor(2*grid.texture[offset+1] - 255), 0);
+                avg_adj_col[2] += Math.max(Math.floor(2*grid.texture[offset+2] - 255), 0);
+            }
+            else {
+                avg_adj_col[0] += grid.texture[offset];
+                avg_adj_col[1] += grid.texture[offset+1];
+                avg_adj_col[2] += grid.texture[offset+2];
+            }
+            
+
+            if (ids.has(adj_node) || adj_node.state >= state)
                 continue;
-            collected.add(next);
+            collected.add(adj_node);
         }
 
         const inv_adj_count = 1 / node.next.size;
@@ -424,22 +510,46 @@ function wave_propagate(
             const _1_p = 1-factor,
                   p = factor;
 
-            grid.texture_u32view[node.id] = packUint8(new Uint8Array([
-                Math.floor(avg_adj_col[0] * _1_p + color[0] * p),
-                Math.floor(avg_adj_col[1] * _1_p + color[1] * p),
-                Math.floor(avg_adj_col[2] * _1_p + color[2] * p),
-                255
-            ]));
+            if (is_hovered)
+                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
+                    Math.max(Math.floor((Math.floor(avg_adj_col[0] * _1_p + color[0] * p) + 255) * 0.5), 0),
+                    Math.max(Math.floor((Math.floor(avg_adj_col[1] * _1_p + color[1] * p) + 255) * 0.5), 0),
+                    Math.max(Math.floor((Math.floor(avg_adj_col[2] * _1_p + color[2] * p) + 255) * 0.5), 0),
+                    255
+                ]));
+            else
+                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
+                    Math.floor(avg_adj_col[0] * _1_p + color[0] * p),
+                    Math.floor(avg_adj_col[1] * _1_p + color[1] * p),
+                    Math.floor(avg_adj_col[2] * _1_p + color[2] * p),
+                    255
+                ]));
         }
-        else if (factor >= 1)
-            grid.texture_u32view[node.id] = color_packed;
+        else if (factor >= 1) {
+            if (is_hovered) {
+                const offset = node_id * 4;
+                grid.texture[offset] = Math.max(Math.floor((color[0] + 255) * 0.5), 0);
+                grid.texture[offset+1] = Math.max(Math.floor((color[1] + 255) * 0.5), 0);
+                grid.texture[offset+2] = Math.max(Math.floor((color[2] + 255) * 0.5), 0);
+            }
+            else
+                grid.texture_u32view[node_id] = color_packed;
+        }
         else {
-            grid.texture_u32view[node.id] = packUint8(new Uint8Array([
-                Math.floor(avg_adj_col[0]),
-                Math.floor(avg_adj_col[1]),
-                Math.floor(avg_adj_col[2]),
-                255
-            ]));
+            if (is_hovered)
+                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
+                    Math.max(Math.floor((avg_adj_col[0] + 255) * 0.5), 0),
+                    Math.max(Math.floor((avg_adj_col[1] + 255) * 0.5), 0),
+                    Math.max(Math.floor((avg_adj_col[2] + 255) * 0.5), 0),
+                    255
+                ]));
+            else
+                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
+                    Math.floor(avg_adj_col[0]),
+                    Math.floor(avg_adj_col[1]),
+                    Math.floor(avg_adj_col[2]),
+                    255
+                ]));
         }
     }
 
@@ -452,20 +562,35 @@ function wave_propagate(
     );
 
     for (const new_start of new_wave) {
-        const offset = new_start.id*4;
+        const new_id = new_start.id,
+              offset = new_id*4,
+              is_hovered = wave_queue.has(new_id);
         
-        let new_color = new Uint8Array([
+        let new_color: Uint8Array, new_color_packed: number;
+        if (is_hovered) {
+            new_color = new Uint8Array([
+                Math.max(2*grid.texture[offset] - 255, 0),
+                Math.max(2*grid.texture[offset+1] - 255, 0),
+                Math.max(2*grid.texture[offset+2] - 255, 0),
+                255
+            ]);
+            new_color_packed = packUint8(new_color);
+        }
+        else {
+            new_color = new Uint8Array([
                 grid.texture[offset],
                 grid.texture[offset+1],
                 grid.texture[offset+2],
                 255
-            ]),
-            new_color_packed = grid.texture_u32view[new_start.id],
-            new_fcolor = new Float32Array([
-                new_color[0] / 255,
-                new_color[1] / 255,
-                new_color[2] / 255
             ]);
+            new_color_packed = grid.texture_u32view[new_id];
+        }
+        
+        let new_fcolor = new Float32Array([
+            new_color[0] / 255,
+            new_color[1] / 255,
+            new_color[2] / 255
+        ]);
 
         if (Math.random() <= new_color_p) {
             if (Math.random() <= new_color_compl_p) {
@@ -490,7 +615,7 @@ function wave_propagate(
         }
         
         setTimeout(wave_start, new_wave_delay, 
-            new_start.id, new_color_packed, new_color, new_fcolor, ++wave_id
+            new_id, new_color_packed, new_color, new_fcolor, ++wave_id
         );
     }
 
