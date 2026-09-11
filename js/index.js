@@ -106,8 +106,16 @@ function create_orthographic_matrix(l, r, b, t, n, f) {
         -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1
     ]);
 }
+const pack_buffer = new ArrayBuffer(4);
+const pack8 = new Uint8Array(pack_buffer);
+const pack32 = new Uint32Array(pack_buffer);
+/** This approach was used to guarantee endian compatibility. */
 function packUint8(color) {
-    return (color[3] << 24) | (color[2] << 16) | (color[1] << 8) | color[0];
+    pack8[0] = color[0];
+    pack8[1] = color[1];
+    pack8[2] = color[2];
+    pack8[3] = 255;
+    return pack32[0]; // Guaranteed exact memory layout for current CPU
 }
 class adj_node {
     constructor(id) {
@@ -269,7 +277,7 @@ class ColorfulGrid {
         }
     }
 }
-let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, hovered_id = undefined, wave_queue = new Set();
+let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, hovered_id = undefined, wave_queue = new Set(), texture_is_dirty = false, frame = 0, last_mouse_sample_frame = -1;
 window.onkeydown = (e) => {
     if (e.key === "Shift") {
         shift_down = true;
@@ -293,26 +301,24 @@ const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = 
     ["new_color_p", `${new_color_p}`],
     ["new_color_compl_p", `${new_color_compl_p}`]
 ]), palette = [
-    new Uint8Array([255, 107, 107]),
-    new Uint8Array([78, 205, 196]),
-    new Uint8Array([255, 230, 109]),
-    new Uint8Array([26, 83, 92]),
-    new Uint8Array([255, 159, 28]),
-    new Uint8Array([43, 45, 66]),
-    new Uint8Array([239, 71, 111]),
-    new Uint8Array([6, 214, 160]),
-    new Uint8Array([17, 138, 178]),
-    new Uint8Array([247, 208, 138]),
-    new Uint8Array([114, 9, 183]),
-    new Uint8Array([247, 37, 133]),
-    new Uint8Array([76, 201, 240]),
-    new Uint8Array([255, 123, 0]),
-    new Uint8Array([112, 224, 0]),
+    new Uint8Array([255, 107, 107]), // coral red
+    new Uint8Array([78, 205, 196]), // mint cyan
+    new Uint8Array([255, 230, 109]), // pastel yellow
+    new Uint8Array([26, 83, 92]), // deep teal
+    new Uint8Array([255, 159, 28]), // bright amber
+    new Uint8Array([43, 45, 66]), // midnight indigo
+    new Uint8Array([239, 71, 111]), // neon raspberry
+    new Uint8Array([6, 214, 160]), // emerald seafoam
+    new Uint8Array([17, 138, 178]), // electric cerulean
+    new Uint8Array([247, 208, 138]), // warm gold
+    new Uint8Array([114, 9, 183]), // deep violet
+    new Uint8Array([247, 37, 133]), // vivid magenta
+    new Uint8Array([76, 201, 240]), // sky cyan
+    new Uint8Array([255, 123, 0]), // tangelo orange
+    new Uint8Array([112, 224, 0]), // electric lime
     new Uint8Array([241, 250, 238]), // off-white highlight
 ], palette_size = palette.length;
-window.history.replaceState({}, '', (window.location.origin === "null" ? "" : window.location.origin) +
-    window.location.pathname +
-    "?" + params.toString() + `&grid_bg=[${grid_bg}]`);
+window.history.replaceState({}, '', `?${params.toString()}&grid_bg=[${grid_bg}]`);
 window.onload = () => {
     canvas = document.getElementById("screen");
     if (!(canvas instanceof HTMLCanvasElement))
@@ -400,10 +406,14 @@ window.onload = () => {
         if (force_render_mask)
             return;
         const rect = canvas.getBoundingClientRect(), pixelX = Math.floor((e.clientX - rect.left) * width / rect.width), pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
         const pixel_data = new Uint32Array(1);
-        gl.readPixels(pixelX, pixelY, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data);
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
+            gl.readPixels(pixelX, pixelY, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        }
+        else
+            return;
         const hovered = pixel_data[0];
         if (hovered !== 0 && hovered !== hovered_id) {
             if (shift_down) {
@@ -423,8 +433,14 @@ window.onload = () => {
                     grid.texture[offset + 1] = Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
                     grid.texture[offset + 2] = Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
                 }
-                gl.bindTexture(gl.TEXTURE_2D, color_texture);
-                gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
+                // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+                // gl.texSubImage2D(
+                //     gl.TEXTURE_2D, 0,
+                //     0, 0,
+                //     grid.texture_size, grid.texture_size,
+                //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+                // );
+                texture_is_dirty = true;
             }
             else {
                 const brush = new Set([hovered]);
@@ -436,13 +452,18 @@ window.onload = () => {
         }
     };
     canvas.onmousemove = (e) => {
-        if (mouse_down === false || force_render_mask)
+        if (mouse_down === false || force_render_mask || last_mouse_sample_frame === frame)
             return;
         const rect = canvas.getBoundingClientRect(), pixelX = Math.floor((e.clientX - rect.left) * width / rect.width), pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
         const pixel_data = new Uint32Array(1);
-        gl.readPixels(pixelX, pixelY, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
+            gl.readPixels(pixelX, pixelY, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        }
+        else
+            return;
+        last_mouse_sample_frame = frame;
         const hovered = pixel_data[0];
         if (hovered !== 0 && hovered !== hovered_id) {
             if (shift_down) {
@@ -462,8 +483,14 @@ window.onload = () => {
                     grid.texture[offset + 1] = Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
                     grid.texture[offset + 2] = Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
                 }
-                gl.bindTexture(gl.TEXTURE_2D, color_texture);
-                gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
+                // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+                // gl.texSubImage2D(
+                //     gl.TEXTURE_2D, 0,
+                //     0, 0,
+                //     grid.texture_size, grid.texture_size,
+                //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+                // );
+                texture_is_dirty = true;
             }
             else {
                 const brush = new Set([hovered]);
@@ -512,6 +539,12 @@ function update_viewport() {
 window.onresize = update_viewport;
 function draw() {
     p.useProgram();
+    ++frame;
+    if (texture_is_dirty) {
+        gl.bindTexture(gl.TEXTURE_2D, color_texture);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
+        texture_is_dirty = false;
+    }
     gl.bindVertexArray(vao);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.activeTexture(gl.TEXTURE0);
@@ -569,8 +602,7 @@ function wave_start(ids, color_packed, color, fcolor, _wave_id) {
             }
         }
     }
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
+    texture_is_dirty = true;
     setTimeout(wave_propagate, wave_delay, next, _state, color_packed, color, fcolor, 0);
 }
 function wave_propagate(ids, state, color_packed, color, fcolor, depth) {

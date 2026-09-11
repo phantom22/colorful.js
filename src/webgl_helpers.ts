@@ -85,6 +85,16 @@ function create_orthographic_matrix(
     ])
 }
 
-function packUint8(color:Uint8Array) {
-    return (color[3] << 24) | (color[2] << 16) | (color[1] << 8)| color[0]
+
+const pack_buffer = new ArrayBuffer(4);
+const pack8 = new Uint8Array(pack_buffer);
+const pack32 = new Uint32Array(pack_buffer);
+
+/** This approach was used to guarantee endian compatibility. */
+function packUint8(color:Uint8Array): number {
+    pack8[0] = color[0];
+    pack8[1] = color[1];
+    pack8[2] = color[2];
+    pack8[3] = 255;
+    return pack32[0]; // Guaranteed exact memory layout for current CPU
 }

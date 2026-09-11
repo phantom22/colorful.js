@@ -18,7 +18,10 @@ let gl: WebGL2RenderingContext,
     mouse_down = false,
     shift_down = false,
     hovered_id = undefined as undefined|number,
-    wave_queue = new Set() as Set<number>;
+    wave_queue = new Set() as Set<number>,
+    texture_is_dirty = false,
+    frame = 0,
+    last_mouse_sample_frame = -1;
 
 window.onkeydown = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
@@ -75,11 +78,7 @@ const side_length = searchParams.getNumber("side_length", 32, 1),
       ],
       palette_size = palette.length;
 
-window.history.replaceState({}, '',
-    (window.location.origin === "null" ? "" : window.location.origin) + 
-        window.location.pathname + 
-        "?" + params.toString() + `&grid_bg=[${grid_bg}]`
-);
+window.history.replaceState({}, '', `?${params.toString()}&grid_bg=[${grid_bg}]`);
 
 window.onload = () => {
 
@@ -214,13 +213,18 @@ canvas.onmousedown = (e:MouseEvent) => {
           pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
           pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
 
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
+         
     const pixel_data = new Uint32Array(1);
-    gl.readPixels(
-        pixelX, pixelY, 1, 1,
-        gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
-    );
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
+        
+        gl.readPixels(
+            pixelX, pixelY, 1, 1,
+            gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
+        );
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    }
+    else return;
 
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
@@ -245,13 +249,15 @@ canvas.onmousedown = (e:MouseEvent) => {
                 grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
             }
 
-            gl.bindTexture(gl.TEXTURE_2D, color_texture);
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-            );
+            // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+            // gl.texSubImage2D(
+            //     gl.TEXTURE_2D, 0,
+            //     0, 0,
+            //     grid.texture_size, grid.texture_size,
+            //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+            // );
+
+            texture_is_dirty = true;
         }
         else {
             const brush = new Set([hovered]);
@@ -264,20 +270,26 @@ canvas.onmousedown = (e:MouseEvent) => {
 }
 
 canvas.onmousemove = (e:MouseEvent) => {
-    if (mouse_down === false || force_render_mask)
+    if (mouse_down === false || force_render_mask || last_mouse_sample_frame === frame)
         return;
 
     const rect = canvas.getBoundingClientRect(),
           pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
           pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
     const pixel_data = new Uint32Array(1);
-    gl.readPixels(
-        pixelX, pixelY, 1, 1,
-        gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
-    );
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
+        
+        gl.readPixels(
+            pixelX, pixelY, 1, 1,
+            gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
+        );
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    }
+    else return;
+
+    last_mouse_sample_frame = frame;
 
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
@@ -302,13 +314,15 @@ canvas.onmousemove = (e:MouseEvent) => {
                 grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
             }
 
-            gl.bindTexture(gl.TEXTURE_2D, color_texture);
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-            );
+            // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+            // gl.texSubImage2D(
+            //     gl.TEXTURE_2D, 0,
+            //     0, 0,
+            //     grid.texture_size, grid.texture_size,
+            //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+            // );
+
+            texture_is_dirty = true;
         }
         else {
             const brush = new Set([hovered]);
@@ -377,6 +391,18 @@ window.onresize = update_viewport;
 
 function draw() {
     p.useProgram();
+    ++frame;
+
+    if (texture_is_dirty) {
+        gl.bindTexture(gl.TEXTURE_2D, color_texture);
+        gl.texSubImage2D(
+            gl.TEXTURE_2D, 0,
+            0, 0,
+            grid.texture_size, grid.texture_size,
+            gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+        );
+        texture_is_dirty = false;
+    }
 
     gl.bindVertexArray(vao);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
@@ -452,13 +478,7 @@ function wave_start(
         }
     }
 
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    gl.texSubImage2D(
-        gl.TEXTURE_2D, 0,
-        0, 0,
-        grid.texture_size, grid.texture_size,
-        gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-    );
+    texture_is_dirty = true;
 
     setTimeout(wave_propagate, wave_delay, 
         next, _state, color_packed, color, fcolor, 0

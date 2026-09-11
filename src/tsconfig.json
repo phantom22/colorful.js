@@ -1,7 +1,8 @@
 {
     "compilerOptions": {
         "target": "esnext",
-        "outFile":"../js/index.js"
+        "outFile":"../js/index.js",
+        "ignoreDeprecations": "6.0"
     },
     "files": [
         "searchParams.ts",
