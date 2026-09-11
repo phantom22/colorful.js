@@ -29,8 +29,9 @@ window.onkeydown = (e:KeyboardEvent) => {
 window.onkeyup = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
         shift_down = false;
+        let i = 0;
         for (const id of wave_queue) {
-            wave_start(id);
+            setTimeout(wave_start, wave_delay * i++, id);
             wave_queue.delete(id);
         }
     }
@@ -211,13 +212,13 @@ canvas.onmousedown = (e:MouseEvent) => {
           pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
           pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
     const pixel_data = new Uint32Array(1);
     gl.readPixels(
         pixelX, pixelY, 1, 1,
         gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
     );
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
 
     const hovered = pixel_data[0];
     if (hovered !== 0 && hovered !== hovered_id) {
@@ -342,9 +343,12 @@ let wave_id = 0,
     palette_color = -1;
 
 function wave_start(
-    id:number, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array
+    id:number, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,
+    _wave_id?:number
 ) {
-    grid.adj_graph[id].state = ++wave_id;
+    grid.adj_graph[id].state = _wave_id === undefined 
+        ? ++wave_id
+        : _wave_id;
     
     if (color_packed === undefined) {
         color = palette[palette_color];
@@ -389,7 +393,7 @@ function wave_propagate(
         factor *= wave_decay ** Math.max(depth-decay_min_radius-1, 0);
 
     for (const node of ids) {
-        if (node.state >= state) {
+        if (node.state === state) {
             ids.delete(node);
             continue;
         }
@@ -486,7 +490,7 @@ function wave_propagate(
         }
         
         setTimeout(wave_start, new_wave_delay, 
-            new_start.id, new_color_packed, new_color, new_fcolor
+            new_start.id, new_color_packed, new_color, new_fcolor, ++wave_id
         );
     }
 
