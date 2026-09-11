@@ -78,7 +78,11 @@ const side_length = searchParams.getNumber("side_length", 32, 1),
       palette_size = palette.length;
 
 window.history.replaceState({}, '',
-    window.location.pathname + "?" + params.toString() + `&grid_bg=[${grid_bg}]`
+    window.location.origin === "null" ? "" : window.location.origin
+        + window.location.pathname
+        + "?"
+        + params.toString()
+        + `&grid_bg=[${grid_bg}]`
 );
 
 window.onload = () => {
