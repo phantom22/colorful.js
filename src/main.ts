@@ -21,7 +21,11 @@ let gl: WebGL2RenderingContext,
     wave_queue = new Set() as Set<number>,
     texture_is_dirty = false,
     frame = 0,
-    last_mouse_sample_frame = -1;
+    last_mouse_sample_frame = -1,
+    mouse_x: number,
+    mouse_y: number,
+    pixel_data = new Uint32Array(1),
+    request_sample = false;
 
 window.onkeydown = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
@@ -35,15 +39,17 @@ window.onkeyup = (e:KeyboardEvent) => {
         wave_start(wave_queue);
         wave_queue.clear();
     }
+    else if (e.key === "p")
+        ring_wave();
 };
 
 const side_length = searchParams.getNumber("side_length", 32, 1),
       blend_value = searchParams.getNumber("blend_value", 0.008, 0,1),
-      wave_delay = searchParams.getNumber("wave_delay", 20, 1),
+      wave_delay = searchParams.getNumber("wave_delay", 30, 1),
       wave_decay = searchParams.getNumber("wave_decay", 0.99, 0,1),
       decay_min_radius = searchParams.getNumber("decay_min_radius", -2),
       new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1),
-      new_wave_p = searchParams.getNumber("new_wave_p", 0.00015, 0,1),
+      new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0,1),
       new_color_p = searchParams.getNumber("new_color_p", 0.1, 0,1),
       new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0,1),
       grid_bg = searchParams.getUint8Color("grid_bg"),
@@ -200,7 +206,7 @@ canvas.onmouseleave = () => {
     }
 }
 canvas.onmousedown = (e:MouseEvent) => {
-    if (mouse_down === true || e.button !== 0)
+    if (mouse_down === true || e.button !== 0 || last_mouse_sample_frame === frame)
         return;
 
     palette_color = ++palette_color % palette_size;
@@ -209,129 +215,24 @@ canvas.onmousedown = (e:MouseEvent) => {
     if (force_render_mask)
         return;
 
-    const rect = canvas.getBoundingClientRect(),
-          pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
-          pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
+    const rect = canvas.getBoundingClientRect();
+    mouse_x = Math.floor((e.clientX - rect.left) * width / rect.width);
+    mouse_y = Math.floor((rect.bottom - e.clientY) * height / rect.height);
 
-         
-    const pixel_data = new Uint32Array(1);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
-        
-        gl.readPixels(
-            pixelX, pixelY, 1, 1,
-            gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
-        );
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-    }
-    else return;
-
-    const hovered = pixel_data[0];
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
-            if (!wave_queue.has(hovered)) {
-                wave_queue.add(hovered);
-                const offset = hovered*4;
-                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
-                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
-            }
-
-            for (const adj of grid.adj_graph[hovered].next) {
-                const id = adj.id,
-                      offset = id*4;
-                if (wave_queue.has(id))
-                    continue;
-
-                wave_queue.add(id);
-                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
-                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
-            }
-
-            // gl.bindTexture(gl.TEXTURE_2D, color_texture);
-            // gl.texSubImage2D(
-            //     gl.TEXTURE_2D, 0,
-            //     0, 0,
-            //     grid.texture_size, grid.texture_size,
-            //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-            // );
-
-            texture_is_dirty = true;
-        }
-        else {
-            const brush = new Set([hovered]);
-            for (const adj of grid.adj_graph[hovered].next)
-                 brush.add(adj.id);
-            wave_start(brush);
-        }
-        hovered_id = hovered;
-    }
+    request_sample = true;
+    last_mouse_sample_frame = frame;
 }
 
 canvas.onmousemove = (e:MouseEvent) => {
     if (mouse_down === false || force_render_mask || last_mouse_sample_frame === frame)
         return;
 
-    const rect = canvas.getBoundingClientRect(),
-          pixelX = Math.floor((e.clientX - rect.left) * width / rect.width),
-          pixelY = Math.floor((rect.bottom - e.clientY) * height / rect.height);
+    const rect = canvas.getBoundingClientRect();
+    mouse_x = Math.floor((e.clientX - rect.left) * width / rect.width);
+    mouse_y = Math.floor((rect.bottom - e.clientY) * height / rect.height);
 
-    const pixel_data = new Uint32Array(1);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mask_fbo);
-        
-        gl.readPixels(
-            pixelX, pixelY, 1, 1,
-            gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
-        );
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-    }
-    else return;
-
+    request_sample = true;
     last_mouse_sample_frame = frame;
-
-    const hovered = pixel_data[0];
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
-            if (!wave_queue.has(hovered)) {
-                wave_queue.add(hovered);
-
-                const offset = hovered*4;
-                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
-                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
-            }
-
-            for (const adj of grid.adj_graph[hovered].next) {
-                const id = adj.id,
-                      offset = id*4;
-                if (wave_queue.has(id))
-                    continue;
-                wave_queue.add(id);
-                grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
-                grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
-            }
-
-            // gl.bindTexture(gl.TEXTURE_2D, color_texture);
-            // gl.texSubImage2D(
-            //     gl.TEXTURE_2D, 0,
-            //     0, 0,
-            //     grid.texture_size, grid.texture_size,
-            //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-            // );
-
-            texture_is_dirty = true;
-        }
-        else {
-            const brush = new Set([hovered]);
-            for (const adj of grid.adj_graph[hovered].next)
-                 brush.add(adj.id);
-            wave_start(brush);
-        }
-        hovered_id = hovered;
-    }
 }
 
 canvas.onmouseup = (e:MouseEvent) => {
@@ -368,7 +269,10 @@ function update_viewport() {
             gl.TEXTURE_2D, 0, gl.R32UI,
             width, height, 0,
             gl.RED_INTEGER, gl.UNSIGNED_INT, null
-        )
+        );
+
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
         gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 
@@ -390,9 +294,73 @@ function update_viewport() {
 window.onresize = update_viewport;
 
 function draw() {
-    p.useProgram();
     ++frame;
 
+    if (force_render_mask || request_sample) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+
+        if (force_render_mask) {
+            gl.viewport(0, 0, width, height);
+
+            gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
+
+            mask_p.useProgram();
+            gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+
+            gl.bindVertexArray(mask_vao);
+            gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
+
+            force_render_mask = false;
+        }
+
+        if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+
+            gl.readPixels(
+                mouse_x, mouse_y, 1, 1,
+                gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
+            );
+
+            const hovered = pixel_data[0];
+            if (hovered !== 0 && hovered !== hovered_id) {
+                if (shift_down) {
+                    if (!wave_queue.has(hovered)) {
+                        wave_queue.add(hovered);
+                        const offset = hovered*4;
+                        grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                        grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                        grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
+                    }
+
+                    for (const adj of grid.adj_graph[hovered].next) {
+                        const id = adj.id,
+                            offset = id*4;
+                        if (wave_queue.has(id))
+                            continue;
+
+                        wave_queue.add(id);
+                        grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                        grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
+                        grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
+                    }
+
+                    texture_is_dirty = true;
+                }
+                else {
+                    const brush = new Set([hovered]);
+                    for (const adj of grid.adj_graph[hovered].next)
+                        brush.add(adj.id);
+                    wave_start(brush);
+                }
+                hovered_id = hovered;
+            }
+            request_sample = false;
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    p.useProgram();
     if (texture_is_dirty) {
         gl.bindTexture(gl.TEXTURE_2D, color_texture);
         gl.texSubImage2D(
@@ -409,22 +377,6 @@ function draw() {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-
-    if (force_render_mask) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-        gl.viewport(0, 0, width, height);
-
-        gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
-
-        mask_p.useProgram();
-        gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
-
-        gl.bindVertexArray(mask_vao);
-        gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        force_render_mask = false;
-    }
 
     requestAnimationFrame(draw);
 }
@@ -466,10 +418,10 @@ function wave_start(
     else {
         next = new Set();
         for (const id of ids) {
-            grid.adj_graph[id].state = _state;
+            const node = grid.adj_graph[id];
+            node.state = _state;
             grid.texture_u32view[id] = color_packed;
 
-            const node = grid.adj_graph[id];
             for (const nnext of node.next) {
                 if (next.has(nnext))
                     continue;
@@ -659,8 +611,19 @@ function wave_propagate(
     );
 }
 
-//    3
-// 4     2
-// 5     1 8
-//    6
-//         7
+function ring_wave() {
+    const from = 6*(side_length-2)**2+1,
+          to = 6*side_length**2,
+          mod = 5,
+          m = from % mod;
+    const s = new Set() as Set<number>;
+    ++palette_color;
+    for (let i=from; i<to; ++i) {
+        if (i%mod === m) {
+            s.add(i);
+            wave_start(s);
+            s.clear();
+        }
+    }
+    wave_start(s);
+}
