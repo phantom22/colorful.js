@@ -86,8 +86,44 @@ const side_length = searchParams.getNumber("side_length", 32, 1),
         new Uint8Array([255, 123,   0]), // tangelo orange
         new Uint8Array([112, 224,   0]), // electric lime
         new Uint8Array([241, 250, 238]), // off-white highlight
-      ],
-      palette_size = palette.length;
+        new Uint8Array([255, 255, 255]),
+        new Uint8Array([  0,   0,   0])
+      ];
+
+let last_picked: HTMLElement;
+function update_palette_picker() {
+    const e = document.getElementById("palette-grid");
+    if (e === null)
+        throw "Couldn't find #palette-grid element.";
+
+    let i = 0;
+    const ch = e.children;
+    for (; i<ch.length; ++i) {
+        // @ts-ignore
+        e.children[i].style.backgroundColor = `rgba(${palette[i].toString()})`;
+    }
+
+    for (; i<palette.length; ++i) {
+        const bttn = document.createElement("button");
+        bttn.style.backgroundColor = `rgba(${palette[i].toString()})`;
+        const v = i;
+        bttn.onclick = () => {
+            palette_color = v;
+            last_picked.classList.remove("picked");
+            bttn.classList.add("picked");
+            last_picked = bttn;
+        }
+        e.appendChild(bttn);
+    }
+
+    if (last_picked === undefined) {
+        // @ts-ignore
+        last_picked = e.children[0];
+        last_picked.classList.add("picked");
+    }
+}
+
+update_palette_picker();
 
 window.history.replaceState({}, '', `?${params.toString()}&grid_bg=[${grid_bg}]`);
 
@@ -214,7 +250,7 @@ canvas.onmousedown = (e:MouseEvent) => {
     if (mouse_down === true || e.button !== 0 || last_mouse_sample_frame === frame)
         return;
 
-    palette_color = ++palette_color % palette_size;
+    // palette_color = ++palette_color % palette.length;
     mouse_down = true;
 
     if (force_render_mask)
@@ -397,7 +433,7 @@ function draw() {
 }
 
 let wave_id = 0,
-    palette_color = -1;
+    palette_color = 0;
 
 function wave_start(
     ids:number|Set<number>, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,

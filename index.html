@@ -10,7 +10,7 @@ html, body {
     height: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden; /* Prevents scrollbars entirely */
+    overflow: hidden;
     background-color: black;
 }
 
@@ -23,15 +23,53 @@ html, body {
 }
 
 #screen {
-    display: block; /* Removes baseline inline spacing gap */
+    display: block;
     width: 100%;
     height: 100%;
 }
+
+#palette-grid {
+    position: absolute;
+    right: 2%;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 70px;
+    
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: white;
+    border: 1px solid white;
+    box-sizing: border-box;
+}
+
+#palette-grid button {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: block;
+    border: none;
+    transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+#palette-grid button:hover {
+    filter: saturate(150%) brightness(100%);
+}
+
+#palette-grid button.picked {
+    transform: scale(1.08);
+    filter: brightness(120%);
+    z-index: 2;
+}
+
 </style>
 </head>
 <body>
     <div id="container">
         <canvas id="screen"></canvas>
+        <div id="palette-grid"></div>
     </div>
     <script src="js/index.js"></script>
 <script type="x-shader/vs" id="vertex-shader">
