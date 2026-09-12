@@ -17,8 +17,12 @@ let gl: WebGL2RenderingContext,
     force_render_mask = true,
     mouse_down = false,
     shift_down = false,
+    ctrl_down = false,
     hovered_id = undefined as undefined|number,
     wave_queue = new Set() as Set<number>,
+    queue_strokes = [] as Set<number>[],
+    broke_stroke = false,
+    stroke_count = 0,
     texture_is_dirty = false,
     frame = 0,
     last_mouse_sample_frame = -1,
@@ -33,6 +37,11 @@ let gl: WebGL2RenderingContext,
 window.onkeydown = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
         shift_down = true;
+        broke_stroke = true;
+        stroke_count = -1;
+    }
+    else if (e.key === "Control") {
+        ctrl_down = true;
     }
 };
 
@@ -40,27 +49,33 @@ let show_info = false;
 window.onkeyup = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
         shift_down = false;
-        let s = new Set() as Set<number>,
-            mod = 5,
-            m: undefined|number;
-        
-        for (const id of wave_queue) {
-            if (m === undefined) {
-                m = id % mod;
-            }
+        for (let i=0; i<queue_strokes.length; ++i) {
+            const q = queue_strokes[i];
+            let s = new Set() as Set<number>,
+                mod = 5,
+                m: undefined|number;
+            
+            for (const id of q) {
+                if (m === undefined) {
+                    m = id % mod;
+                }
 
-            s.add(id);
-            if (id % mod === m) {
+                s.add(id);
+                if (id % mod === m) {
+                    wave_start(s);
+                    s.clear();
+                }
+            }
+            if (s.size > 0) {
                 wave_start(s);
                 s.clear();
             }
         }
-        if (s.size > 0) {
-            wave_start(s);
-            s.clear();
-        }
 
         wave_queue.clear();
+    }
+    else if (e.key === "Control") {
+        ctrl_down = false;
     }
     else if (e.key === "p")
         ring_wave();
@@ -68,7 +83,7 @@ window.onkeyup = (e:KeyboardEvent) => {
         request_clear = true;
     else if (e.key === "Escape") {
         show_info = show_info ? false : true;
-        const info = document.getElementById("info")
+        const info = document.getElementById("info");
         if (info === null)
             throw "Couldn't find #info element.";
 
@@ -80,6 +95,7 @@ window.onkeyup = (e:KeyboardEvent) => {
         crt.style.display = info.style.display;
         
         shift_down = false;
+        ctrl_down = false;
         mouse_down = false;
         wave_queue.clear();
     }
@@ -127,6 +143,11 @@ const side_length = searchParams.getNumber("side_length", 32, 1),
         new Uint8Array([  0,   0,   0])
       ];
 
+const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
+
+if (window.location.search !== updated_search_params)
+    window.history.replaceState({}, '', updated_search_params);
+
 let last_picked: HTMLElement;
 function update_palette_picker() {
     const e = document.getElementById("palette-grid");
@@ -161,8 +182,6 @@ function update_palette_picker() {
 }
 
 update_palette_picker();
-
-window.history.replaceState({}, '', `?${params.toString()}&grid_bg=[${grid_bg}]`);
 
 window.onload = () => {
 
@@ -277,6 +296,8 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
 canvas.onmouseleave = () => { 
     mouse_down = false;
+    shift_down = false;
+    ctrl_down = false;
     hovered_id = undefined;
     if (wave_queue.size !== 0) {
         wave_start(wave_queue);
@@ -317,6 +338,7 @@ canvas.onmouseup = (e:MouseEvent) => {
     if (e.button !== 0)
         return;
 
+    broke_stroke = shift_down ? true : false;
     mouse_down = false;
     hovered_id = undefined;
 }
@@ -365,6 +387,8 @@ function update_viewport() {
 
         force_render_mask = true;
         mouse_down = false;
+        shift_down = false;
+        ctrl_down = false;
         hovered_id = undefined;
     }
 }
@@ -406,7 +430,6 @@ function draw() {
         }
 
         if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
-
             gl.readPixels(
                 mouse_x, mouse_y, 1, 1,
                 gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
@@ -417,6 +440,14 @@ function draw() {
                 if (shift_down) {
                     if (!wave_queue.has(hovered)) {
                         wave_queue.add(hovered);
+
+                        if (broke_stroke) {
+                            queue_strokes[++stroke_count] = new Set();
+                            broke_stroke = false;
+                        }
+
+                        queue_strokes[stroke_count].add(hovered);
+
                         const offset = hovered*4;
                         grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                         grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
@@ -429,11 +460,25 @@ function draw() {
                         if (wave_queue.has(id))
                             continue;
 
+                        queue_strokes[stroke_count].add(hovered);
+
                         wave_queue.add(id);
                         grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                         grid.texture[offset+1] = Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
                         grid.texture[offset+2] = Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
                     }
+
+                    texture_is_dirty = true;
+                }
+                else if (ctrl_down) {
+                    const clear_color = packUint8(palette[palette_color]);
+                    for (let i=0; i<grid.adj_graph.length; ++i)
+                        grid.texture_u32view[i] = clear_color;
+
+                    // if (queued_wave_count > 0) {
+                    //     prevent_waves_last_id = wave_id + queued_wave_count;
+                    //     wave_id = prevent_waves_last_id + 1;
+                    // }
 
                     texture_is_dirty = true;
                 }
@@ -725,7 +770,6 @@ function ring_wave() {
           mod = 5,
           m = from % mod;
     const s = new Set() as Set<number>;
-    ++palette_color;
     for (let i=from; i<to; ++i) {
         if (i%mod === m) {
             s.add(i);

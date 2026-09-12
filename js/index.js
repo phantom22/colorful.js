@@ -277,32 +277,43 @@ class ColorfulGrid {
         }
     }
 }
-let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, hovered_id = undefined, wave_queue = new Set(), texture_is_dirty = false, frame = 0, last_mouse_sample_frame = -1, mouse_x, mouse_y, pixel_data = new Uint32Array(1), request_sample = false, request_clear = false, queued_wave_count = 0, prevent_waves_last_id = 0;
+let gl, canvas, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao, force_render_mask = true, mouse_down = false, shift_down = false, ctrl_down = false, hovered_id = undefined, wave_queue = new Set(), queue_strokes = [], broke_stroke = false, stroke_count = 0, texture_is_dirty = false, frame = 0, last_mouse_sample_frame = -1, mouse_x, mouse_y, pixel_data = new Uint32Array(1), request_sample = false, request_clear = false, queued_wave_count = 0, prevent_waves_last_id = 0;
 window.onkeydown = (e) => {
     if (e.key === "Shift") {
         shift_down = true;
+        broke_stroke = true;
+        stroke_count = -1;
+    }
+    else if (e.key === "Control") {
+        ctrl_down = true;
     }
 };
 let show_info = false;
 window.onkeyup = (e) => {
     if (e.key === "Shift") {
         shift_down = false;
-        let s = new Set(), mod = 5, m;
-        for (const id of wave_queue) {
-            if (m === undefined) {
-                m = id % mod;
+        for (let i = 0; i < queue_strokes.length; ++i) {
+            const q = queue_strokes[i];
+            let s = new Set(), mod = 5, m;
+            for (const id of q) {
+                if (m === undefined) {
+                    m = id % mod;
+                }
+                s.add(id);
+                if (id % mod === m) {
+                    wave_start(s);
+                    s.clear();
+                }
             }
-            s.add(id);
-            if (id % mod === m) {
+            if (s.size > 0) {
                 wave_start(s);
                 s.clear();
             }
         }
-        if (s.size > 0) {
-            wave_start(s);
-            s.clear();
-        }
         wave_queue.clear();
+    }
+    else if (e.key === "Control") {
+        ctrl_down = false;
     }
     else if (e.key === "p")
         ring_wave();
@@ -319,6 +330,7 @@ window.onkeyup = (e) => {
         info.style.display = show_info ? "block" : "none";
         crt.style.display = info.style.display;
         shift_down = false;
+        ctrl_down = false;
         mouse_down = false;
         wave_queue.clear();
     }
@@ -353,6 +365,9 @@ const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = 
     new Uint8Array([255, 255, 255]),
     new Uint8Array([0, 0, 0])
 ];
+const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
+if (window.location.search !== updated_search_params)
+    window.history.replaceState({}, '', updated_search_params);
 let last_picked;
 function update_palette_picker() {
     const e = document.getElementById("palette-grid");
@@ -383,7 +398,6 @@ function update_palette_picker() {
     }
 }
 update_palette_picker();
-window.history.replaceState({}, '', `?${params.toString()}&grid_bg=[${grid_bg}]`);
 window.onload = () => {
     canvas = document.getElementById("screen");
     if (!(canvas instanceof HTMLCanvasElement))
@@ -457,6 +471,8 @@ window.onload = () => {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     canvas.onmouseleave = () => {
         mouse_down = false;
+        shift_down = false;
+        ctrl_down = false;
         hovered_id = undefined;
         if (wave_queue.size !== 0) {
             wave_start(wave_queue);
@@ -488,6 +504,7 @@ window.onload = () => {
     canvas.onmouseup = (e) => {
         if (e.button !== 0)
             return;
+        broke_stroke = shift_down ? true : false;
         mouse_down = false;
         hovered_id = undefined;
     };
@@ -519,6 +536,8 @@ function update_viewport() {
         gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
         force_render_mask = true;
         mouse_down = false;
+        shift_down = false;
+        ctrl_down = false;
         hovered_id = undefined;
     }
 }
@@ -555,6 +574,11 @@ function draw() {
                 if (shift_down) {
                     if (!wave_queue.has(hovered)) {
                         wave_queue.add(hovered);
+                        if (broke_stroke) {
+                            queue_strokes[++stroke_count] = new Set();
+                            broke_stroke = false;
+                        }
+                        queue_strokes[stroke_count].add(hovered);
                         const offset = hovered * 4;
                         grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                         grid.texture[offset + 1] = Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
@@ -564,11 +588,22 @@ function draw() {
                         const id = adj.id, offset = id * 4;
                         if (wave_queue.has(id))
                             continue;
+                        queue_strokes[stroke_count].add(hovered);
                         wave_queue.add(id);
                         grid.texture[offset] = Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                         grid.texture[offset + 1] = Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
                         grid.texture[offset + 2] = Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
                     }
+                    texture_is_dirty = true;
+                }
+                else if (ctrl_down) {
+                    const clear_color = packUint8(palette[palette_color]);
+                    for (let i = 0; i < grid.adj_graph.length; ++i)
+                        grid.texture_u32view[i] = clear_color;
+                    // if (queued_wave_count > 0) {
+                    //     prevent_waves_last_id = wave_id + queued_wave_count;
+                    //     wave_id = prevent_waves_last_id + 1;
+                    // }
                     texture_is_dirty = true;
                 }
                 else {
@@ -792,7 +827,6 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
 function ring_wave() {
     const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
     const s = new Set();
-    ++palette_color;
     for (let i = from; i < to; ++i) {
         if (i % mod === m) {
             s.add(i);
