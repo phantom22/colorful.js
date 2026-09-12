@@ -36,16 +36,49 @@ window.onkeydown = (e:KeyboardEvent) => {
     }
 };
 
+let show_info = false;
 window.onkeyup = (e:KeyboardEvent) => {
     if (e.key === "Shift") {
         shift_down = false;
-        wave_start(wave_queue);
+        let s = new Set() as Set<number>,
+            mod = 5,
+            m: undefined|number;
+        
+        for (const id of wave_queue) {
+            if (m === undefined) {
+                m = id % mod;
+            }
+
+            s.add(id);
+            if (id % mod === m) {
+                wave_start(s);
+                s.clear();
+            }
+        }
+        if (s.size > 0) {
+            wave_start(s);
+            s.clear();
+        }
+
         wave_queue.clear();
     }
     else if (e.key === "p")
         ring_wave();
     else if (e.key === "c")
         request_clear = true;
+    else if (e.key === "Escape") {
+        show_info = show_info ? false : true;
+        const info = document.getElementById("info")
+        if (info === null)
+            throw "Couldn't find #info element.";
+
+        const crt = document.getElementById("info-curtain");
+        if (crt === null)
+            throw "Couldn't find #info-curtain element.";
+        
+        info.style.display = show_info ? "block" : "none";
+        crt.style.display = info.style.display;
+    }
 };
 
 const side_length = searchParams.getNumber("side_length", 32, 1),
@@ -338,7 +371,7 @@ function draw() {
     ++frame;
 
     if (request_clear) {
-        const clear_color = packUint8(new Uint8Array([0, 0, 0, 255]));
+        const clear_color = packUint8(grid_bg);
         for (let i=0; i<grid.adj_graph.length; ++i)
             grid.texture_u32view[i] = clear_color;
         prevent_waves_last_id = wave_id + queued_wave_count;

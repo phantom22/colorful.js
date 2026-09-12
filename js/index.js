@@ -283,16 +283,42 @@ window.onkeydown = (e) => {
         shift_down = true;
     }
 };
+let show_info = false;
 window.onkeyup = (e) => {
     if (e.key === "Shift") {
         shift_down = false;
-        wave_start(wave_queue);
+        let s = new Set(), mod = 5, m;
+        for (const id of wave_queue) {
+            if (m === undefined) {
+                m = id % mod;
+            }
+            s.add(id);
+            if (id % mod === m) {
+                wave_start(s);
+                s.clear();
+            }
+        }
+        if (s.size > 0) {
+            wave_start(s);
+            s.clear();
+        }
         wave_queue.clear();
     }
     else if (e.key === "p")
         ring_wave();
     else if (e.key === "c")
         request_clear = true;
+    else if (e.key === "Escape") {
+        show_info = show_info ? false : true;
+        const info = document.getElementById("info");
+        if (info === null)
+            throw "Couldn't find #info element.";
+        const crt = document.getElementById("info-curtain");
+        if (crt === null)
+            throw "Couldn't find #info-curtain element.";
+        info.style.display = show_info ? "block" : "none";
+        crt.style.display = info.style.display;
+    }
 };
 const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = searchParams.getNumber("blend_value", 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", 0.99, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), params = new URLSearchParams([
     ["side_length", `${side_length}`],
@@ -497,7 +523,7 @@ window.onresize = update_viewport;
 function draw() {
     ++frame;
     if (request_clear) {
-        const clear_color = packUint8(new Uint8Array([0, 0, 0, 255]));
+        const clear_color = packUint8(grid_bg);
         for (let i = 0; i < grid.adj_graph.length; ++i)
             grid.texture_u32view[i] = clear_color;
         prevent_waves_last_id = wave_id + queued_wave_count;
