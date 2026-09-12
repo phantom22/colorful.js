@@ -3,9 +3,7 @@ function w_mouseleave() {
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
-    wave_queue.clear();
-    queued_strokes = [];
-    stroke_count = 0;
+    process_queued_strokes();
 }
 
 function w_blur() {
@@ -15,7 +13,7 @@ function w_blur() {
     hovered_id = undefined;
     wave_queue.clear();
     queued_strokes = [];
-    stroke_count = 0;
+    stroke_count = -1;
 }
 
 window.onresize = update_viewport;

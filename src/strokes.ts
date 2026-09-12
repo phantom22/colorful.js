@@ -93,5 +93,5 @@ function process_queued_strokes() {
 
     wave_queue.clear();
     queued_strokes = [];
-    stroke_count = 0;
+    stroke_count = -1;
 }

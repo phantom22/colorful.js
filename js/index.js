@@ -663,7 +663,7 @@ function process_queued_strokes() {
     }
     wave_queue.clear();
     queued_strokes = [];
-    stroke_count = 0;
+    stroke_count = -1;
 }
 let pixel_data = new Uint32Array(1), force_render_mask = true, texture_is_dirty = false, request_sample = false, request_clear = false, frame = 0;
 function draw() {
@@ -875,9 +875,7 @@ function w_mouseleave() {
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
-    wave_queue.clear();
-    queued_strokes = [];
-    stroke_count = 0;
+    process_queued_strokes();
 }
 function w_blur() {
     mouse_down = false;
@@ -886,7 +884,7 @@ function w_blur() {
     hovered_id = undefined;
     wave_queue.clear();
     queued_strokes = [];
-    stroke_count = 0;
+    stroke_count = -1;
 }
 window.onresize = update_viewport;
 window.onblur = w_blur;
