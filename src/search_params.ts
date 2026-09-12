@@ -51,3 +51,32 @@ const searchParams = new (class {
         return this.url.searchParams.get(p) || fallback;
     }
 });
+
+const side_length = searchParams.getNumber("side_length", 32, 1),
+      blend_value = searchParams.getNumber("blend_value", 0.008, 0,1),
+      wave_delay = searchParams.getNumber("wave_delay", 30, 1),
+      wave_decay = searchParams.getNumber("wave_decay", 0.99, 0,1),
+      decay_min_radius = searchParams.getNumber("decay_min_radius", -2),
+      new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1),
+      new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0,1),
+      new_color_p = searchParams.getNumber("new_color_p", 0.1, 0,1),
+      new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0,1),
+      grid_bg = searchParams.getUint8Color("grid_bg"),
+      params = new URLSearchParams([
+        ["side_length", `${side_length}`],
+        ["blend_value",`${blend_value}`],
+        ["wave_delay", `${wave_delay}`],
+        ["wave_decay", `${wave_decay}`],
+        ["decay_min_radius", `${decay_min_radius}`],
+        ["new_wave_delay", `${new_wave_delay}`],
+        ["new_wave_p", `${new_wave_p}`],
+        ["new_color_p", `${new_color_p}`],
+        ["new_color_compl_p", `${new_color_compl_p}`]
+      ]);
+
+{
+    const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
+
+    if (window.location.search !== updated_search_params)
+        window.history.replaceState({}, '', updated_search_params);
+}

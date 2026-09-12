@@ -30,6 +30,9 @@ function compile_shader_program(
           f_src = f_el.textContent.trimStart();
 
     const v = gl.createShader(gl.VERTEX_SHADER);
+    if (v === null)
+        throw "Colorful.js: couldn't create vertex shader";
+
     gl.shaderSource(v, v_src);
     gl.compileShader(v);
 
@@ -38,6 +41,8 @@ function compile_shader_program(
               "shader, reason: " + gl.getShaderInfoLog(v);
 
     const f = gl.createShader(gl.FRAGMENT_SHADER);
+    if (f === null)
+        throw "Colorful.js: couldn't create fragment shader";
     gl.shaderSource(f, f_src);
     gl.compileShader(f);
 
@@ -64,7 +69,11 @@ function compile_shader_program(
     }
 
     for (const key of uniforms) {
-        o.uniforms[key] = gl.getUniformLocation(p, key);
+        const loc = gl.getUniformLocation(p, key);
+        if (loc === null)
+            throw `Colorful.js: the specified uniform named '${key}' is not`
+                    + " defined within the shader.";
+        o.uniforms[key] = loc;
     }
 
     for (const key of attributes) {
@@ -86,15 +95,15 @@ function create_orthographic_matrix(
 }
 
 
-const pack_buffer = new ArrayBuffer(4);
-const pack8 = new Uint8Array(pack_buffer);
-const pack32 = new Uint32Array(pack_buffer);
+const _pack_buffer = new ArrayBuffer(4),
+      _pack8 = new Uint8Array(_pack_buffer),
+      _pack32 = new Uint32Array(_pack_buffer);
 
 /** This approach was used to guarantee endian compatibility. */
 function packUint8(color:Uint8Array): number {
-    pack8[0] = color[0];
-    pack8[1] = color[1];
-    pack8[2] = color[2];
-    pack8[3] = 255;
-    return pack32[0]; // Guaranteed exact memory layout for current CPU
+    _pack8[0] = color[0];
+    _pack8[1] = color[1];
+    _pack8[2] = color[2];
+    _pack8[3] = 255;
+    return _pack32[0]; // Guaranteed exact memory layout for current CPU
 }

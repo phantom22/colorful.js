@@ -5,9 +5,19 @@
         "ignoreDeprecations": "6.0"
     },
     "files": [
-        "searchParams.ts",
+        "search_params.ts",
+        "dynamic_dom.ts",
+        "palette.ts",
         "webgl_helpers.ts",
         "colorful.ts",
+        "update_viewport.ts",
+        "wave.ts",
+        "strokes.ts",
+        "draw.ts",
+        "init.ts",
+        "keyboard_events.ts",
+        "mouse_events.ts",
+        "window_events.ts",
         "main.ts"
     ]
 }
