@@ -78,6 +78,10 @@ window.onkeyup = (e:KeyboardEvent) => {
         
         info.style.display = show_info ? "block" : "none";
         crt.style.display = info.style.display;
+        
+        shift_down = false;
+        mouse_down = false;
+        wave_queue.clear();
     }
 };
 
@@ -374,8 +378,11 @@ function draw() {
         const clear_color = packUint8(grid_bg);
         for (let i=0; i<grid.adj_graph.length; ++i)
             grid.texture_u32view[i] = clear_color;
-        prevent_waves_last_id = wave_id + queued_wave_count;
-        wave_id = prevent_waves_last_id + 1;
+
+        if (queued_wave_count > 0) {
+            prevent_waves_last_id = wave_id + queued_wave_count;
+            wave_id = prevent_waves_last_id + 1;
+        }
         request_clear = false;
         texture_is_dirty = true;
     }

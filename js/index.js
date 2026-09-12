@@ -318,6 +318,9 @@ window.onkeyup = (e) => {
             throw "Couldn't find #info-curtain element.";
         info.style.display = show_info ? "block" : "none";
         crt.style.display = info.style.display;
+        shift_down = false;
+        mouse_down = false;
+        wave_queue.clear();
     }
 };
 const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = searchParams.getNumber("blend_value", 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", 0.99, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), params = new URLSearchParams([
@@ -526,8 +529,10 @@ function draw() {
         const clear_color = packUint8(grid_bg);
         for (let i = 0; i < grid.adj_graph.length; ++i)
             grid.texture_u32view[i] = clear_color;
-        prevent_waves_last_id = wave_id + queued_wave_count;
-        wave_id = prevent_waves_last_id + 1;
+        if (queued_wave_count > 0) {
+            prevent_waves_last_id = wave_id + queued_wave_count;
+            wave_id = prevent_waves_last_id + 1;
+        }
         request_clear = false;
         texture_is_dirty = true;
     }
