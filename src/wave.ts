@@ -247,7 +247,7 @@ function wave_propagate(
     );
 }
 
-function ring_wave() {
+function inward_wave() {
     const from = 6*(side_length-2)**2+1,
           to = 6*side_length**2,
           mod = 5,

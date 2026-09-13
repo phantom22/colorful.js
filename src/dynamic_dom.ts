@@ -34,10 +34,7 @@ let show_info = false;
 function toggle_info() {
     show_info = show_info ? false : true;
 
-    const v = show_info ? "block" : "none";
-
-    info_el.style.display = v;
-    curtain_el.style.display = v;
+    curtain_el.style.visibility = show_info ? "visible" : "hidden";
     
     shift_down = false;
     ctrl_down = false;

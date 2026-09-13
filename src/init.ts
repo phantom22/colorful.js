@@ -16,8 +16,8 @@ let gl: WebGL2RenderingContext,
 
 let canvas_el: HTMLCanvasElement,
     palette_grid_el: HTMLElement,
-    info_el: HTMLElement,
-    curtain_el: HTMLElement;
+    curtain_el: HTMLElement,
+    esc_button_el: HTMLElement;
 
 function init() {
     canvas_el = document.getElementById("screen") as HTMLCanvasElement;
@@ -28,13 +28,15 @@ function init() {
     if (palette_grid_el === null)
         throw "Colorful.js: couldn't find '#palette-grid' element.";
 
-    info_el = document.getElementById("info") as HTMLElement;
-    if (info_el === null)
-        throw "Colorful.js: couldn't find '#info' element.";
-
     curtain_el = document.getElementById("info-curtain") as HTMLElement;
     if (curtain_el === null)
         throw "Colorful.js: couldn't find '#info-curtain' element.";
+
+    esc_button_el = document.getElementById("esc-button") as HTMLElement;
+    if (esc_button_el === null)
+        throw "Colorful.js: couldn't find '#esc-button' element.";
+    esc_button_el.onclick = toggle_info;
+
 
     gl = canvas_el.getContext("webgl2") as WebGL2RenderingContext;
 

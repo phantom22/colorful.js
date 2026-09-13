@@ -1,10 +1,12 @@
 # Colorful.js
 
-This project defines a hexagonal grid which acts as a color-mixing sandbox through wave propagation.
+A hexagonal sandbox that mixes color using wave propagation.
 
-![Main Animation](./gifs/main.gif)
+<div align="center">
+    <img src="./gifs/main.gif" width="600" alt="Main Animation">
+</div>
 
 ---
 
 # Try it!
-The [github pages deployment](phantom22.github.io/colorful.js/) works flawlessly on chromium-based browsers but, depending on your hardware and OS, can have some issues on firefox forks. If you are interested in playing around with the sandbox, cloning locally the project gives the best experience compatibility-wise.
+The [github pages deployment](phantom22.github.io/colorful.js/) works flawlessly on chromium-based browsers but, depending on your hardware and OS, can have some issues on firefox forks. If you are interested in playing around with the demo, cloning the project locally gives the best experience compatibility-wise.

@@ -20,7 +20,7 @@ function w_keyup(e:KeyboardEvent) {
     else if (e.key === "Control")
         ctrl_down = false;
     else if (e.key === "p")
-        ring_wave();
+        inward_wave();
     else if (e.key === "c")
         request_clear = true;
     else if (e.key === "Escape") {

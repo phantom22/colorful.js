@@ -35,6 +35,8 @@ function update_viewport() {
         mouse_down = false;
         shift_down = false;
         ctrl_down = false;
+        queued_strokes = [];
+        wave_queue.clear();
         hovered_id = undefined;
     }
 }
