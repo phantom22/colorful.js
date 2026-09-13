@@ -445,6 +445,7 @@ function update_viewport() {
 }
 let wave_id = 0, palette_color = 0, queued_wave_count = 0, prevent_waves_last_id = 0;
 function wave_start(ids, color_packed, color, fcolor, _wave_id) {
+    console.log(typeof ids === "number" ? `(${ids})` : `(${[...ids]})`);
     --queued_wave_count;
     queued_wave_count = Math.max(queued_wave_count, 0);
     const _state = _wave_id === undefined
@@ -513,9 +514,12 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
             const adj_id = adj_node.id, offset = adj_id * 4;
             if (wave_queue.has(adj_id)) {
                 // remove applied white highlight color from adjacent nodes 
-                avg_adj_col[0] += Math.max(Math.floor(2 * grid.texture[offset] - 255), 0);
-                avg_adj_col[1] += Math.max(Math.floor(2 * grid.texture[offset + 1] - 255), 0);
-                avg_adj_col[2] += Math.max(Math.floor(2 * grid.texture[offset + 2] - 255), 0);
+                avg_adj_col[0] +=
+                    Math.max(Math.floor(2 * grid.texture[offset] - 255), 0);
+                avg_adj_col[1] +=
+                    Math.max(Math.floor(2 * grid.texture[offset + 1] - 255), 0);
+                avg_adj_col[2] +=
+                    Math.max(Math.floor(2 * grid.texture[offset + 2] - 255), 0);
             }
             else {
                 avg_adj_col[0] += grid.texture[offset];
@@ -671,7 +675,7 @@ function process_stroke(hovered) {
                 const id = adj.id, offset = id * 4;
                 if (wave_queue.has(id))
                     continue;
-                queued_strokes[stroke_count].add(hovered);
+                queued_strokes[stroke_count].add(id);
                 wave_queue.add(id);
                 grid.texture[offset] =
                     Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
@@ -701,10 +705,28 @@ function process_stroke(hovered) {
         hovered_id = hovered;
     }
 }
+function remove_highlights() {
+    for (const id of wave_queue) {
+        const offset = id * 4;
+        grid.texture[offset] = Math.max(2 * grid.texture[offset] - 255, 0);
+        grid.texture[offset + 1] = Math.max(2 * grid.texture[offset + 1] - 255, 0);
+        grid.texture[offset + 2] = Math.max(2 * grid.texture[offset + 2] - 255, 0);
+        grid.texture[offset + 3] = Math.max(2 * grid.texture[offset + 3] - 255, 0);
+    }
+    texture_is_dirty = true;
+    wave_queue.clear();
+}
 function process_queued_strokes() {
+    remove_highlights();
     for (let i = 0; i < queued_strokes.length; ++i) {
         const q = queued_strokes[i];
-        let s = new Set(), mod = 5, m;
+        // let q_brush = new Set() as Set<number>;
+        // for (const id of q) {
+        //     q_brush.add(id);
+        //     for (const next of grid.adj_graph[id].next)
+        //         q_brush.add(next.id);
+        // }
+        let s = new Set(), mod = 3, m;
         for (const id of q) {
             if (m === undefined) {
                 m = id % mod;
@@ -712,7 +734,7 @@ function process_queued_strokes() {
             s.add(id);
             if (id % mod === m) {
                 wave_start(s);
-                s.clear();
+                s = new Set();
             }
         }
         if (s.size > 0) {
@@ -720,7 +742,6 @@ function process_queued_strokes() {
             s.clear();
         }
     }
-    wave_queue.clear();
     queued_strokes = [];
     stroke_count = -1;
 }

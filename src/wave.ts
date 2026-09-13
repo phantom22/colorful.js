@@ -7,6 +7,8 @@ function wave_start(
     ids:number|Set<number>, color_packed?:number, color?:Uint8Array, fcolor?:Float32Array,
     _wave_id?:number
 ) {
+    console.log(typeof ids==="number"?`(${ids})`:`(${[...ids]})`);
+
     --queued_wave_count;
     queued_wave_count = Math.max(queued_wave_count, 0);
 
@@ -100,9 +102,12 @@ function wave_propagate(
 
             if (wave_queue.has(adj_id)) {
                 // remove applied white highlight color from adjacent nodes 
-                avg_adj_col[0] += Math.max(Math.floor(2*grid.texture[offset] - 255), 0);
-                avg_adj_col[1] += Math.max(Math.floor(2*grid.texture[offset+1] - 255), 0);
-                avg_adj_col[2] += Math.max(Math.floor(2*grid.texture[offset+2] - 255), 0);
+                avg_adj_col[0] +=
+                    Math.max(Math.floor(2*grid.texture[offset] - 255), 0);
+                avg_adj_col[1] +=
+                    Math.max(Math.floor(2*grid.texture[offset+1] - 255), 0);
+                avg_adj_col[2] +=
+                    Math.max(Math.floor(2*grid.texture[offset+2] - 255), 0);
             }
             else {
                 avg_adj_col[0] += grid.texture[offset];

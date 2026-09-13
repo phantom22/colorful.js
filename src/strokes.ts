@@ -32,9 +32,9 @@ function process_stroke(hovered:number) {
                 if (wave_queue.has(id))
                     continue;
 
-                queued_strokes[stroke_count].add(hovered);
-
+                queued_strokes[stroke_count].add(id);
                 wave_queue.add(id);
+
                 grid.texture[offset] =
                     Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                 grid.texture[offset+1] =
@@ -67,11 +67,31 @@ function process_stroke(hovered:number) {
     }
 }
 
+function remove_highlights() {
+    for (const id of wave_queue) {
+        const offset = id*4;
+        grid.texture[offset] = Math.max(2*grid.texture[offset] - 255, 0);
+        grid.texture[offset+1] = Math.max(2*grid.texture[offset+1] - 255, 0);
+        grid.texture[offset+2] = Math.max(2*grid.texture[offset+2] - 255, 0);
+        grid.texture[offset+3] = Math.max(2*grid.texture[offset+3] - 255, 0);
+    }
+    texture_is_dirty = true;
+    wave_queue.clear();
+}
+
 function process_queued_strokes() {
+    remove_highlights();
     for (let i=0; i<queued_strokes.length; ++i) {
         const q = queued_strokes[i];
+        // let q_brush = new Set() as Set<number>;
+        // for (const id of q) {
+        //     q_brush.add(id);
+        //     for (const next of grid.adj_graph[id].next)
+        //         q_brush.add(next.id);
+        // }
+
         let s = new Set() as Set<number>,
-            mod = 5,
+            mod = 3,
             m: undefined|number;
         
         for (const id of q) {
@@ -82,7 +102,7 @@ function process_queued_strokes() {
             s.add(id);
             if (id % mod === m) {
                 wave_start(s);
-                s.clear();
+                s = new Set();
             }
         }
         if (s.size > 0) {
@@ -91,7 +111,6 @@ function process_queued_strokes() {
         }
     }
 
-    wave_queue.clear();
     queued_strokes = [];
     stroke_count = -1;
 }
