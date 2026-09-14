@@ -1,3 +1,4 @@
+/** last cliked button from #palette-grid */
 let last_picked_color_el: HTMLElement;
 function update_palette_picker() {
     let i = 0;

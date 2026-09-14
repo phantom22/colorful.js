@@ -1,3 +1,4 @@
+/** event called on window.onresize */
 function update_viewport() {
     let _width = window.innerWidth,
         _height = window.innerHeight;

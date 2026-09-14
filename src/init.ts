@@ -1,24 +1,37 @@
 let gl: WebGL2RenderingContext,
+    /** grid shader program. */
     p: ReturnType<typeof compile_shader_program>,
+    /** grid vertex mask shader program. */
     mask_p: ReturnType<typeof compile_shader_program>,
     grid: ColorfulGrid,
-    vertex_count: number,
     mask_texture:WebGLTexture,
     mask_fbo:WebGLFramebuffer,
+    /** inner window aspect ratio. */
     ar:number,
+    /** camera (orthographic) projection matrix. */
     proj_mat:Float32Array,
+    /** window.innerWidth */
     width:number,
+    /** window.innerHeight */
     height:number,
+    /** grid vertex array object. */
     vao:WebGLVertexArrayObject,
-    vertex_color_data:Uint8Array,
     color_texture:WebGLTexture,
-    mask_vao:WebGLVertexArrayObject;
+    /** mask grid vertex array object. */
+    mask_vao:WebGLVertexArrayObject,
+    /** grid.vertex_count */
+    vertex_count: number;
 
+    /** canvas DOM element (#screen). */
 let canvas_el: HTMLCanvasElement,
+    /** color picker DOM element (#palette-grid). */
     palette_grid_el: HTMLElement,
+    /** info curtain DOM element (#info-curtain) */
     curtain_el: HTMLElement,
+    /** esc button DOM element (#esc-button). */
     esc_button_el: HTMLElement;
 
+/** event called by window.onload */
 function init() {
     canvas_el = document.getElementById("screen") as HTMLCanvasElement;
     if (!(canvas_el instanceof HTMLCanvasElement))
@@ -36,7 +49,6 @@ function init() {
     if (esc_button_el === null)
         throw "Colorful.js: couldn't find '#esc-button' element.";
     esc_button_el.onclick = toggle_info;
-
 
     gl = canvas_el.getContext("webgl2") as WebGL2RenderingContext;
 
@@ -64,7 +76,6 @@ function init() {
 
     grid = new ColorfulGrid(side_length, grid_bg);
     vertex_count = grid.vertex_count;
-
     vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
 

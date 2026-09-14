@@ -60,6 +60,7 @@ const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = 
     if (window.location.search !== updated_search_params)
         window.history.replaceState({}, '', updated_search_params);
 }
+/** last cliked button from #palette-grid */
 let last_picked_color_el;
 function update_palette_picker() {
     let i = 0;
@@ -96,26 +97,6 @@ function toggle_info() {
     mouse_down = false;
     wave_queue.clear();
 }
-// const palette = [
-//     new Uint8Array([255, 107, 107]), // coral red
-//     new Uint8Array([ 78, 205, 196]), // mint cyan
-//     new Uint8Array([255, 230, 109]), // pastel yellow
-//     new Uint8Array([ 26,  83,  92]), // deep teal
-//     new Uint8Array([255, 159,  28]), // bright amber
-//     new Uint8Array([ 43,  45,  66]), // midnight indigo
-//     new Uint8Array([239,  71, 111]), // neon raspberry
-//     new Uint8Array([  6, 214, 160]), // emerald seafoam
-//     new Uint8Array([ 17, 138, 178]), // electric cerulean
-//     new Uint8Array([247, 208, 138]), // warm gold
-//     new Uint8Array([114,   9, 183]), // deep violet
-//     new Uint8Array([247,  37, 133]), // vivid magenta
-//     new Uint8Array([ 76, 201, 240]), // sky cyan
-//     new Uint8Array([255, 123,   0]), // tangelo orange
-//     new Uint8Array([112, 224,   0]), // electric lime
-//     new Uint8Array([241, 250, 238]), // off-white highlight
-//     new Uint8Array([255, 255, 255]),
-//     new Uint8Array([  0,   0,   0])
-// ];
 const palette = [
     new Uint8Array([170, 20, 45]),
     new Uint8Array([235, 50, 65]),
@@ -414,6 +395,7 @@ class ColorfulGrid {
         }
     }
 }
+/** event called on window.onresize */
 function update_viewport() {
     let _width = window.innerWidth, _height = window.innerHeight;
     if (_width !== width || _height !== height) {
@@ -443,9 +425,16 @@ function update_viewport() {
         hovered_id = undefined;
     }
 }
-let wave_id = 0, palette_color = 0, queued_wave_count = 0, prevent_waves_last_id = 0;
+/** this value is used to  */
+let wave_id = 0, 
+/** index of the color used from the current palette. */
+palette_color = 0, 
+/** value used to filter out all the queued waves when filling or clearing
+ * the entire grid. */
+queued_wave_count = 0, 
+/** each wave_id lower or equal to this value will be discarded. */
+prevent_waves_last_id = 0;
 function wave_start(ids, color_packed, color, fcolor, _wave_id) {
-    console.log(typeof ids === "number" ? `(${ids})` : `(${[...ids]})`);
     --queued_wave_count;
     queued_wave_count = Math.max(queued_wave_count, 0);
     const _state = _wave_id === undefined
@@ -453,7 +442,8 @@ function wave_start(ids, color_packed, color, fcolor, _wave_id) {
         : _wave_id;
     if (_state <= prevent_waves_last_id)
         return;
-    if (color_packed === undefined || color === undefined || fcolor == undefined) {
+    if (color_packed === undefined || color === undefined
+        || fcolor === undefined) {
         color = palette[palette_color];
         fcolor = new Float32Array([
             color[0] / 255, color[1] / 255, color[2] / 255
@@ -507,24 +497,25 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
         }
         if (Math.random() <= new_wave_p)
             new_wave.add(node);
-        const node_id = node.id, is_hovered = wave_queue.has(node_id);
+        const node_id = node.id, offset = node_id * 4, is_hovered = wave_queue.has(node_id);
         node.state = state;
         let avg_adj_col = [0, 0, 0];
         for (const adj_node of node.next) {
-            const adj_id = adj_node.id, offset = adj_id * 4;
+            const adj_id = adj_node.id, adj_offset = adj_id * 4;
             if (wave_queue.has(adj_id)) {
-                // remove applied white highlight color from adjacent nodes 
+                /** remove applied white highlight color from adjacent nodes
+                 * before adding the true color to the total sum */
                 avg_adj_col[0] +=
-                    Math.max(Math.floor(2 * grid.texture[offset] - 255), 0);
+                    Math.max(Math.floor(2 * grid.texture[adj_offset] - 255), 0);
                 avg_adj_col[1] +=
-                    Math.max(Math.floor(2 * grid.texture[offset + 1] - 255), 0);
+                    Math.max(Math.floor(2 * grid.texture[adj_offset + 1] - 255), 0);
                 avg_adj_col[2] +=
-                    Math.max(Math.floor(2 * grid.texture[offset + 2] - 255), 0);
+                    Math.max(Math.floor(2 * grid.texture[adj_offset + 2] - 255), 0);
             }
             else {
-                avg_adj_col[0] += grid.texture[offset];
-                avg_adj_col[1] += grid.texture[offset + 1];
-                avg_adj_col[2] += grid.texture[offset + 2];
+                avg_adj_col[0] += grid.texture[adj_offset];
+                avg_adj_col[1] += grid.texture[adj_offset + 1];
+                avg_adj_col[2] += grid.texture[adj_offset + 2];
             }
             if (ids.has(adj_node) || adj_node.state >= state)
                 continue;
@@ -534,75 +525,73 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
         avg_adj_col[0] *= inv_adj_count;
         avg_adj_col[1] *= inv_adj_count;
         avg_adj_col[2] *= inv_adj_count;
-        if (factor > 0) {
-            const _1_p = 1 - factor, p = factor;
-            if (is_hovered)
-                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
-                    Math.max(Math.floor((Math.floor(avg_adj_col[0] * _1_p + color[0] * p) + 255) * 0.5), 0),
-                    Math.max(Math.floor((Math.floor(avg_adj_col[1] * _1_p + color[1] * p) + 255) * 0.5), 0),
-                    Math.max(Math.floor((Math.floor(avg_adj_col[2] * _1_p + color[2] * p) + 255) * 0.5), 0),
-                    255
-                ]));
-            else
-                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
-                    Math.floor(avg_adj_col[0] * _1_p + color[0] * p),
-                    Math.floor(avg_adj_col[1] * _1_p + color[1] * p),
-                    Math.floor(avg_adj_col[2] * _1_p + color[2] * p),
-                    255
-                ]));
-        }
-        else if (factor >= 1) {
+        if (factor >= 1) {
             if (is_hovered) {
-                const offset = node_id * 4;
-                grid.texture[offset] = Math.max(Math.floor((color[0] + 255) * 0.5), 0);
-                grid.texture[offset + 1] = Math.max(Math.floor((color[1] + 255) * 0.5), 0);
-                grid.texture[offset + 2] = Math.max(Math.floor((color[2] + 255) * 0.5), 0);
+                grid.texture[offset] =
+                    Math.max(Math.floor((color[0] + 255) * 0.5), 0);
+                grid.texture[offset + 1] =
+                    Math.max(Math.floor((color[1] + 255) * 0.5), 0);
+                grid.texture[offset + 2] =
+                    Math.max(Math.floor((color[2] + 255) * 0.5), 0);
+                grid.texture[offset + 3] = 255;
             }
             else
                 grid.texture_u32view[node_id] = color_packed;
         }
+        else if (factor > 0) {
+            const p_in = 1 - factor, p = factor;
+            if (is_hovered) {
+                grid.texture[offset] =
+                    Math.max(Math.floor((Math.floor(avg_adj_col[0] * p_in + color[0] * p) + 255) * 0.5), 0);
+                grid.texture[offset + 1] =
+                    Math.max(Math.floor((Math.floor(avg_adj_col[1] * p_in + color[1] * p) + 255) * 0.5), 0);
+                grid.texture[offset + 2] =
+                    Math.max(Math.floor((Math.floor(avg_adj_col[2] * p_in + color[2] * p) + 255) * 0.5), 0);
+                grid.texture[offset + 3] = 255;
+            }
+            else {
+                grid.texture[offset] = Math.floor(avg_adj_col[0] * p_in + color[0] * p);
+                grid.texture[offset + 1] = Math.floor(avg_adj_col[1] * p_in + color[1] * p);
+                grid.texture[offset + 2] = Math.floor(avg_adj_col[2] * p_in + color[2] * p);
+                grid.texture[offset + 3] = 255;
+            }
+        }
         else {
-            if (is_hovered)
-                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
-                    Math.max(Math.floor((avg_adj_col[0] + 255) * 0.5), 0),
-                    Math.max(Math.floor((avg_adj_col[1] + 255) * 0.5), 0),
-                    Math.max(Math.floor((avg_adj_col[2] + 255) * 0.5), 0),
-                    255
-                ]));
-            else
-                grid.texture_u32view[node_id] = packUint8(new Uint8Array([
-                    Math.floor(avg_adj_col[0]),
-                    Math.floor(avg_adj_col[1]),
-                    Math.floor(avg_adj_col[2]),
-                    255
-                ]));
+            if (is_hovered) {
+                grid.texture[offset] =
+                    Math.max(Math.floor((avg_adj_col[0] + 255) * 0.5), 0);
+                grid.texture[offset + 1] =
+                    Math.max(Math.floor((avg_adj_col[1] + 255) * 0.5), 0);
+                grid.texture[offset + 2] =
+                    Math.max(Math.floor((avg_adj_col[2] + 255) * 0.5), 0);
+                grid.texture[offset + 3] = 255;
+            }
+            else {
+                grid.texture[offset] = Math.floor(avg_adj_col[0]);
+                grid.texture[offset + 1] = Math.floor(avg_adj_col[1]);
+                grid.texture[offset + 2] = Math.floor(avg_adj_col[2]);
+                grid.texture[offset + 3] = 255;
+            }
         }
     }
     texture_is_dirty = true;
-    // gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    // gl.texSubImage2D(
-    //     gl.TEXTURE_2D, 0,
-    //     0, 0,
-    //     grid.texture_size, grid.texture_size,
-    //     gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-    // );
     for (const new_start of new_wave) {
-        const new_id = new_start.id, offset = new_id * 4, is_hovered = wave_queue.has(new_id);
+        const new_id = new_start.id, new_offset = new_id * 4, is_hovered = wave_queue.has(new_id);
         let new_color, new_color_packed;
         if (is_hovered) {
             new_color = new Uint8Array([
-                Math.max(2 * grid.texture[offset] - 255, 0),
-                Math.max(2 * grid.texture[offset + 1] - 255, 0),
-                Math.max(2 * grid.texture[offset + 2] - 255, 0),
+                Math.max(2 * grid.texture[new_offset] - 255, 0),
+                Math.max(2 * grid.texture[new_offset + 1] - 255, 0),
+                Math.max(2 * grid.texture[new_offset + 2] - 255, 0),
                 255
             ]);
             new_color_packed = packUint8(new_color);
         }
         else {
             new_color = new Uint8Array([
-                grid.texture[offset],
-                grid.texture[offset + 1],
-                grid.texture[offset + 2],
+                grid.texture[new_offset],
+                grid.texture[new_offset + 1],
+                grid.texture[new_offset + 2],
                 255
             ]);
             new_color_packed = grid.texture_u32view[new_id];
@@ -627,10 +616,9 @@ function wave_propagate(ids, state, color_packed, color, fcolor, depth) {
                     1
                 ]);
             }
-            else {
+            else
                 // @ts-ignore
                 new_color = new_color_packed = new_fcolor = undefined;
-            }
         }
         ++queued_wave_count;
         setTimeout(wave_start, new_wave_delay, new_id, new_color_packed, new_color, new_fcolor, ++wave_id);
@@ -652,7 +640,20 @@ function inward_wave() {
     }
     wave_start(s);
 }
-let hovered_id = undefined, wave_queue = new Set(), queued_strokes = [], broke_stroke = false, stroke_count = -1;
+/** last hovered vertex id, used to prevent the same vertex from being
+ * processed multiple times */
+let hovered_id = undefined, 
+/** this set is used to both apply and remove the highlight color effect. */
+wave_queue = new Set(), 
+/** this array of sets encodes the individual queued strokes made by the
+ * user. */
+queued_strokes = [], 
+/** this value is set to true whenever the left mouse button is lifted. */
+broke_stroke = false, 
+/** default value set to -1, since this variable gets incremented by one
+ * each time a new queued stroke is done (this also applied to the first
+ * one). */
+stroke_count = -1;
 function process_stroke(hovered) {
     if (hovered !== 0 && hovered !== hovered_id) {
         if (shift_down) {
@@ -690,10 +691,10 @@ function process_stroke(hovered) {
             const clear_color = packUint8(palette[palette_color]);
             for (let i = 0; i < grid.adj_graph.length; ++i)
                 grid.texture_u32view[i] = clear_color;
-            // if (queued_wave_count > 0) {
-            //     prevent_waves_last_id = wave_id + queued_wave_count;
-            //     wave_id = prevent_waves_last_id + 1;
-            // }
+            if (queued_wave_count > 0) {
+                prevent_waves_last_id = wave_id + queued_wave_count;
+                wave_id = prevent_waves_last_id + 1;
+            }
             texture_is_dirty = true;
         }
         else {
@@ -717,6 +718,8 @@ function remove_highlights() {
     wave_queue.clear();
 }
 function process_queued_strokes() {
+    if (wave_queue.size === 0)
+        return;
     remove_highlights();
     for (let i = 0; i < queued_strokes.length; ++i) {
         const q = queued_strokes[i];
@@ -745,7 +748,23 @@ function process_queued_strokes() {
     queued_strokes = [];
     stroke_count = -1;
 }
-let pixel_data = new Uint32Array(1), force_render_mask = true, texture_is_dirty = false, request_sample = false, request_clear = false, frame = 0;
+/** buffer used to read from the vertex mask texture. */
+let pixel_data = new Uint32Array(1), 
+/** this is set to true on window.onresize; forces to recalculate the vertex
+ * mask texture during the draw pass. */
+force_render_mask = true, 
+/** this is set to true any time that grid.texture or grid.texture_u32view
+ * get modified; forces to update the shader data. */
+texture_is_dirty = false, 
+/** when true, considering both mouse and keyboard state, an action is
+ * performed (i.e. a verte is clicked or hovered, the grid is filled or
+ * cleared); can be set to true only once per frame. */
+request_sample = false, 
+/** when true, the grid vertex color lut table will get cleared with grid_bg
+ * color (initial grid color). */
+request_clear = false, 
+/** frame count. */
+frame = 0;
 function draw() {
     ++frame;
     if (request_clear) {
@@ -791,8 +810,34 @@ function draw() {
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
     requestAnimationFrame(draw);
 }
-let gl, p, mask_p, grid, vertex_count, mask_texture, mask_fbo, ar, proj_mat, width, height, vao, vertex_color_data, color_texture, mask_vao;
-let canvas_el, palette_grid_el, curtain_el, esc_button_el;
+let gl, 
+/** grid shader program. */
+p, 
+/** grid vertex mask shader program. */
+mask_p, grid, mask_texture, mask_fbo, 
+/** inner window aspect ratio. */
+ar, 
+/** camera (orthographic) projection matrix. */
+proj_mat, 
+/** window.innerWidth */
+width, 
+/** window.innerHeight */
+height, 
+/** grid vertex array object. */
+vao, color_texture, 
+/** mask grid vertex array object. */
+mask_vao, 
+/** grid.vertex_count */
+vertex_count;
+/** canvas DOM element (#screen). */
+let canvas_el, 
+/** color picker DOM element (#palette-grid). */
+palette_grid_el, 
+/** info curtain DOM element (#info-curtain) */
+curtain_el, 
+/** esc button DOM element (#esc-button). */
+esc_button_el;
+/** event called by window.onload */
 function init() {
     canvas_el = document.getElementById("screen");
     if (!(canvas_el instanceof HTMLCanvasElement))
@@ -881,17 +926,21 @@ function init() {
     canvas_el.onmouseup = c_mouseup;
     draw();
 }
-let shift_down = false, ctrl_down = false;
+/** set to true when the shift button is pressed. */
+let shift_down = false, 
+/** set to true only when the ctrl button is pressed and shift is not. */
+ctrl_down = false;
+/** event called on window.onkeydown */
 function w_keydown(e) {
     if (e.key === "Shift") {
         shift_down = true;
         broke_stroke = true;
         stroke_count = -1;
     }
-    else if (e.key === "Control") {
+    else if (e.key === "Control" && !mouse_down)
         ctrl_down = true;
-    }
 }
+/** event called on window.onkeyup */
 function w_keyup(e) {
     if (e.key === "Shift") {
         shift_down = false;
@@ -909,7 +958,16 @@ function w_keyup(e) {
 }
 window.onkeydown = w_keydown;
 window.onkeyup = w_keyup;
-let mouse_down = false, last_mouse_sample_frame = -1, mouse_x, mouse_y;
+/** value set to true whenever the mouse's left button is pressed. */
+let mouse_down = false, 
+/** value used to prevent checking multiple times, on the same frame, which
+ * the mouse position and its related events. */
+last_mouse_sample_frame = -1, 
+/** current frame's sampled mouse x position relative to the canvas. */
+mouse_x, 
+/** current frame's sampled mouse y position relative to the canvas. */
+mouse_y;
+/** event called on canvas.onmouseleave */
 function c_mouseleave() {
     mouse_down = false;
     shift_down = false;
@@ -920,11 +978,10 @@ function c_mouseleave() {
         wave_queue.clear();
     }
 }
+/** event called on canvas.onmousedown */
 function c_mousedown(e) {
-    if (mouse_down === true || e.button !== 0
-        || last_mouse_sample_frame === frame)
+    if (mouse_down || e.button !== 0 || last_mouse_sample_frame === frame)
         return;
-    // palette_color = ++palette_color % palette.length;
     mouse_down = true;
     if (force_render_mask)
         return;
@@ -934,9 +991,9 @@ function c_mousedown(e) {
     request_sample = true;
     last_mouse_sample_frame = frame;
 }
+/** event called on canvas.onmousemove */
 function c_mousemove(e) {
-    if (mouse_down === false || force_render_mask
-        || last_mouse_sample_frame === frame)
+    if (!mouse_down || force_render_mask || last_mouse_sample_frame === frame)
         return;
     const rect = canvas_el.getBoundingClientRect();
     mouse_x = Math.floor((e.clientX - rect.left) * width / rect.width);
@@ -944,6 +1001,7 @@ function c_mousemove(e) {
     request_sample = true;
     last_mouse_sample_frame = frame;
 }
+/** event called on canvas.onmouseup */
 function c_mouseup(e) {
     if (e.button !== 0)
         return;
@@ -951,6 +1009,7 @@ function c_mouseup(e) {
     mouse_down = false;
     hovered_id = undefined;
 }
+/** event called on window.onmouseleave */
 function w_mouseleave() {
     mouse_down = false;
     shift_down = false;
@@ -958,6 +1017,7 @@ function w_mouseleave() {
     hovered_id = undefined;
     process_queued_strokes();
 }
+/** event called on window.onblur */
 function w_blur() {
     mouse_down = false;
     shift_down = false;

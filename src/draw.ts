@@ -1,8 +1,19 @@
+    /** buffer used to read from the vertex mask texture. */
 let pixel_data = new Uint32Array(1),
+    /** this is set to true on window.onresize; forces to recalculate the vertex 
+     * mask texture during the draw pass. */
     force_render_mask = true,
+    /** this is set to true any time that grid.texture or grid.texture_u32view 
+     * get modified; forces to update the shader data. */
     texture_is_dirty = false,
+    /** when true, considering both mouse and keyboard state, an action is
+     * performed (i.e. a verte is clicked or hovered, the grid is filled or
+     * cleared); can be set to true only once per frame. */
     request_sample = false,
+    /** when true, the grid vertex color lut table will get cleared with grid_bg
+     * color (initial grid color). */
     request_clear = false,
+    /** frame count. */
     frame = 0;
 
 function draw() {

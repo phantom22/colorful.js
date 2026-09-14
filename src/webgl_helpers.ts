@@ -94,7 +94,6 @@ function create_orthographic_matrix(
     ])
 }
 
-
 const _pack_buffer = new ArrayBuffer(4),
       _pack8 = new Uint8Array(_pack_buffer),
       _pack32 = new Uint32Array(_pack_buffer);

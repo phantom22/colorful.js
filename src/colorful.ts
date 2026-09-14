@@ -13,19 +13,27 @@ class adj_node {
 }
 
 interface ColorfulGrid {
+    /** flat Float32 array that defines the underlying 2D mesh. */
     mesh: Float32Array;
+    /** flat Uint32 array that defines per-vertex triangle id.  */
     ids: Uint32Array;
+    /** resolution of the grid. */
     side_length: number;
+    /** adjacency map, per vertex id returns the list of the adjacent vertex
+     * ids. */
     adj_map: number[][];
+    /** adjacency graph, per node holds its id, state and adjacent nodes. */
     adj_graph: adj_node[];
-    /** color map  */
+    /** flat Uint8 array which defines the lut texture used to color each vertex
+     *  by using its triangle id. */
     texture: Uint8Array;
+    /** Uint32 view of the lut texture. */
     texture_u32view: Uint32Array;
+    /** number of pixels of the square lut texture. */
     texture_size: number;
+    /** number of vertices present in the 2D mesh. */
     vertex_count:number;
 }
-
-type RGBa = [r:number,g:number,b:number,a:number];
 
 class ColorfulGrid {
     constructor(side_length:number, color=new Uint8Array([255,255,255,255])) {

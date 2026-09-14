@@ -1,3 +1,4 @@
+/** event called on window.onmouseleave */
 function w_mouseleave() {
     mouse_down = false;
     shift_down = false;
@@ -6,6 +7,7 @@ function w_mouseleave() {
     process_queued_strokes();
 }
 
+/** event called on window.onblur */
 function w_blur() {
     mouse_down = false;
     shift_down = false;

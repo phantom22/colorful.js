@@ -1,7 +1,16 @@
+    /** last hovered vertex id, used to prevent the same vertex from being
+     * processed multiple times */
 let hovered_id = undefined as undefined|number,
+    /** this set is used to both apply and remove the highlight color effect. */
     wave_queue = new Set() as Set<number>,
+    /** this array of sets encodes the individual queued strokes made by the
+     * user. */
     queued_strokes = [] as Set<number>[],
+    /** this value is set to true whenever the left mouse button is lifted. */
     broke_stroke = false,
+    /** default value set to -1, since this variable gets incremented by one
+     * each time a new queued stroke is done (this also applied to the first
+     * one). */
     stroke_count = -1;
 
 function process_stroke(hovered:number) {
@@ -50,10 +59,10 @@ function process_stroke(hovered:number) {
             for (let i=0; i<grid.adj_graph.length; ++i)
                 grid.texture_u32view[i] = clear_color;
 
-            // if (queued_wave_count > 0) {
-            //     prevent_waves_last_id = wave_id + queued_wave_count;
-            //     wave_id = prevent_waves_last_id + 1;
-            // }
+            if (queued_wave_count > 0) {
+                prevent_waves_last_id = wave_id + queued_wave_count;
+                wave_id = prevent_waves_last_id + 1;
+            }
 
             texture_is_dirty = true;
         }
@@ -80,6 +89,9 @@ function remove_highlights() {
 }
 
 function process_queued_strokes() {
+    if (wave_queue.size === 0)
+        return;
+
     remove_highlights();
     for (let i=0; i<queued_strokes.length; ++i) {
         const q = queued_strokes[i];
