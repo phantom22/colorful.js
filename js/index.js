@@ -973,10 +973,7 @@ function c_mouseleave() {
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
-    if (wave_queue.size !== 0) {
-        wave_start(wave_queue);
-        wave_queue.clear();
-    }
+    process_queued_strokes();
 }
 /** event called on canvas.onmousedown */
 function c_mousedown(e) {
@@ -1009,25 +1006,17 @@ function c_mouseup(e) {
     mouse_down = false;
     hovered_id = undefined;
 }
-/** event called on window.onmouseleave */
-function w_mouseleave() {
+/** event called on window.onmouseleave and on window.onblur */
+function state_cleanup() {
     mouse_down = false;
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
-    process_queued_strokes();
-}
-/** event called on window.onblur */
-function w_blur() {
-    mouse_down = false;
-    shift_down = false;
-    ctrl_down = false;
-    hovered_id = undefined;
-    wave_queue.clear();
+    remove_highlights();
     queued_strokes = [];
     stroke_count = -1;
 }
 window.onresize = update_viewport;
-window.onblur = w_blur;
-window.onmouseleave = w_mouseleave;
+window.onblur = state_cleanup;
+window.onmouseleave = state_cleanup;
 window.onload = init;

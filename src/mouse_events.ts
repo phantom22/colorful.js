@@ -14,10 +14,7 @@ function c_mouseleave() {
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
-    if (wave_queue.size !== 0) {
-        wave_start(wave_queue);
-        wave_queue.clear();
-    }
+    process_queued_strokes();
 }
 
 /** event called on canvas.onmousedown */
