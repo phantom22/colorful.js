@@ -134,16 +134,3 @@ function create_view_projection_matrix(
 
     return mat4x4_mul(projection_matrix, view_matrix);
 }
-
-const _pack_buffer = new ArrayBuffer(4),
-      _pack8 = new Uint8Array(_pack_buffer),
-      _pack32 = new Uint32Array(_pack_buffer);
-
-/** This approach was used to guarantee endian compatibility. */
-function packUint8(color:Uint8Array): number {
-    _pack8[0] = color[0];
-    _pack8[1] = color[1];
-    _pack8[2] = color[2];
-    _pack8[3] = 255;
-    return _pack32[0]; // Guaranteed exact memory layout for current CPU
-}

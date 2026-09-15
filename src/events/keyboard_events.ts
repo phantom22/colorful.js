@@ -9,6 +9,7 @@ function w_keydown(e:KeyboardEvent) {
         shift_down = true;
         broke_stroke = true;
         stroke_count = -1;
+        palette_color = 0;
     }
     else if (e.key === "Control" && !mouse1_down)
         ctrl_down = true;
@@ -26,9 +27,8 @@ function w_keyup(e:KeyboardEvent) {
         inward_wave();
     else if (e.key === "c")
         request_clear = true;
-    else if (e.key === "Escape") {
-        toggle_info();
-    }
+    else if (e.key === "Escape")
+        dom_toggle_menu();
 }
 
 window.onkeydown = w_keydown;

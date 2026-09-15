@@ -54,14 +54,9 @@ html, body {
     display: block;
     border: none;
     outline: 1px solid transparent;
-    
-    box-shadow: 
-        0 4px 6px -1px rgba(0, 0, 0, 0.15), 
-        0 2px 4px -2px rgba(0, 0, 0, 0.1);
 
     transition:
         transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-        box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
         outline 0.25s cubic-bezier(0, 0, 0.9, 0.1),
         z-index 0s linear 0.25s;
 }
@@ -70,30 +65,20 @@ html, body {
     transform: scale(1.15);
     z-index: 5;
 
-    box-shadow: 
-        0 16px 24px -2px rgba(0, 0, 0, 0.25), 
-        0 6px 12px -4px rgba(0, 0, 0, 0.18);
-
     outline: 1px solid white;
 
     transition:
         transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-        box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
         outline-color 0s linear 0s,
         z-index 0s linear 0s;
 }
 
 #color-picker button.picked {
     z-index: 10;
-
-    box-shadow: 
-        0 28px 36px -4px rgba(0, 0, 0, 0.38), 
-        0 12px 18px -6px rgba(0, 0, 0, 0.25);
-
     outline: 1px solid white;
 }
 
-#info-curtain {
+#menu {
     visibility: hidden;
     position:absolute;
     bottom: 0;
@@ -119,14 +104,14 @@ html, body {
     visibility: visible;
 }
 
-#info-curtain .top-shortcuts {
+#menu .top-shortcuts {
     position: absolute;
     top: 1%;
     left: 1%;
     z-index: 2;
 }
 
-#info-curtain .bottom-shortcuts {
+#menu .bottom-shortcuts {
     position: absolute;
     bottom: 1%;
     left: 1%;
@@ -188,7 +173,7 @@ html, body {
     <div id="container">
         <canvas id="screen"></canvas>
         <div id="color-picker"></div>
-        <div id="info-curtain">
+        <div id="menu">
             <div class="shortcut-container top-shortcuts">
                 <h4 class="shortcut-title">General</h4>
                 <div class="shortcut-divider"></div>
@@ -199,7 +184,7 @@ html, body {
                 <img src="img/c.png" alt="C">
                 <p>to clear the sandbox</p>
             </div>
-            <div class="shortcut-container bottom-shortcuts">
+            <div class="shortcut-container bottom-shortcutsnu">
                 <h4 class="shortcut-title">While drawing</h4>
                 <div class="shortcut-divider"></div>
                 <img src="img/ctrl.png" alt="Ctrl">

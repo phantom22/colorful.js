@@ -14,11 +14,19 @@ let pixel_data = new Uint32Array(1),
     /** when true, the grid vertex color lut table will get cleared with grid_bg
      * color (initial grid color). */
     request_clear = false,
-    /** frame count. */
-    frame = 0;
+    /** current frame id. */
+    frame = 0,
+    /** used to calculate delta_time. */
+    prev_frame_timestamp = 0,
+    delta_time = 0;
 
-function draw() {
+function draw(timestamp:number) {
     ++frame;
+
+    wheel_already_processed = false;
+    
+    delta_time = (timestamp - prev_frame_timestamp) * 0.001
+    prev_frame_timestamp = timestamp;
 
     if (update_view_proj_mat)
         view_proj_mat = create_view_projection_matrix(
@@ -27,7 +35,7 @@ function draw() {
         );
 
     if (request_clear) {
-        const clear_color = packUint8(grid_bg);
+        const clear_color = pack_uint8(grid_bg);
         for (let i=0; i<grid.adj_graph.length; ++i)
             grid.texture_u32view[i] = clear_color;
 
@@ -35,6 +43,7 @@ function draw() {
             prevent_waves_last_id = wave_id + queued_wave_count;
             wave_id = prevent_waves_last_id + 1;
         }
+
         request_clear = false;
         texture_is_dirty = true;
     }

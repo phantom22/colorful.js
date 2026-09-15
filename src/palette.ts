@@ -75,3 +75,5 @@ const palette = [
     new Uint8Array([ 32,  32,  32]),
     new Uint8Array([ 64,  64,  64])
 ];
+
+let palette_color_data = palette.map(v => get_color_data(v));

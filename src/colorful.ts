@@ -2,6 +2,7 @@ interface adj_node {
     id: number;
     state: number;
     next: Set<adj_node>;
+    next_ids: Set<number>
 }
 
 class adj_node {
@@ -9,6 +10,7 @@ class adj_node {
         this.id = id;
         this.state = 0;
         this.next = new Set();
+        this.next_ids = new Set();
     }
 }
 
@@ -223,22 +225,24 @@ class ColorfulGrid {
         this.texture_size = texture_size;
 
         const u32view = new Uint32Array(this.texture.buffer);
-        u32view.fill(
-            (color[3] << 24) | (color[2] << 16) | (color[1] << 8)| color[0]
-        );
+        u32view.fill(pack_uint8(color));
         
         this.texture_u32view = u32view;
 
         this.adj_graph = Array(num_triangles+1);
         for (let id=1; id<this.adj_map.length; ++id) {
-            this.adj_graph[id] = new adj_node(id);
+            const node = new adj_node(id);
+            this.adj_graph[id] = node;
             const adj_ids = this.adj_map[id];
             for (let j=0; j<adj_ids.length; ++j) {
                 const nid = adj_ids[j];
                 if (nid > id)
                     break;
-                this.adj_graph[id].next.add(this.adj_graph[nid]);
-                this.adj_graph[nid].next.add(this.adj_graph[id]);
+                const next_node = this.adj_graph[nid];
+                node.next.add(next_node);
+                node.next_ids.add(nid);
+                next_node.next.add(node);
+                next_node.next_ids.add(id);
             }
         }
     }

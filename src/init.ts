@@ -26,8 +26,8 @@ let gl: WebGL2RenderingContext,
 let canvas_el: HTMLCanvasElement,
     /** color picker DOM element (#color-picker). */
     color_picker_el: HTMLElement,
-    /** info curtain DOM element (#info-curtain) */
-    curtain_el: HTMLElement,
+    /** info curtain DOM element (#menu) */
+    menu_el: HTMLElement,
     /** esc button DOM element (#esc-button). */
     esc_button_el: HTMLElement,
     /** updated in update_viewport */
@@ -43,9 +43,9 @@ let camera_x = 0,
     camera_coord_min = -0.5,
     camera_coord_max = 0.5,
 
-    camera_scale_min = 0.001,
+    camera_scale_min = 0.0005,
     camera_scale = 1,
-    camera_scale_max = 1;
+    camera_scale_max = 2;
 
 /** event called by window.onload */
 function init() {
@@ -57,18 +57,18 @@ function init() {
     if (color_picker_el === null)
         throw "Colorful.js: couldn't find '#color-picker' element.";
 
-    curtain_el = document.getElementById("info-curtain") as HTMLElement;
-    if (curtain_el === null)
-        throw "Colorful.js: couldn't find '#info-curtain' element.";
+    menu_el = document.getElementById("menu") as HTMLElement;
+    if (menu_el === null)
+        throw "Colorful.js: couldn't find '#menu' element.";
 
     esc_button_el = document.getElementById("esc-button") as HTMLElement;
     if (esc_button_el === null)
         throw "Colorful.js: couldn't find '#esc-button' element.";
-    esc_button_el.onclick = toggle_info;
+    esc_button_el.onclick = dom_toggle_menu;
 
     gl = canvas_el.getContext("webgl2") as WebGL2RenderingContext;
 
-    update_palette_picker();
+    dom_update_color_picker();
 
     //////////////////////////////////
     //       MAIN SHADER            //
@@ -182,11 +182,12 @@ function init() {
 
     canvas_el.onmouseleave = c_mouseleave;
     canvas_el.onmousedown = c_mousedown;
-    canvas_el.onmousemove = c_mousemove;
-    canvas_el.onmouseup = c_mouseup;
+    window.onmousemove = w_mousemove;
+    color_picker_el.onmousemove = w_mousemove;
+    window.onmouseup = w_mouseup;
     canvas_el.oncontextmenu = (e:Event) => {
         e.preventDefault();
     };
 
-    draw();
+    draw(0);
 }

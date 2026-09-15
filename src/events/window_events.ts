@@ -14,6 +14,6 @@ function state_cleanup() {
 
 window.onresize = update_viewport;
 window.onblur = state_cleanup;
-window.onmouseleave = state_cleanup;
+// window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, {passive:false});
 window.onload = init;

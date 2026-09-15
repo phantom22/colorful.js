@@ -16,12 +16,12 @@ let mouse1_down = false,
 
 /** event called on canvas.onmouseleave */
 function c_mouseleave() { 
-    mouse1_down = false;
-    mouse3_down = false;
-    shift_down = false;
-    ctrl_down = false;
+    // mouse1_down = false;
+    // mouse3_down = false;
+    // shift_down = false;
+    // ctrl_down = false;
     hovered_id = undefined;
-    process_queued_strokes();
+    // process_queued_strokes();
 }
 
 /** event called on canvas.onmousedown */
@@ -32,6 +32,8 @@ function c_mousedown(e:MouseEvent) {
     if (e.button === 0) {
         mouse1_down = true;
         mouse3_down = false;
+        if (!shift_down)
+            palette_color = 0;
     }
     else if (!mouse1_down) {
         prev_clientX = e.clientX;
@@ -53,11 +55,11 @@ function c_mousedown(e:MouseEvent) {
     last_mouse_sample_frame = frame;
 }
 
-/** event called on canvas.onmousemove */
-function c_mousemove(e:MouseEvent) {
+/** event called on window.onmousemove */
+function w_mousemove(e:MouseEvent) {
     if ((!mouse1_down && !mouse3_down) || force_render_mask
         || last_mouse_sample_frame === frame)
-        return;
+        return; 
 
     const clientX = e.clientX,
           clientY = e.clientY;
@@ -87,8 +89,8 @@ function c_mousemove(e:MouseEvent) {
     }
 }
 
-/** event called on canvas.onmouseup */
-function c_mouseup(e:MouseEvent) {
+/** event called on window.onmouseup */
+function w_mouseup(e:MouseEvent) {
     if (e.button === 2) {
         e.preventDefault();
         return;
@@ -106,8 +108,28 @@ function c_mouseup(e:MouseEvent) {
     broke_stroke = shift_down ? true : false;
     mouse1_down = false;
     hovered_id = undefined;
+    mouse_down_on_color = false;
 }
 
+let wheel_already_processed = false,
+    /** camera_scale max delta per second. */
+    wheel_zoom_factor = 8,
+    trackpad_zoom_factor = 2;
+
+
+function event_triggered_by_trackpad(e:WheelEvent) {
+    if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+        return false;
+    }
+    else {
+        const has_frac =
+            !Number.isInteger(e.deltaY) || !Number.isInteger(e.deltaX);
+        const small_delta =
+            Math.abs(e.deltaY) < 50 && Math.abs(e.deltaX) < 50;
+        return has_frac || small_delta;
+    }
+}
+    
 /** event called on canvas.onwheel */
 function w_wheel(e:WheelEvent) {
     if (e.ctrlKey) {
@@ -115,11 +137,14 @@ function w_wheel(e:WheelEvent) {
         return;
     }
 
-    const factor = 0.01;
-    if (e.deltaY < 0)
-        camera_scale += factor;
-    else
-        camera_scale -= factor;
+    if (wheel_already_processed)
+        return;
+    wheel_already_processed = true;
+
+    const factor = event_triggered_by_trackpad(e)
+        ? trackpad_zoom_factor * delta_time
+        : wheel_zoom_factor * delta_time;
+    camera_scale += e.deltaY < 0 ? factor : -factor;
 
     camera_scale =
         Math.min(Math.max(camera_scale, camera_scale_min), camera_scale_max);

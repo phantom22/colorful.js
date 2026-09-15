@@ -6,18 +6,20 @@
     },
     "files": [
         "search_params.ts",
-        "dynamic_dom.ts",
+        "dom/menu_DOM.ts",
+        "dom/color_picker_DOM.ts",
+        "helpers/color_helpers.ts",
         "palette.ts",
-        "webgl_helpers.ts",
+        "helpers/webgl_helpers.ts",
         "colorful.ts",
-        "update_viewport.ts",
-        "wave.ts",
-        "strokes.ts",
+        "events/update_viewport.ts",
+        "coloring-logic/wave.ts",
+        "coloring-logic/strokes.ts",
         "draw.ts",
         "init.ts",
-        "keyboard_events.ts",
-        "mouse_events.ts",
-        "window_events.ts",
+        "events/keyboard_events.ts",
+        "events/mouse_events.ts",
+        "events/window_events.ts",
         "main.ts"
     ]
 }
