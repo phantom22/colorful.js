@@ -1124,6 +1124,7 @@ function c_mouseup(e) {
         return;
     }
     if (e.button === 1) {
+        // @ts-ignore
         prev_clientX = prev_clientY = undefined;
         mouse3_down = false;
     }
