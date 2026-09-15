@@ -86,8 +86,7 @@ function dom_update_color_picker() {
     for (; i < palette.length; ++i) {
         const bttn = document.createElement("button"), color = palette[i];
         bttn.style.backgroundColor = `rgb(${color.toString()})`;
-        const [r, g, b] = color, luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-        bttn.style.color = luminance > 128 ? "black" : "white";
+        bttn.style.color = luminance(color) > 128 ? "black" : "white";
         color_button_to_pallete_id.set(bttn, i);
         bttn.onmousedown = color_mousedown;
         bttn.onmouseenter = color_mouseenter;
@@ -122,13 +121,15 @@ function color_mouseenter(e) {
     curr_stroke_els.add(bttn);
     const data = palette_color_data[color_button_to_pallete_id.get(bttn)];
     if (picked_colors_els.has(bttn)) {
+        if (picked_colors_els.size === 1)
+            return;
         bttn.classList.remove("picked");
         bttn.textContent = "";
         picked_colors_els.delete(bttn);
-        choosen_palette.splice(choosen_palette.indexOf(data), 1);
-        const els_array = [...picked_colors_els];
-        for (let i = choosen_palette.indexOf(data) + 1; i < els_array.length; ++i)
-            els_array[i].textContent = i.toString();
+        const els_array = [...picked_colors_els], ind = choosen_palette.indexOf(data);
+        choosen_palette.splice(ind, 1);
+        for (let i = ind; i < els_array.length; ++i)
+            els_array[i].textContent = (i + 1).toString();
     }
     else {
         bttn.classList.add("picked");
@@ -178,6 +179,9 @@ function get_color_data(color) {
         fcolor: uint8_to_float32(color),
         color_packed: pack_uint8(color)
     };
+}
+function luminance(color) {
+    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
 }
 const palette = [
     new Uint8Array([170, 20, 45]),
@@ -547,7 +551,7 @@ palette_color = 0,
  * the entire grid. */
 queued_wave_count = 0, 
 /** each wave_id lower or equal to this value will be discarded. */
-prevent_waves_last_id = 0, sin;
+prevent_waves_last_id = 0;
 function wave_start(ids, color_data, _wave_id) {
     --queued_wave_count;
     queued_wave_count = Math.max(queued_wave_count, 0);
@@ -898,7 +902,6 @@ function draw(timestamp) {
     }
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-        gl.readBuffer(gl.COLOR_ATTACHMENT0);
         if (force_render_mask) {
             gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
@@ -909,8 +912,28 @@ function draw(timestamp) {
             force_render_mask = false;
         }
         if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
-            gl.readPixels(mouse_x, mouse_y, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data);
-            process_stroke(pixel_data[0]);
+            gl.readBuffer(gl.COLOR_ATTACHMENT0);
+            const read_index = (write_index + 1) % pbo_count, oldest_sync = syncs[read_index];
+            if (oldest_sync) {
+                // check status instantly
+                const status = gl.clientWaitSync(oldest_sync, 0, 0);
+                if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+                    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[read_index]);
+                    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixel_data);
+                    process_stroke(pixel_data[0]);
+                    gl.deleteSync(oldest_sync);
+                    syncs[read_index] = null;
+                }
+            }
+            // orphan the buffer before writing
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[write_index]);
+            gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
+            gl.readPixels(mouse_x, mouse_y, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, 0);
+            if (syncs[write_index])
+                gl.deleteSync(syncs[write_index]);
+            syncs[write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            write_index = (write_index + 1) % pbo_count;
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
             request_sample = false;
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -949,7 +972,9 @@ vao, color_texture,
 /** mask grid vertex array object. */
 mask_vao, 
 /** grid.vertex_count */
-vertex_count;
+vertex_count, 
+/** used to asynchronously read from gpu without cpu stalls. */
+pbos = [], syncs = [], pbo_count = 3, write_index = 0;
 /** canvas DOM element (#screen). */
 let canvas_el, 
 /** color picker DOM element (#color-picker). */
@@ -1049,6 +1074,17 @@ function init() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mask_texture, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    //////////////////////////////////
+    //       MASK SHADER PBOS       //
+    //////////////////////////////////
+    for (let i = 0; i < pbo_count; ++i) {
+        const pbo = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
+        pbos.push(pbo);
+        syncs.push(null);
+    }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     canvas_el.onmouseleave = c_mouseleave;
     canvas_el.onmousedown = c_mousedown;
     window.onmousemove = w_mousemove;
@@ -1237,4 +1273,3 @@ window.onload = init;
 // mix colors in different color space
 // add esc menu sliders
 // migrate wave propagation to ping-pongg GPGPU shader
-// frame delta_time calculation

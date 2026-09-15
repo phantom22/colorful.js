@@ -8,8 +8,7 @@ let wave_id = 0,
      * the entire grid. */
     queued_wave_count = 0,
     /** each wave_id lower or equal to this value will be discarded. */
-    prevent_waves_last_id = 0,
-    sin
+    prevent_waves_last_id = 0;
 
 function wave_start(
     ids:number|Set<number>, color_data?:color_data,

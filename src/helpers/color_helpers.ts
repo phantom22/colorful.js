@@ -35,3 +35,7 @@ function get_color_data(color:Uint8Array) {
         color_packed: pack_uint8(color)
     } as color_data;
 }
+
+function luminance(color:Uint8Array) {
+    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
+}

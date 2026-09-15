@@ -19,10 +19,8 @@ function dom_update_color_picker() {
         const bttn = document.createElement("button"),
               color = palette[i];
         bttn.style.backgroundColor = `rgb(${color.toString()})`;
-        
-        const [r,g,b] = color,
-              luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-        bttn.style.color = luminance > 128 ? "black" : "white";
+    
+        bttn.style.color = luminance(color) > 128 ? "black" : "white";
         color_button_to_pallete_id.set(bttn, i);
 
         bttn.onmousedown = color_mousedown;
@@ -65,15 +63,18 @@ function color_mouseenter(e:MouseEvent) {
     const data =
         palette_color_data[color_button_to_pallete_id.get(bttn) as number];    
     if (picked_colors_els.has(bttn)) {
+        if (picked_colors_els.size === 1)
+            return;
         bttn.classList.remove("picked");
         bttn.textContent = "";
         picked_colors_els.delete(bttn);
 
-        choosen_palette.splice(choosen_palette.indexOf(data), 1);
+        const els_array = [...picked_colors_els],
+              ind = choosen_palette.indexOf(data);
 
-        const els_array = [...picked_colors_els];
-        for (let i=choosen_palette.indexOf(data)+1; i<els_array.length; ++i)
-            els_array[i].textContent = i.toString();
+        choosen_palette.splice(ind, 1);
+        for (let i=ind; i<els_array.length; ++i)
+            els_array[i].textContent = (i+1).toString();
     }
     else {
         bttn.classList.add("picked");

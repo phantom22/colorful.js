@@ -50,7 +50,6 @@ function draw(timestamp:number) {
 
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-        gl.readBuffer(gl.COLOR_ATTACHMENT0);
 
         if (force_render_mask) {
             gl.viewport(0, 0, width, height);
@@ -67,12 +66,38 @@ function draw(timestamp:number) {
         }
 
         if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+            gl.readBuffer(gl.COLOR_ATTACHMENT0);
+
+            const read_index = (write_index + 1) % pbo_count,
+                  oldest_sync = syncs[read_index];
+
+            if (oldest_sync) {
+                // check status instantly
+                const status = gl.clientWaitSync(oldest_sync, 0, 0);
+                if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+                    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[read_index]);
+                    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixel_data);
+                    process_stroke(pixel_data[0]);
+
+                    gl.deleteSync(oldest_sync);
+                    syncs[read_index] = null;
+                }
+            }
+
+            // orphan the buffer before writing
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[write_index]);
+            gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
             gl.readPixels(
                 mouse_x, mouse_y, 1, 1,
-                gl.RED_INTEGER, gl.UNSIGNED_INT, pixel_data
+                gl.RED_INTEGER, gl.UNSIGNED_INT, 0
             );
 
-            process_stroke(pixel_data[0]);
+            if (syncs[write_index]) gl.deleteSync(syncs[write_index]);
+            syncs[write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+            write_index = (write_index + 1) % pbo_count;
+
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
             request_sample = false;
         }
 

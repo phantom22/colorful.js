@@ -20,7 +20,12 @@ let gl: WebGL2RenderingContext,
     /** mask grid vertex array object. */
     mask_vao:WebGLVertexArrayObject,
     /** grid.vertex_count */
-    vertex_count: number;
+    vertex_count: number,
+    /** used to asynchronously read from gpu without cpu stalls. */
+    pbos = [] as WebGLBuffer[],
+    syncs = [] as (WebGLSync|null)[],
+    pbo_count = 3,
+    write_index = 0;
 
     /** canvas DOM element (#screen). */
 let canvas_el: HTMLCanvasElement,
@@ -179,6 +184,19 @@ function init() {
         gl.TEXTURE_2D, mask_texture, 0
     )
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    //////////////////////////////////
+    //       MASK SHADER PBOS       //
+    //////////////////////////////////
+
+    for (let i=0; i<pbo_count; ++i) {
+        const pbo = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
+        pbos.push(pbo);
+        syncs.push(null);
+    }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
 
     canvas_el.onmouseleave = c_mouseleave;
     canvas_el.onmousedown = c_mousedown;
