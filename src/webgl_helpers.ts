@@ -83,6 +83,17 @@ function compile_shader_program(
     return o;
 }
 
+function mat4x4_mul(A:Float32Array, B:Float32Array) {
+    const [a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p]=A,
+          [$,_,C,D,E,F,G,H,I,J,K,L,M,N,O,P]=B;
+    return new Float32Array([
+        a*$+b*E+c*I+d*M, a*_+b*F+c*J+d*N, a*C+b*G+c*K+d*O, a*D+b*H+c*L+d*P,
+        e*$+f*E+g*I+h*M, e*_+f*F+g*J+h*N, e*C+f*G+g*K+h*O, e*D+f*H+g*L+h*P,
+        i*$+j*E+k*I+l*M, i*_+j*F+k*J+l*N, i*C+j*G+k*K+l*O, i*D+j*H+k*L+l*P,
+        m*$+n*E+o*I+p*M, m*_+n*F+o*J+p*N, m*C+n*G+o*K+p*O, m*D+n*H+o*L+p*P,
+    ])
+}
+
 function create_orthographic_matrix(
     l:number, r:number, b:number, t:number, n:number, f:number
 ) {
@@ -91,7 +102,37 @@ function create_orthographic_matrix(
         0, 2/(t-b), 0, 0,
         0, 0, -2/(f-n), 0,
         -(r+l)/(r-l), -(t+b)/(t-b), -(f+n)/(f-n), 1
-    ])
+    ]);
+}
+
+function create_view_matrix(x:number, y:number, s:number) {
+    return new Float32Array([
+        1/s, 0, 0, 0,
+        0, 1/s, 0, 0,
+        0, 0, 1, 0,
+        -x, -y, 0, 1
+    ]);
+}
+
+function create_view_projection_matrix(
+    x:number, y:number, s:number,
+    l:number, r:number, b:number, t:number, n:number, f:number
+) {
+    const projection_matrix = new Float32Array([
+        2/(r-l), 0, 0, 0,
+        0, 2/(t-b), 0, 0,
+        0, 0, -2/(f-n), 0,
+        -(r+l)/(r-l), -(t+b)/(t-b), -(f+n)/(f-n), 1
+    ]);
+
+    const view_matrix = new Float32Array([
+        1/s, 0, 0, 0,
+        0, 1/s, 0, 0,
+        0, 0, 1, 0,
+        -x/s, -y/s, 0, 1
+    ]);
+
+    return mat4x4_mul(projection_matrix, view_matrix);
 }
 
 const _pack_buffer = new ArrayBuffer(4),

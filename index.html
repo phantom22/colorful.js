@@ -28,7 +28,7 @@ html, body {
     height: 100%;
 }
 
-#palette-grid {
+#color-picker {
     position: absolute;
     right: 2%;
     top: 50%;
@@ -38,14 +38,16 @@ html, body {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0px;
-    background: white;
-    border: 1px solid white;
+    background: transparent;
+    border: none;
+    outline: 1px solid white;
     box-sizing: border-box;
 }
 
-#palette-grid button {
+#color-picker button {
     width: 100%;
     aspect-ratio: 1 / 1;
+    font-weight: bold;
     border: none;
     padding: 0;
     cursor: pointer;
@@ -64,7 +66,7 @@ html, body {
         z-index 0s linear 0.25s;
 }
 
-#palette-grid button:hover {
+#color-picker button:not(.picked):hover {
     transform: scale(1.15);
     z-index: 5;
 
@@ -81,8 +83,7 @@ html, body {
         z-index 0s linear 0s;
 }
 
-#palette-grid button.picked {
-    transform: scale(1.35);
+#color-picker button.picked {
     z-index: 10;
 
     box-shadow: 
@@ -186,7 +187,7 @@ html, body {
 <body>
     <div id="container">
         <canvas id="screen"></canvas>
-        <div id="palette-grid"></div>
+        <div id="color-picker"></div>
         <div id="info-curtain">
             <div class="shortcut-container top-shortcuts">
                 <h4 class="shortcut-title">General</h4>
@@ -214,7 +215,7 @@ html, body {
 layout(location = 0) in vec2 pos;
 layout(location = 1) in uint id;
 
-uniform mat4 u_proj;
+uniform mat4 u_view_proj;
 flat out uint v_id;
 
 out vec2 v_local_pos;
@@ -223,7 +224,7 @@ void main() {
     v_local_pos = pos;
 
     v_id = id;
-    gl_Position = u_proj * vec4(pos, 0.0, 1.0);
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
 }
 </script>
 <script type="x-shader/fs" id="fragment-shader">
@@ -262,13 +263,13 @@ void main() {
 layout(location = 0) in vec2 pos;
 layout(location = 1) in uint id;
 
-uniform mat4 u_proj;
+uniform mat4 u_view_proj;
 
 flat out uint v_id;
 
 void main() {
     v_id = id;
-    gl_Position = u_proj * vec4(pos, 0.0, 1.0);
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
 }
 </script>
 <script type="x-shader/fs" id="mask-fragment">

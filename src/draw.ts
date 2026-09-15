@@ -1,5 +1,6 @@
     /** buffer used to read from the vertex mask texture. */
 let pixel_data = new Uint32Array(1),
+    update_view_proj_mat = false,
     /** this is set to true on window.onresize; forces to recalculate the vertex 
      * mask texture during the draw pass. */
     force_render_mask = true,
@@ -18,6 +19,12 @@ let pixel_data = new Uint32Array(1),
 
 function draw() {
     ++frame;
+
+    if (update_view_proj_mat)
+        view_proj_mat = create_view_projection_matrix(
+            camera_x, camera_y, camera_scale,
+            -ar, ar, -1, 1, -1, 1
+        );
 
     if (request_clear) {
         const clear_color = packUint8(grid_bg);
@@ -42,7 +49,7 @@ function draw() {
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
 
             mask_p.useProgram();
-            gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+            gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
 
             gl.bindVertexArray(mask_vao);
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
@@ -64,6 +71,9 @@ function draw() {
     }
 
     p.useProgram();
+    if (update_view_proj_mat)
+        gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
+
     if (texture_is_dirty) {
         gl.bindTexture(gl.TEXTURE_2D, color_texture);
         gl.texSubImage2D(
@@ -80,6 +90,8 @@ function draw() {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
+
+    update_view_proj_mat = false;
 
     requestAnimationFrame(draw);
 }

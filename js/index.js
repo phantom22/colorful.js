@@ -60,32 +60,63 @@ const side_length = searchParams.getNumber("side_length", 32, 1), blend_value = 
     if (window.location.search !== updated_search_params)
         window.history.replaceState({}, '', updated_search_params);
 }
-/** last cliked button from #palette-grid */
-let last_picked_color_el;
+/** last cliked button from #color-picker */
+let picked_colors_els = new Set();
 function update_palette_picker() {
     let i = 0;
-    const ch = palette_grid_el.children;
+    const ch = color_picker_el.children, els_array = [...picked_colors_els];
     for (; i < ch.length; ++i) {
-        // @ts-ignore
-        palette_grid_el.children[i].style.backgroundColor =
-            `rgba(${palette[i].toString()})`;
+        const el = color_picker_el.children[i];
+        el.style.backgroundColor = `rgba(${palette[i].toString()})`;
+        if (picked_colors_els.has(el))
+            el.textContent = (els_array.indexOf(el) + 1).toString();
+        else
+            el.textContent = "";
     }
     for (; i < palette.length; ++i) {
-        const bttn = document.createElement("button");
-        bttn.style.backgroundColor = `rgba(${palette[i].toString()})`;
+        const bttn = document.createElement("button"), color = palette[i];
+        bttn.style.backgroundColor = `rgb(${color.toString()})`;
+        const [r, g, b] = palette[i], luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+        bttn.style.color = luminance > 128 ? "black" : "white";
         const v = i;
-        bttn.onclick = () => {
-            palette_color = v;
-            last_picked_color_el.classList.remove("picked");
-            bttn.classList.add("picked");
-            last_picked_color_el = bttn;
+        bttn.onclick = (e) => {
+            palette_color = 0;
+            if (!e.ctrlKey) {
+                for (const el of picked_colors_els) {
+                    el.classList.remove("picked");
+                    el.textContent = "";
+                }
+                picked_colors_els.clear();
+                bttn.classList.add("picked");
+                bttn.textContent = "1";
+                picked_colors_els.add(bttn);
+                palette_colors = [color];
+                return;
+            }
+            if (picked_colors_els.has(bttn)) {
+                bttn.classList.remove("picked");
+                bttn.textContent = "";
+                picked_colors_els.delete(bttn);
+                palette_colors.splice(palette_colors.indexOf(color), 1);
+                const els_array = [...picked_colors_els];
+                for (let i = 0; i < els_array.length; ++i)
+                    els_array[i].textContent = (i + 1).toString();
+            }
+            else {
+                bttn.classList.add("picked");
+                picked_colors_els.add(bttn);
+                bttn.textContent = picked_colors_els.size.toString();
+                palette_colors.push(color);
+            }
         };
-        palette_grid_el.appendChild(bttn);
+        color_picker_el.appendChild(bttn);
     }
-    if (last_picked_color_el === undefined) {
-        // @ts-ignore
-        last_picked_color_el = palette_grid_el.children[0];
-        last_picked_color_el.classList.add("picked");
+    if (picked_colors_els.size === 0) {
+        const el = color_picker_el.children[0];
+        el.classList.add("picked");
+        el.textContent = "1";
+        picked_colors_els.add(el);
+        palette_colors = [palette[0]];
     }
 }
 let show_info = false;
@@ -94,7 +125,7 @@ function toggle_info() {
     curtain_el.style.visibility = show_info ? "visible" : "hidden";
     shift_down = false;
     ctrl_down = false;
-    mouse_down = false;
+    mouse1_down = false;
     wave_queue.clear();
 }
 const palette = [
@@ -218,6 +249,15 @@ function compile_shader_program(gl, vertex_id, fragment_id, attributes = [], uni
     }
     return o;
 }
+function mat4x4_mul(A, B) {
+    const [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] = A, [$, _, C, D, E, F, G, H, I, J, K, L, M, N, O, P] = B;
+    return new Float32Array([
+        a * $ + b * E + c * I + d * M, a * _ + b * F + c * J + d * N, a * C + b * G + c * K + d * O, a * D + b * H + c * L + d * P,
+        e * $ + f * E + g * I + h * M, e * _ + f * F + g * J + h * N, e * C + f * G + g * K + h * O, e * D + f * H + g * L + h * P,
+        i * $ + j * E + k * I + l * M, i * _ + j * F + k * J + l * N, i * C + j * G + k * K + l * O, i * D + j * H + k * L + l * P,
+        m * $ + n * E + o * I + p * M, m * _ + n * F + o * J + p * N, m * C + n * G + o * K + p * O, m * D + n * H + o * L + p * P,
+    ]);
+}
 function create_orthographic_matrix(l, r, b, t, n, f) {
     return new Float32Array([
         2 / (r - l), 0, 0, 0,
@@ -225,6 +265,29 @@ function create_orthographic_matrix(l, r, b, t, n, f) {
         0, 0, -2 / (f - n), 0,
         -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1
     ]);
+}
+function create_view_matrix(x, y, s) {
+    return new Float32Array([
+        1 / s, 0, 0, 0,
+        0, 1 / s, 0, 0,
+        0, 0, 1, 0,
+        -x, -y, 0, 1
+    ]);
+}
+function create_view_projection_matrix(x, y, s, l, r, b, t, n, f) {
+    const projection_matrix = new Float32Array([
+        2 / (r - l), 0, 0, 0,
+        0, 2 / (t - b), 0, 0,
+        0, 0, -2 / (f - n), 0,
+        -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1
+    ]);
+    const view_matrix = new Float32Array([
+        1 / s, 0, 0, 0,
+        0, 1 / s, 0, 0,
+        0, 0, 1, 0,
+        -x / s, -y / s, 0, 1
+    ]);
+    return mat4x4_mul(projection_matrix, view_matrix);
 }
 const _pack_buffer = new ArrayBuffer(4), _pack8 = new Uint8Array(_pack_buffer), _pack32 = new Uint32Array(_pack_buffer);
 /** This approach was used to guarantee endian compatibility. */
@@ -397,12 +460,13 @@ class ColorfulGrid {
 }
 /** event called on window.onresize */
 function update_viewport() {
-    let _width = window.innerWidth, _height = window.innerHeight;
+    const _width = window.innerWidth, _height = window.innerHeight;
     if (_width !== width || _height !== height) {
-        width = _width;
-        height = _height;
-        canvas_el.width = _width;
-        canvas_el.height = _height;
+        canvas_rect = canvas_el.getBoundingClientRect();
+        units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
+        units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+        canvas_el.width = width = _width;
+        canvas_el.height = height = _height;
         canvas_el.style.width = _width.toString();
         canvas_el.style.height = _height.toString();
         gl.bindTexture(gl.TEXTURE_2D, mask_texture);
@@ -410,14 +474,14 @@ function update_viewport() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-        ar = _width / _height;
-        proj_mat = create_orthographic_matrix(-ar, ar, -1, 1, -1, 1);
+        ar = width / height;
+        view_proj_mat = create_orthographic_matrix(-ar, ar, -1, 1, -1, 1);
         p.useProgram();
-        gl.uniformMatrix4fv(p.uniforms["u_proj"], false, proj_mat);
+        gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
         mask_p.useProgram();
-        gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+        gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
         force_render_mask = true;
-        mouse_down = false;
+        mouse1_down = false;
         shift_down = false;
         ctrl_down = false;
         queued_strokes = [];
@@ -427,7 +491,9 @@ function update_viewport() {
 }
 /** this value is used to  */
 let wave_id = 0, 
-/** index of the color used from the current palette. */
+/** */
+palette_colors = [], 
+/** index of the color used from the current choosen palette of colors. */
 palette_color = 0, 
 /** value used to filter out all the queued waves when filling or clearing
  * the entire grid. */
@@ -444,7 +510,10 @@ function wave_start(ids, color_packed, color, fcolor, _wave_id) {
         return;
     if (color_packed === undefined || color === undefined
         || fcolor === undefined) {
-        color = palette[palette_color];
+        color = palette_colors[palette_color];
+        if (palette_colors.length > 1) {
+            palette_color = (palette_color + 1) % palette_colors.length;
+        }
         fcolor = new Float32Array([
             color[0] / 255, color[1] / 255, color[2] / 255
         ]);
@@ -749,7 +818,7 @@ function process_queued_strokes() {
     stroke_count = -1;
 }
 /** buffer used to read from the vertex mask texture. */
-let pixel_data = new Uint32Array(1), 
+let pixel_data = new Uint32Array(1), update_view_proj_mat = false, 
 /** this is set to true on window.onresize; forces to recalculate the vertex
  * mask texture during the draw pass. */
 force_render_mask = true, 
@@ -767,6 +836,8 @@ request_clear = false,
 frame = 0;
 function draw() {
     ++frame;
+    if (update_view_proj_mat)
+        view_proj_mat = create_view_projection_matrix(camera_x, camera_y, camera_scale, -ar, ar, -1, 1, -1, 1);
     if (request_clear) {
         const clear_color = packUint8(grid_bg);
         for (let i = 0; i < grid.adj_graph.length; ++i)
@@ -785,7 +856,7 @@ function draw() {
             gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
             mask_p.useProgram();
-            gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+            gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
             gl.bindVertexArray(mask_vao);
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
             force_render_mask = false;
@@ -798,6 +869,8 @@ function draw() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
     p.useProgram();
+    if (update_view_proj_mat)
+        gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
     if (texture_is_dirty) {
         gl.bindTexture(gl.TEXTURE_2D, color_texture);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
@@ -808,6 +881,7 @@ function draw() {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
+    update_view_proj_mat = false;
     requestAnimationFrame(draw);
 }
 let gl, 
@@ -818,7 +892,7 @@ mask_p, grid, mask_texture, mask_fbo,
 /** inner window aspect ratio. */
 ar, 
 /** camera (orthographic) projection matrix. */
-proj_mat, 
+view_proj_mat, 
 /** window.innerWidth */
 width, 
 /** window.innerHeight */
@@ -831,20 +905,26 @@ mask_vao,
 vertex_count;
 /** canvas DOM element (#screen). */
 let canvas_el, 
-/** color picker DOM element (#palette-grid). */
-palette_grid_el, 
+/** color picker DOM element (#color-picker). */
+color_picker_el, 
 /** info curtain DOM element (#info-curtain) */
 curtain_el, 
 /** esc button DOM element (#esc-button). */
-esc_button_el;
+esc_button_el, 
+/** updated in update_viewport */
+canvas_rect, 
+/** used for mouse movement scaling to properly move the camera,
+ * recalculated both in update_viewport and in w_wheel */
+units_per_pixel_x, units_per_pixel_y;
+let camera_x = 0, camera_y = 0, camera_coord_min = -0.5, camera_coord_max = 0.5, camera_scale_min = 0.001, camera_scale = 1, camera_scale_max = 1;
 /** event called by window.onload */
 function init() {
     canvas_el = document.getElementById("screen");
     if (!(canvas_el instanceof HTMLCanvasElement))
         throw "Colorful.js: couldn't find 'canvas#screen' element.";
-    palette_grid_el = document.getElementById("palette-grid");
-    if (palette_grid_el === null)
-        throw "Colorful.js: couldn't find '#palette-grid' element.";
+    color_picker_el = document.getElementById("color-picker");
+    if (color_picker_el === null)
+        throw "Colorful.js: couldn't find '#color-picker' element.";
     curtain_el = document.getElementById("info-curtain");
     if (curtain_el === null)
         throw "Colorful.js: couldn't find '#info-curtain' element.";
@@ -857,12 +937,15 @@ function init() {
     //////////////////////////////////
     //       MAIN SHADER            //
     //////////////////////////////////
-    p = compile_shader_program(gl, "vertex-shader", "fragment-shader", [], ["u_proj", "u_texture", "u_texture_size"]);
+    p = compile_shader_program(gl, "vertex-shader", "fragment-shader", [], ["u_view_proj", "u_texture", "u_texture_size"]);
     p.useProgram();
-    width = window.innerWidth,
-        height = window.innerHeight;
+    canvas_rect = canvas_el.getBoundingClientRect();
+    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
+    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    width = window.innerWidth;
+    height = window.innerHeight;
     ar = width / height;
-    proj_mat = create_orthographic_matrix(-ar, ar, -1, 1, -1, 1);
+    view_proj_mat = create_view_projection_matrix(camera_x, camera_y, camera_scale, -ar, ar, -1, 1, -1, 1);
     canvas_el.width = width;
     canvas_el.height = height;
     canvas_el.style.width = width.toString();
@@ -882,8 +965,7 @@ function init() {
     gl.bufferData(gl.ARRAY_BUFFER, grid.ids, gl.STATIC_DRAW);
     gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
     gl.enableVertexAttribArray(1);
-    gl.uniformMatrix4fv(p.uniforms["u_proj"], false, proj_mat);
-    // gl.uniform1ui(p.uniforms["u_vertex_count"], vertex_count);
+    gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
     gl.uniform1f(p.uniforms["u_texture_size"], grid.texture_size);
     gl.uniform1i(p.uniforms["u_texture"], 0);
     color_texture = gl.createTexture();
@@ -896,9 +978,9 @@ function init() {
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
-    mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment", [], ["u_proj"]);
+    mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment", [], ["u_view_proj"]);
     mask_p.useProgram();
-    gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+    gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
     mask_vao = gl.createVertexArray();
     gl.bindVertexArray(mask_vao);
     const mask_pos_buffer = gl.createBuffer();
@@ -924,6 +1006,9 @@ function init() {
     canvas_el.onmousedown = c_mousedown;
     canvas_el.onmousemove = c_mousemove;
     canvas_el.onmouseup = c_mouseup;
+    canvas_el.oncontextmenu = (e) => {
+        e.preventDefault();
+    };
     draw();
 }
 /** set to true when the shift button is pressed. */
@@ -937,7 +1022,7 @@ function w_keydown(e) {
         broke_stroke = true;
         stroke_count = -1;
     }
-    else if (e.key === "Control" && !mouse_down)
+    else if (e.key === "Control" && !mouse1_down)
         ctrl_down = true;
 }
 /** event called on window.onkeyup */
@@ -959,17 +1044,23 @@ function w_keyup(e) {
 window.onkeydown = w_keydown;
 window.onkeyup = w_keyup;
 /** value set to true whenever the mouse's left button is pressed. */
-let mouse_down = false, 
+let mouse1_down = false, 
+/** value set to true only when mouse1_down is not true and the mouse's
+ * wheel button is pressed. */
+mouse3_down = false, 
 /** value used to prevent checking multiple times, on the same frame, which
  * the mouse position and its related events. */
 last_mouse_sample_frame = -1, 
+/** both values used for moving the camera when pressing mouse3. */
+prev_clientX, prev_clientY, 
 /** current frame's sampled mouse x position relative to the canvas. */
 mouse_x, 
 /** current frame's sampled mouse y position relative to the canvas. */
 mouse_y;
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
-    mouse_down = false;
+    mouse1_down = false;
+    mouse3_down = false;
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
@@ -977,38 +1068,93 @@ function c_mouseleave() {
 }
 /** event called on canvas.onmousedown */
 function c_mousedown(e) {
-    if (mouse_down || e.button !== 0 || last_mouse_sample_frame === frame)
+    if (e.button === 2 || last_mouse_sample_frame === frame)
         return;
-    mouse_down = true;
+    if (e.button === 0) {
+        mouse1_down = true;
+        mouse3_down = false;
+    }
+    else if (!mouse1_down) {
+        prev_clientX = e.clientX;
+        prev_clientY = e.clientY;
+        mouse3_down = true;
+        last_mouse_sample_frame = frame;
+        return;
+    }
     if (force_render_mask)
         return;
-    const rect = canvas_el.getBoundingClientRect();
-    mouse_x = Math.floor((e.clientX - rect.left) * width / rect.width);
-    mouse_y = Math.floor((rect.bottom - e.clientY) * height / rect.height);
+    mouse_x =
+        Math.floor((e.clientX - canvas_rect.left) * width / canvas_rect.width);
+    mouse_y =
+        Math.floor((canvas_rect.bottom - e.clientY) * height / canvas_rect.height);
     request_sample = true;
     last_mouse_sample_frame = frame;
 }
 /** event called on canvas.onmousemove */
 function c_mousemove(e) {
-    if (!mouse_down || force_render_mask || last_mouse_sample_frame === frame)
+    if ((!mouse1_down && !mouse3_down) || force_render_mask
+        || last_mouse_sample_frame === frame)
         return;
-    const rect = canvas_el.getBoundingClientRect();
-    mouse_x = Math.floor((e.clientX - rect.left) * width / rect.width);
-    mouse_y = Math.floor((rect.bottom - e.clientY) * height / rect.height);
-    request_sample = true;
-    last_mouse_sample_frame = frame;
+    const clientX = e.clientX, clientY = e.clientY;
+    mouse_x =
+        Math.floor((clientX - canvas_rect.left) * width / canvas_rect.width);
+    mouse_y =
+        Math.floor((canvas_rect.bottom - clientY) * height / canvas_rect.height);
+    if (mouse3_down) {
+        camera_x -= (clientX - prev_clientX) * units_per_pixel_x;
+        camera_y += (clientY - prev_clientY) * units_per_pixel_y;
+        camera_x =
+            Math.max(Math.min(camera_x, camera_coord_max), camera_coord_min);
+        camera_y =
+            Math.max(Math.min(camera_y, camera_coord_max), camera_coord_min);
+        prev_clientX = clientX;
+        prev_clientY = clientY;
+        update_view_proj_mat = true;
+        force_render_mask = true;
+    }
+    else {
+        request_sample = true;
+        last_mouse_sample_frame = frame;
+    }
 }
 /** event called on canvas.onmouseup */
 function c_mouseup(e) {
+    if (e.button === 2) {
+        e.preventDefault();
+        return;
+    }
+    if (e.button === 1) {
+        prev_clientX = prev_clientY = undefined;
+        mouse3_down = false;
+    }
     if (e.button !== 0)
         return;
     broke_stroke = shift_down ? true : false;
-    mouse_down = false;
+    mouse1_down = false;
     hovered_id = undefined;
+}
+/** event called on canvas.onwheel */
+function w_wheel(e) {
+    if (e.ctrlKey) {
+        e.preventDefault();
+        return;
+    }
+    const factor = 0.01;
+    if (e.deltaY < 0)
+        camera_scale += factor;
+    else
+        camera_scale -= factor;
+    camera_scale =
+        Math.min(Math.max(camera_scale, camera_scale_min), camera_scale_max);
+    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
+    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    update_view_proj_mat = true;
+    force_render_mask = true;
 }
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
-    mouse_down = false;
+    mouse1_down = false;
+    mouse3_down = false;
     shift_down = false;
     ctrl_down = false;
     hovered_id = undefined;
@@ -1019,4 +1165,5 @@ function state_cleanup() {
 window.onresize = update_viewport;
 window.onblur = state_cleanup;
 window.onmouseleave = state_cleanup;
+window.addEventListener("wheel", w_wheel, { passive: false });
 window.onload = init;

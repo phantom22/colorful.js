@@ -1,6 +1,8 @@
     /** this value is used to  */
 let wave_id = 0,
-    /** index of the color used from the current palette. */
+    /** */
+    palette_colors = [] as Uint8Array[],
+    /** index of the color used from the current choosen palette of colors. */
     palette_color = 0,
     /** value used to filter out all the queued waves when filling or clearing
      * the entire grid. */
@@ -24,7 +26,11 @@ function wave_start(
 
     if (color_packed === undefined || color === undefined
         || fcolor === undefined) {
-        color = palette[palette_color];
+        color = palette_colors[palette_color];
+        if (palette_colors.length > 1) {
+            palette_color = (palette_color+1) % palette_colors.length;
+        }
+
         fcolor = new Float32Array([
             color[0] / 255, color[1] / 255, color[2] / 255
         ]);

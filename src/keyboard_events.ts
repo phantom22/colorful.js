@@ -10,7 +10,7 @@ function w_keydown(e:KeyboardEvent) {
         broke_stroke = true;
         stroke_count = -1;
     }
-    else if (e.key === "Control" && !mouse_down)
+    else if (e.key === "Control" && !mouse1_down)
         ctrl_down = true;
 }
 

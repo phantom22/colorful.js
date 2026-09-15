@@ -9,7 +9,7 @@ let gl: WebGL2RenderingContext,
     /** inner window aspect ratio. */
     ar:number,
     /** camera (orthographic) projection matrix. */
-    proj_mat:Float32Array,
+    view_proj_mat:Float32Array,
     /** window.innerWidth */
     width:number,
     /** window.innerHeight */
@@ -24,12 +24,28 @@ let gl: WebGL2RenderingContext,
 
     /** canvas DOM element (#screen). */
 let canvas_el: HTMLCanvasElement,
-    /** color picker DOM element (#palette-grid). */
-    palette_grid_el: HTMLElement,
+    /** color picker DOM element (#color-picker). */
+    color_picker_el: HTMLElement,
     /** info curtain DOM element (#info-curtain) */
     curtain_el: HTMLElement,
     /** esc button DOM element (#esc-button). */
-    esc_button_el: HTMLElement;
+    esc_button_el: HTMLElement,
+    /** updated in update_viewport */
+    canvas_rect: DOMRect,
+    /** used for mouse movement scaling to properly move the camera,
+     * recalculated both in update_viewport and in w_wheel */
+    units_per_pixel_x: number,
+    units_per_pixel_y: number;
+
+let camera_x = 0,
+    camera_y = 0,
+
+    camera_coord_min = -0.5,
+    camera_coord_max = 0.5,
+
+    camera_scale_min = 0.001,
+    camera_scale = 1,
+    camera_scale_max = 1;
 
 /** event called by window.onload */
 function init() {
@@ -37,9 +53,9 @@ function init() {
     if (!(canvas_el instanceof HTMLCanvasElement))
         throw "Colorful.js: couldn't find 'canvas#screen' element.";
 
-    palette_grid_el = document.getElementById("palette-grid") as HTMLElement;
-    if (palette_grid_el === null)
-        throw "Colorful.js: couldn't find '#palette-grid' element.";
+    color_picker_el = document.getElementById("color-picker") as HTMLElement;
+    if (color_picker_el === null)
+        throw "Colorful.js: couldn't find '#color-picker' element.";
 
     curtain_el = document.getElementById("info-curtain") as HTMLElement;
     if (curtain_el === null)
@@ -60,14 +76,23 @@ function init() {
 
     p = compile_shader_program(gl, "vertex-shader", "fragment-shader",
         [],
-        ["u_proj","u_texture","u_texture_size"]
+        ["u_view_proj","u_texture","u_texture_size"]
     );
     p.useProgram();
 
-    width = window.innerWidth,
+    canvas_rect = canvas_el.getBoundingClientRect();
+    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;        
+    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    
+    width = window.innerWidth;
     height = window.innerHeight;
+    
     ar = width / height;
-    proj_mat = create_orthographic_matrix(-ar, ar, -1, 1, -1, 1);
+    view_proj_mat = create_view_projection_matrix(
+        camera_x, camera_y, camera_scale,
+        -ar, ar, -1, 1, -1, 1
+    );
+
     canvas_el.width = width;
     canvas_el.height = height;
     canvas_el.style.width = width.toString();
@@ -91,8 +116,7 @@ function init() {
     gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
     gl.enableVertexAttribArray(1);
 
-    gl.uniformMatrix4fv(p.uniforms["u_proj"], false, proj_mat);
-    // gl.uniform1ui(p.uniforms["u_vertex_count"], vertex_count);
+    gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
     gl.uniform1f(p.uniforms["u_texture_size"], grid.texture_size);
     gl.uniform1i(p.uniforms["u_texture"], 0);
 
@@ -116,10 +140,10 @@ function init() {
 
     mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment",
         [],
-        ["u_proj"]
+        ["u_view_proj"]
     );
     mask_p.useProgram();
-    gl.uniformMatrix4fv(mask_p.uniforms["u_proj"], false, proj_mat);
+    gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
 
     mask_vao = gl.createVertexArray();
     gl.bindVertexArray(mask_vao);
@@ -160,6 +184,9 @@ function init() {
     canvas_el.onmousedown = c_mousedown;
     canvas_el.onmousemove = c_mousemove;
     canvas_el.onmouseup = c_mouseup;
+    canvas_el.oncontextmenu = (e:Event) => {
+        e.preventDefault();
+    };
 
     draw();
 }
