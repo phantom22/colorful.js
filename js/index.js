@@ -243,15 +243,12 @@ const palette = [
     new Uint8Array([64, 64, 64])
 ];
 let palette_color_data = palette.map(v => get_color_data(v));
-function compile_shader_program(gl, vertex_id, fragment_id, attributes = [], uniforms = []) {
+function compile_shader_program(gl, vertex_id, fragment_id, uniforms = []) {
     if (gl === null || gl === undefined)
         throw "Colorful.js: compile_shader_program(): the passed WebGL " +
             "context is null or undefined";
     if (!Array.isArray(uniforms))
         throw "Colorful.js: compile_shader_program(): uniforms must be an " +
-            "array of string";
-    if (!Array.isArray(attributes))
-        throw "Colorful.js: compile_shader_program(): attributes must be an " +
             "array of string";
     const v_el = document.getElementById(vertex_id), f_el = document.getElementById(fragment_id);
     if (!(v_el instanceof HTMLScriptElement) || v_el.type !== "x-shader/vs")
@@ -269,7 +266,7 @@ function compile_shader_program(gl, vertex_id, fragment_id, attributes = [], uni
     gl.compileShader(v);
     if (!gl.getShaderParameter(v, gl.COMPILE_STATUS))
         throw "Colorful.js: compile_shader(): failed to compile vertex " +
-            "shader, reason: " + gl.getShaderInfoLog(v);
+            `shader "#${vertex_id}", reason: ` + gl.getShaderInfoLog(v);
     const f = gl.createShader(gl.FRAGMENT_SHADER);
     if (f === null)
         throw "Colorful.js: couldn't create fragment shader";
@@ -277,7 +274,7 @@ function compile_shader_program(gl, vertex_id, fragment_id, attributes = [], uni
     gl.compileShader(f);
     if (!gl.getShaderParameter(f, gl.COMPILE_STATUS))
         throw "Colorful.js: compile_shader(): failed to compile fragment " +
-            "shader, reason: " + gl.getShaderInfoLog(f);
+            `shader "#${fragment_id}", reason: ` + gl.getShaderInfoLog(f);
     const p = gl.createProgram();
     gl.attachShader(p, v);
     gl.attachShader(p, f);
@@ -289,19 +286,23 @@ function compile_shader_program(gl, vertex_id, fragment_id, attributes = [], uni
         vertex: v,
         fragment: f,
         program: p,
-        attributes: {},
         uniforms: {},
         useProgram() { gl.useProgram(p); }
     };
     for (const key of uniforms) {
-        const loc = gl.getUniformLocation(p, key);
-        if (loc === null)
-            throw `Colorful.js: the specified uniform named '${key}' is not`
-                + " defined within the shader.";
-        o.uniforms[key] = loc;
-    }
-    for (const key of attributes) {
-        o.attributes[key] = gl.getAttribLocation(p, key);
+        const important = key.startsWith("!"), val = important ? key.slice(1) : key, loc = gl.getUniformLocation(p, val);
+        if (loc === null) {
+            const msg = `Colorful.js: the specified uniform named '${key}' is`
+                + ` not defined within the shader`
+                + ` "#${vertex_id}|#${fragment_id}".`;
+            if (!important) {
+                console.warn(msg);
+                continue;
+            }
+            else
+                throw msg;
+        }
+        o.uniforms[val] = loc;
     }
     return o;
 }
@@ -330,20 +331,116 @@ function create_view_matrix(x, y, s) {
         -x, -y, 0, 1
     ]);
 }
-function create_view_projection_matrix(x, y, s, l, r, b, t, n, f) {
+function create_view_projection_matrix(x, y, s, ar) {
+    const l = -ar, r = ar, b = -1, t = 1, n = -1, f = 1;
     const projection_matrix = new Float32Array([
         2 / (r - l), 0, 0, 0,
         0, 2 / (t - b), 0, 0,
         0, 0, -2 / (f - n), 0,
         -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1
     ]);
+    const inv_s = 1. / s;
     const view_matrix = new Float32Array([
-        1 / s, 0, 0, 0,
-        0, 1 / s, 0, 0,
+        inv_s, 0, 0, 0,
+        0, inv_s, 0, 0,
         0, 0, 1, 0,
-        -x / s, -y / s, 0, 1
+        -x * inv_s, -y * inv_s, 0, 1
     ]);
     return mat4x4_mul(projection_matrix, view_matrix);
+}
+function create_buffer_vec2(data, at) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+function bind_vec2_attr(buffer, at) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+function create_buffer_uint32(data, at) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_INT, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+function bind_uint32_attr(buffer, at) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_INT, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+function create_buffer_uint8(data, at) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_BYTE, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+function bind_uint8_attr(buffer, at) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_BYTE, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+function create_R32UI_texture(width, height) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    return o;
+}
+function create_RGBA32F_texture(size, data) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, size, size, 0, gl.RGBA, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return o;
+}
+function create_RGBA_texture(size, data) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return o;
+}
+function create_vertex_array() {
+    const o = gl.createVertexArray();
+    gl.bindVertexArray(o);
+    return o;
+}
+function create_frame_buffer(tex) {
+    const o = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return o;
+}
+function create_frame_buffer2(tex0, tex1) {
+    const o = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex0, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, tex1, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return o;
+}
+function resize_R32UI_texture(tex, width, height) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 }
 class adj_node {
     constructor(id) {
@@ -359,9 +456,10 @@ class ColorfulGrid {
             throw `ColorfulGrid: side_length must be an integer greater than 1`;
         this.side_length = side_length;
         const num_triangles = 6 * side_length ** 2;
+        this.triangle_count = num_triangles;
         this.vertex_count = num_triangles * 3;
         this.adj_map = Array(num_triangles + 1);
-        this.mesh = new Float32Array(num_triangles * 2 * 3);
+        this.mesh = new Float32Array(num_triangles * 6);
         const _2_side = side_length * 2;
         const points = Array.from({ length: _2_side + 1 }, () => Array.from({ length: _2_side + 1 }, () => Array(2)));
         let a = 0, b = 0;
@@ -479,19 +577,87 @@ class ColorfulGrid {
              * a must be decreased once to move up to the next depth level. */
             --a;
         }
-        this.ids = new Uint32Array(num_triangles * 3);
+        const texture_size = Math.ceil(Math.sqrt(this.vertex_count));
+        this.texture_size = texture_size;
+        const nt6 = num_triangles * 6, nt3 = num_triangles * 3, nt2 = num_triangles * 2;
+        this.ids = new Uint32Array(nt3);
+        // this.cell_ids = new Uint32Array(num_triangles);
+        this.uvs = new Float32Array(nt6);
+        // this.cell_uvs = new Float32Array(nt2);
+        this.hovered = new Uint8Array(nt3);
+        this.hovered.fill(0);
         for (let i = 0; i < num_triangles; ++i) {
-            const id = i + 1, base_i = i * 3;
+            const id = i + 1, base_i = i * 3, base_u = i * 6, base_uc = i * 2, col = id % texture_size, row = Math.floor(id / texture_size), u = (col + 0.5) / texture_size, v = (row + 0.5) / texture_size;
+            // this.cell_ids[i] = id;
             this.ids[base_i] = id;
             this.ids[base_i + 1] = id;
             this.ids[base_i + 2] = id;
+            // this.cell_uvs[base_uc] = u;
+            // this.cell_uvs[base_uc+1] = v;
+            this.uvs[base_u] = u;
+            this.uvs[base_u + 1] = v;
+            this.uvs[base_u + 2] = u;
+            this.uvs[base_u + 3] = v;
+            this.uvs[base_u + 4] = u;
+            this.uvs[base_u + 5] = v;
         }
-        const texture_size = Math.ceil(Math.sqrt(this.vertex_count));
-        this.texture = new Uint8Array(texture_size * texture_size * 4);
-        this.texture_size = texture_size;
+        this.adj_uvs_1 = new Float32Array(nt6);
+        // this.cell_adj_uvs_1 = new Float32Array(nt2);
+        this.adj_uvs_2 = new Float32Array(nt6);
+        // this.cell_adj_uvs_2 = new Float32Array(nt2);
+        this.adj_uvs_3 = new Float32Array(nt6);
+        // this.cell_adj_uvs_3 = new Float32Array(nt2);
+        for (let i = 0; i < num_triangles; ++i) {
+            const id = i + 1, base_i = i * 6, base_ic = i * 2, base_1 = this.adj_map[id][0] * 6, base_2 = this.adj_map[id][1] * 6, base_3 = this.adj_map[id][2] === undefined ? -1 : this.adj_map[id][2] * 6;
+            const u1 = this.uvs[base_1], v1 = this.uvs[base_1 + 1];
+            // this.cell_adj_uvs_1[base_ic] = u1;
+            // this.cell_adj_uvs_1[base_ic+1] = v1;
+            this.adj_uvs_1[base_i] = u1;
+            this.adj_uvs_1[base_i + 1] = v1;
+            this.adj_uvs_1[base_i + 2] = u1;
+            this.adj_uvs_1[base_i + 3] = v1;
+            this.adj_uvs_1[base_i + 4] = u1;
+            this.adj_uvs_1[base_i + 5] = v1;
+            const u2 = this.uvs[base_2], v2 = this.uvs[base_2 + 1];
+            // this.cell_adj_uvs_2[base_ic] = u2;
+            // this.cell_adj_uvs_2[base_ic+1] = v2;
+            this.adj_uvs_2[base_i] = u2;
+            this.adj_uvs_2[base_i + 1] = v2;
+            this.adj_uvs_2[base_i + 2] = u2;
+            this.adj_uvs_2[base_i + 3] = v2;
+            this.adj_uvs_2[base_i + 4] = u2;
+            this.adj_uvs_2[base_i + 5] = v2;
+            if (base_3 === -1) {
+                // this.cell_adj_uvs_3[base_ic] = -1;
+                // this.cell_adj_uvs_3[base_ic+1] = -1;
+                this.adj_uvs_3[base_i] = -1;
+                this.adj_uvs_3[base_i + 1] = -1;
+                this.adj_uvs_3[base_i + 2] = -1;
+                this.adj_uvs_3[base_i + 3] = -1;
+                this.adj_uvs_3[base_i + 4] = -1;
+                this.adj_uvs_3[base_i + 5] = -1;
+            }
+            else {
+                const u3 = this.uvs[base_3], v3 = this.uvs[base_3 + 1];
+                // this.cell_adj_uvs_3[base_ic] = u3;
+                // this.cell_adj_uvs_3[base_ic+1] = v3;
+                this.adj_uvs_3[base_i] = u3;
+                this.adj_uvs_3[base_i + 1] = v3;
+                this.adj_uvs_3[base_i + 2] = u3;
+                this.adj_uvs_3[base_i + 3] = v3;
+                this.adj_uvs_3[base_i + 4] = u3;
+                this.adj_uvs_3[base_i + 5] = v3;
+            }
+        }
+        const tex_length = texture_size * texture_size * 4;
+        this.texture = new Uint8Array(tex_length);
         const u32view = new Uint32Array(this.texture.buffer);
         u32view.fill(pack_uint8(color));
         this.texture_u32view = u32view;
+        // this.state_weights = new Float32Array(tex_length);
+        // this.state_weights.fill(0.0);
+        // this.wcolor_dist = new Float32Array(tex_length);
+        // this.wcolor_dist.fill(0.0);
         this.adj_graph = Array(num_triangles + 1);
         for (let id = 1; id < this.adj_map.length; ++id) {
             const node = new adj_node(id);
@@ -519,19 +685,9 @@ function update_viewport() {
         units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
         canvas_el.width = width = _width;
         canvas_el.height = height = _height;
-        canvas_el.style.width = _width.toString();
-        canvas_el.style.height = _height.toString();
-        gl.bindTexture(gl.TEXTURE_2D, mask_texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        resize_R32UI_texture(mask_texture, width, height);
         ar = width / height;
-        view_proj_mat = create_orthographic_matrix(-ar, ar, -1, 1, -1, 1);
-        p.useProgram();
-        gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
-        mask_p.useProgram();
-        gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
+        update_view_proj_mat = true;
         force_render_mask = true;
         mouse1_down = false;
         shift_down = false;
@@ -570,11 +726,9 @@ function wave_start(ids, color_data, _wave_id) {
         color_packed = data.color_packed;
     }
     else {
-        {
-            color = color_data.color;
-            fcolor = color_data.fcolor;
-            color_packed = color_data.color_packed;
-        }
+        color = color_data.color;
+        fcolor = color_data.fcolor;
+        color_packed = color_data.color_packed;
     }
     let next;
     if (typeof ids === "number") {
@@ -888,7 +1042,8 @@ function draw(timestamp) {
     delta_time = (timestamp - prev_frame_timestamp) * 0.001;
     prev_frame_timestamp = timestamp;
     if (update_view_proj_mat)
-        view_proj_mat = create_view_projection_matrix(camera_x, camera_y, camera_scale, -ar, ar, -1, 1, -1, 1);
+        view_proj_mat =
+            create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
     if (request_clear) {
         const clear_color = pack_uint8(grid_bg);
         for (let i = 0; i < grid.adj_graph.length; ++i)
@@ -903,17 +1058,17 @@ function draw(timestamp) {
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
         if (force_render_mask) {
+            mask_p.useProgram();
+            gl.bindVertexArray(mask_vao);
             gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
-            mask_p.useProgram();
             gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
-            gl.bindVertexArray(mask_vao);
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
             force_render_mask = false;
         }
         if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
             gl.readBuffer(gl.COLOR_ATTACHMENT0);
-            const read_index = (write_index + 1) % pbo_count, oldest_sync = syncs[read_index];
+            const read_index = (pbo_write_index + 1) % pbo_count, oldest_sync = syncs[read_index];
             if (oldest_sync) {
                 // check status instantly
                 const status = gl.clientWaitSync(oldest_sync, 0, 0);
@@ -925,40 +1080,103 @@ function draw(timestamp) {
                     syncs[read_index] = null;
                 }
             }
-            // orphan the buffer before writing
-            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[write_index]);
+            // orphan the buffer before writing to prevent webgl warnings
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[pbo_write_index]);
             gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
             gl.readPixels(mouse_x, mouse_y, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, 0);
-            if (syncs[write_index])
-                gl.deleteSync(syncs[write_index]);
-            syncs[write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-            write_index = (write_index + 1) % pbo_count;
+            if (syncs[pbo_write_index])
+                gl.deleteSync(syncs[pbo_write_index]);
+            syncs[pbo_write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            pbo_write_index = (pbo_write_index + 1) % pbo_count;
             gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
             request_sample = false;
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
+    //////////////////////////////////
+    //       STATE PROPAGATION      //
+    //////////////////////////////////
+    // let source_texture0: WebGLTexture, source_texture1: WebGLTexture,
+    //     target_texture0: WebGLTexture, target_texture1: WebGLTexture,
+    //     target_fbo: WebGLBuffer;
+    // if (state_read_index === 0) {
+    //     source_texture0 = state_tex_00;
+    //     source_texture1 = state_tex_01;
+    //     target_fbo = state_fbo1;
+    //     target_texture0 = state_tex_10;
+    //     target_texture1 = state_tex_11;
+    // }
+    // else {
+    //     source_texture0 = state_tex_10;
+    //     source_texture1 = state_tex_11;
+    //     target_fbo = state_fbo0;
+    //     target_texture0 = state_tex_00;
+    //     target_texture1 = state_tex_01;
+    // }
+    // state_p.useProgram();
+    // gl.uniform1f(state_p.uniforms["u_delta_time"], delta_time);
+    // gl.uniform1i(state_p.uniforms["u_texture"], 0);
+    // gl.uniform1i(state_p.uniforms["u_state_weights"], 1);
+    // gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 2);
+    // gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
+    // gl.viewport(0, 0, grid.texture_size, grid.texture_size);
+    // gl.activeTexture(gl.TEXTURE0);
+    // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // if (texture_is_dirty) {
+    //     gl.texSubImage2D(
+    //         gl.TEXTURE_2D, 0,
+    //         0, 0,
+    //         grid.texture_size, grid.texture_size,
+    //         gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+    //     );
+    //     texture_is_dirty = false;
+    // }
+    // gl.activeTexture(gl.TEXTURE1);
+    // gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+    // gl.activeTexture(gl.TEXTURE2);
+    // gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+    // gl.bindVertexArray(state_vao);
+    // gl.disable(gl.BLEND)
+    // gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
+    // gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    //////////////////////////////////
+    //         MAIN SHADER          //
+    //////////////////////////////////
     p.useProgram();
-    if (update_view_proj_mat)
+    gl.uniform1f(p.uniforms["u_delta_time"], delta_time);
+    if (update_view_proj_mat) {
         gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
+        update_view_proj_mat = false;
+    }
+    gl.uniform1i(p.uniforms["u_texture"], 0);
+    // gl.uniform1i(p.uniforms["u_state_weights"], 1);
+    // gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, color_texture);
     if (texture_is_dirty) {
-        gl.bindTexture(gl.TEXTURE_2D, color_texture);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
         texture_is_dirty = false;
     }
+    // gl.activeTexture(gl.TEXTURE1);
+    // gl.bindTexture(gl.TEXTURE_2D, target_texture0);
+    // gl.activeTexture(gl.TEXTURE2);
+    // gl.bindTexture(gl.TEXTURE_2D, target_texture1);
     gl.bindVertexArray(vao);
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // gl.enable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-    update_view_proj_mat = false;
+    // state_read_index = 1 - state_read_index;
     requestAnimationFrame(draw);
 }
 let gl, 
 /** grid shader program. */
 p, 
 /** grid vertex mask shader program. */
-mask_p, grid, mask_texture, mask_fbo, 
+mask_p, 
+// state_p: ReturnType<typeof compile_shader_program>,
+grid, mask_texture, mask_fbo, 
+// state_fbo0:WebGLFramebuffer,
+// state_fbo1:WebGLFramebuffer,
 /** inner window aspect ratio. */
 ar, 
 /** camera (orthographic) projection matrix. */
@@ -971,10 +1189,17 @@ height,
 vao, color_texture, 
 /** mask grid vertex array object. */
 mask_vao, 
+/** state grid vertex array object. */
+// state_vao:WebGLVertexArrayObject,
+// state_tex_00:WebGLTexture,
+// state_tex_01:WebGLTexture,
+// state_tex_10:WebGLTexture,
+// state_tex_11:WebGLTexture,
+// state_read_index = 0,
 /** grid.vertex_count */
 vertex_count, 
 /** used to asynchronously read from gpu without cpu stalls. */
-pbos = [], syncs = [], pbo_count = 3, write_index = 0;
+pbos = [], syncs = [], pbo_count = 3, pbo_write_index = 0;
 /** canvas DOM element (#screen). */
 let canvas_el, 
 /** color picker DOM element (#color-picker). */
@@ -1005,11 +1230,17 @@ function init() {
         throw "Colorful.js: couldn't find '#esc-button' element.";
     esc_button_el.onclick = dom_toggle_menu;
     gl = canvas_el.getContext("webgl2");
+    // const ext = gl.getExtension("EXT_color_buffer_float");
+    // if (!ext)
+    //     throw "EXT_color_buffer_float is not supported on this hardware";
     dom_update_color_picker();
     //////////////////////////////////
-    //       MAIN SHADER            //
+    //         MAIN SHADER          //
     //////////////////////////////////
-    p = compile_shader_program(gl, "vertex-shader", "fragment-shader", [], ["u_view_proj", "u_texture", "u_texture_size"]);
+    p = compile_shader_program(gl, "vertex-shader", "fragment-shader", [
+        "!u_view_proj", "!u_texture", /*"!u_state_weights","!u_wcolor_dist",
+        "!u_delta_time"]*/
+    ]);
     p.useProgram();
     canvas_rect = canvas_el.getBoundingClientRect();
     units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
@@ -1017,63 +1248,61 @@ function init() {
     width = window.innerWidth;
     height = window.innerHeight;
     ar = width / height;
-    view_proj_mat = create_view_projection_matrix(camera_x, camera_y, camera_scale, -ar, ar, -1, 1, -1, 1);
+    view_proj_mat =
+        create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
     canvas_el.width = width;
     canvas_el.height = height;
-    canvas_el.style.width = width.toString();
-    canvas_el.style.height = height.toString();
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     grid = new ColorfulGrid(side_length, grid_bg);
     vertex_count = grid.vertex_count;
-    vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const pos_buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, pos_buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, grid.mesh, gl.STATIC_DRAW);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(0);
-    const id_buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, id_buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, grid.ids, gl.STATIC_DRAW);
-    gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
-    gl.enableVertexAttribArray(1);
+    //////////////////////////////////
+    //       MAIN SHADER            //
+    //////////////////////////////////
+    vao = create_vertex_array();
+    const pos_buffer = create_buffer_vec2(grid.mesh, 0), id_buffer = create_buffer_uint32(grid.ids, 1);
+    create_buffer_vec2(grid.uvs, 2); // uv_buffer
+    create_buffer_vec2(grid.adj_uvs_1, 3); // adj1_buffer
+    create_buffer_vec2(grid.adj_uvs_2, 4); // adj2_buffer
+    create_buffer_vec2(grid.adj_uvs_3, 5); // adj3_buffer
+    create_buffer_uint8(grid.hovered, 6); // hovered_buffer
     gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
-    gl.uniform1f(p.uniforms["u_texture_size"], grid.texture_size);
+    color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
     gl.uniform1i(p.uniforms["u_texture"], 0);
-    color_texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, grid.texture_size, grid.texture_size, 0, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(p.uniforms["u_state_weights"], 1);
+    gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
-    mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment", [], ["u_view_proj"]);
+    mask_p = compile_shader_program(gl, "mask-vertex", "mask-fragment", ["!u_view_proj"]);
     mask_p.useProgram();
+    mask_vao = create_vertex_array();
+    bind_vec2_attr(pos_buffer, 0);
+    bind_uint32_attr(id_buffer, 1);
+    mask_texture = create_R32UI_texture(width, height);
+    mask_fbo = create_frame_buffer(mask_texture);
     gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
-    mask_vao = gl.createVertexArray();
-    gl.bindVertexArray(mask_vao);
-    const mask_pos_buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, mask_pos_buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, grid.mesh, gl.STATIC_DRAW);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(0);
-    const mask_id_buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, mask_id_buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, grid.ids, gl.STATIC_DRAW);
-    gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 0, 0);
-    gl.enableVertexAttribArray(1);
-    mask_texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, mask_texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    mask_fbo = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mask_texture, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    //////////////////////////////////
+    //       STATE SHADER           //
+    //////////////////////////////////
+    // state_p = compile_shader_program(gl, "state-vertex", "state-frag",
+    //     ["!u_texture","!u_state_weights","!u_wcolor_dist","!u_delta_time"]
+    // );
+    // state_p.useProgram();
+    // state_vao = create_vertex_array();
+    // create_buffer_uint32(grid.cell_ids, 0);
+    // create_buffer_vec2(grid.cell_uvs, 1);
+    // create_buffer_vec2(grid.cell_adj_uvs_1, 2);
+    // create_buffer_vec2(grid.cell_adj_uvs_2, 3);
+    // create_buffer_vec2(grid.cell_adj_uvs_3, 4);
+    // state_tex_00 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
+    // state_tex_01 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
+    // state_fbo0 = create_frame_buffer2(state_tex_00, state_tex_01);
+    // state_tex_10 = create_RGBA32F_texture(grid.texture_size, null);
+    // state_tex_11 = create_RGBA32F_texture(grid.texture_size, null);
+    // state_fbo1 = create_frame_buffer2(state_tex_10, state_tex_11);
+    // gl.uniform1i(state_p.uniforms["u_texture"], 0);
+    // gl.uniform1i(state_p.uniforms["u_state_weights"], 1);
+    // gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 2);
     //////////////////////////////////
     //       MASK SHADER PBOS       //
     //////////////////////////////////
@@ -1270,6 +1499,3 @@ window.onblur = state_cleanup;
 // window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, { passive: false });
 window.onload = init;
-// mix colors in different color space
-// add esc menu sliders
-// migrate wave propagation to ping-pongg GPGPU shader

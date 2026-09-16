@@ -29,10 +29,8 @@ function draw(timestamp:number) {
     prev_frame_timestamp = timestamp;
 
     if (update_view_proj_mat)
-        view_proj_mat = create_view_projection_matrix(
-            camera_x, camera_y, camera_scale,
-            -ar, ar, -1, 1, -1, 1
-        );
+        view_proj_mat =
+            create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
 
     if (request_clear) {
         const clear_color = pack_uint8(grid_bg);
@@ -52,14 +50,14 @@ function draw(timestamp:number) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
 
         if (force_render_mask) {
-            gl.viewport(0, 0, width, height);
+            mask_p.useProgram();
+            gl.bindVertexArray(mask_vao);
 
+            gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
 
-            mask_p.useProgram();
             gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
-
-            gl.bindVertexArray(mask_vao);
+            
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
 
             force_render_mask = false;
@@ -68,7 +66,7 @@ function draw(timestamp:number) {
         if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
             gl.readBuffer(gl.COLOR_ATTACHMENT0);
 
-            const read_index = (write_index + 1) % pbo_count,
+            const read_index = (pbo_write_index + 1) % pbo_count,
                   oldest_sync = syncs[read_index];
 
             if (oldest_sync) {
@@ -84,18 +82,18 @@ function draw(timestamp:number) {
                 }
             }
 
-            // orphan the buffer before writing
-            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[write_index]);
+            // orphan the buffer before writing to prevent webgl warnings
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[pbo_write_index]);
             gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
             gl.readPixels(
                 mouse_x, mouse_y, 1, 1,
                 gl.RED_INTEGER, gl.UNSIGNED_INT, 0
             );
 
-            if (syncs[write_index]) gl.deleteSync(syncs[write_index]);
-            syncs[write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            if (syncs[pbo_write_index]) gl.deleteSync(syncs[pbo_write_index]);
+            syncs[pbo_write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
 
-            write_index = (write_index + 1) % pbo_count;
+            pbo_write_index = (pbo_write_index + 1) % pbo_count;
 
             gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
             request_sample = false;
@@ -104,12 +102,82 @@ function draw(timestamp:number) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
+    //////////////////////////////////
+    //       STATE PROPAGATION      //
+    //////////////////////////////////
+
+    // let source_texture0: WebGLTexture, source_texture1: WebGLTexture,
+    //     target_texture0: WebGLTexture, target_texture1: WebGLTexture,
+    //     target_fbo: WebGLBuffer;
+    // if (state_read_index === 0) {
+    //     source_texture0 = state_tex_00;
+    //     source_texture1 = state_tex_01;
+    //     target_fbo = state_fbo1;
+    //     target_texture0 = state_tex_10;
+    //     target_texture1 = state_tex_11;
+    // }
+    // else {
+    //     source_texture0 = state_tex_10;
+    //     source_texture1 = state_tex_11;
+    //     target_fbo = state_fbo0;
+    //     target_texture0 = state_tex_00;
+    //     target_texture1 = state_tex_01;
+    // }
+
+    // state_p.useProgram();
+    // gl.uniform1f(state_p.uniforms["u_delta_time"], delta_time);
+    // gl.uniform1i(state_p.uniforms["u_texture"], 0);
+    // gl.uniform1i(state_p.uniforms["u_state_weights"], 1);
+    // gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 2);
+
+    // gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
+    // gl.viewport(0, 0, grid.texture_size, grid.texture_size);
+    
+    // gl.activeTexture(gl.TEXTURE0);
+    // gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // if (texture_is_dirty) {
+    //     gl.texSubImage2D(
+    //         gl.TEXTURE_2D, 0,
+    //         0, 0,
+    //         grid.texture_size, grid.texture_size,
+    //         gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
+    //     );
+    //     texture_is_dirty = false;
+    // }
+
+    // gl.activeTexture(gl.TEXTURE1);
+    // gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+
+    // gl.activeTexture(gl.TEXTURE2);
+    // gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+
+    // gl.bindVertexArray(state_vao);
+    // gl.disable(gl.BLEND)
+    // gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
+
+    // gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    //////////////////////////////////
+    //         MAIN SHADER          //
+    //////////////////////////////////
+
     p.useProgram();
-    if (update_view_proj_mat)
+    gl.uniform1f(p.uniforms["u_delta_time"], delta_time);
+    if (update_view_proj_mat) {
         gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
+        update_view_proj_mat = false;
+    }
+
+    gl.uniform1i(p.uniforms["u_texture"], 0);
+    // gl.uniform1i(p.uniforms["u_state_weights"], 1);
+    // gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
+
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, color_texture);
 
     if (texture_is_dirty) {
-        gl.bindTexture(gl.TEXTURE_2D, color_texture);
         gl.texSubImage2D(
             gl.TEXTURE_2D, 0,
             0, 0,
@@ -119,13 +187,17 @@ function draw(timestamp:number) {
         texture_is_dirty = false;
     }
 
+    // gl.activeTexture(gl.TEXTURE1);
+    // gl.bindTexture(gl.TEXTURE_2D, target_texture0);
+
+    // gl.activeTexture(gl.TEXTURE2);
+    // gl.bindTexture(gl.TEXTURE_2D, target_texture1);
+
     gl.bindVertexArray(vao);
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
+    // gl.enable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
 
-    update_view_proj_mat = false;
+    // state_read_index = 1 - state_read_index;
 
     requestAnimationFrame(draw);
 }

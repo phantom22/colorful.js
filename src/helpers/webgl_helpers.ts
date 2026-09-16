@@ -1,6 +1,6 @@
 function compile_shader_program(
         gl:WebGL2RenderingContext, vertex_id:string, fragment_id:string,
-        attributes=[] as string[], uniforms=[] as string[]
+        uniforms=[] as string[]
     ) {
     if (gl === null || gl === undefined)
         throw "Colorful.js: compile_shader_program(): the passed WebGL " +
@@ -8,10 +8,6 @@ function compile_shader_program(
     
     if (!Array.isArray(uniforms))
         throw "Colorful.js: compile_shader_program(): uniforms must be an " +
-              "array of string";
-
-    if (!Array.isArray(attributes))
-        throw "Colorful.js: compile_shader_program(): attributes must be an " +
               "array of string";
 
     const v_el = document.getElementById(vertex_id),
@@ -38,7 +34,7 @@ function compile_shader_program(
 
     if (!gl.getShaderParameter(v, gl.COMPILE_STATUS))
         throw "Colorful.js: compile_shader(): failed to compile vertex " +
-              "shader, reason: " + gl.getShaderInfoLog(v);
+              `shader "#${vertex_id}", reason: ` + gl.getShaderInfoLog(v);
 
     const f = gl.createShader(gl.FRAGMENT_SHADER);
     if (f === null)
@@ -48,7 +44,7 @@ function compile_shader_program(
 
     if (!gl.getShaderParameter(f, gl.COMPILE_STATUS))
         throw "Colorful.js: compile_shader(): failed to compile fragment " +
-              "shader, reason: " + gl.getShaderInfoLog(f);
+              `shader "#${fragment_id}", reason: ` + gl.getShaderInfoLog(f);
 
     const p = gl.createProgram();
     gl.attachShader(p, v);
@@ -63,21 +59,26 @@ function compile_shader_program(
         vertex: v,
         fragment: f,
         program: p,
-        attributes: {} as Record<string, number>,
         uniforms: {} as Record<string, WebGLUniformLocation>,
         useProgram() { gl.useProgram(p) }
     }
 
     for (const key of uniforms) {
-        const loc = gl.getUniformLocation(p, key);
-        if (loc === null)
-            throw `Colorful.js: the specified uniform named '${key}' is not`
-                    + " defined within the shader.";
-        o.uniforms[key] = loc;
-    }
-
-    for (const key of attributes) {
-        o.attributes[key] = gl.getAttribLocation(p, key);
+        const important = key.startsWith("!"),
+              val = important ? key.slice(1) : key,
+              loc = gl.getUniformLocation(p, val);
+        if (loc === null) {
+            const msg = `Colorful.js: the specified uniform named '${key}' is` 
+                        + ` not defined within the shader`
+                        + ` "#${vertex_id}|#${fragment_id}".`
+            if (!important) {
+                console.warn(msg);
+                continue;
+            }
+            else
+                throw msg;
+        }
+        o.uniforms[val] = loc;
     }
 
     return o;
@@ -114,10 +115,9 @@ function create_view_matrix(x:number, y:number, s:number) {
     ]);
 }
 
-function create_view_projection_matrix(
-    x:number, y:number, s:number,
-    l:number, r:number, b:number, t:number, n:number, f:number
-) {
+function create_view_projection_matrix(x:number, y:number, s:number, ar:number) {
+    const l = -ar, r = ar, b = -1, t = 1, n = -1, f = 1;
+
     const projection_matrix = new Float32Array([
         2/(r-l), 0, 0, 0,
         0, 2/(t-b), 0, 0,
@@ -125,12 +125,155 @@ function create_view_projection_matrix(
         -(r+l)/(r-l), -(t+b)/(t-b), -(f+n)/(f-n), 1
     ]);
 
+    const inv_s = 1./s;
     const view_matrix = new Float32Array([
-        1/s, 0, 0, 0,
-        0, 1/s, 0, 0,
+        inv_s, 0, 0, 0,
+        0, inv_s, 0, 0,
         0, 0, 1, 0,
-        -x/s, -y/s, 0, 1
+        -x*inv_s, -y*inv_s, 0, 1
     ]);
 
     return mat4x4_mul(projection_matrix, view_matrix);
+}
+
+function create_buffer_vec2(data:Float32Array, at:number) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+
+function bind_vec2_attr(buffer:WebGLBuffer, at:number) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+
+function create_buffer_uint32(data:Uint32Array, at:number) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_INT, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+
+function bind_uint32_attr(buffer:WebGLBuffer, at:number) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_INT, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+
+function create_buffer_uint8(data:Uint8Array, at:number) {
+    const out = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, out);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_BYTE, 0, 0);
+    gl.enableVertexAttribArray(at);
+    return out;
+}
+
+function bind_uint8_attr(buffer:WebGLBuffer, at:number) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_BYTE, 0, 0);
+    gl.enableVertexAttribArray(at);
+}
+
+function create_R32UI_texture(width:number, height:number) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.R32UI,
+        width, height, 0,
+        gl.RED_INTEGER, gl.UNSIGNED_INT, null
+    );
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    return o;
+}
+
+function create_RGBA32F_texture(size:number, data:Float32Array|null) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA32F,
+        size, size, 0,
+        gl.RGBA, gl.FLOAT, data
+    );
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    return o;
+}
+
+function create_RGBA_texture(size:number, data:Uint8Array) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA8,
+        size, size, 0,
+        gl.RGBA, gl.UNSIGNED_BYTE, data
+    );
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    return o;
+}
+
+function create_vertex_array() {
+    const o = gl.createVertexArray();
+    gl.bindVertexArray(o);
+    return o;
+}
+
+function create_frame_buffer(tex:WebGLTexture) {
+    const o = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o);
+    gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D, tex, 0
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return o;
+}
+
+function create_frame_buffer2(tex0:WebGLTexture, tex1:WebGLTexture) {
+    const o = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o);
+    gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D, tex0, 0
+    );
+    gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1,
+        gl.TEXTURE_2D, tex1, 0
+    );
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return o;
+}
+
+function resize_R32UI_texture(tex:WebGLTexture, width:number, height:number) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.R32UI,
+        width, height, 0,
+        gl.RED_INTEGER, gl.UNSIGNED_INT, null
+    );
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 }

@@ -34,11 +34,11 @@ function wave_start(
         fcolor = data.fcolor;
         color_packed = data.color_packed;
     }
-    else {{
+    else {
         color = color_data.color;
         fcolor = color_data.fcolor;
         color_packed = color_data.color_packed;
-    }}
+    }
 
     let next: Set<adj_node>;
     if (typeof ids === "number") {

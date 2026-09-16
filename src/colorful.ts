@@ -19,6 +19,31 @@ interface ColorfulGrid {
     mesh: Float32Array;
     /** flat Uint32 array that defines per-vertex triangle id.  */
     ids: Uint32Array;
+    /** flat Float32 array that defines per-vertex uvs for the lut table. */
+    uvs: Float32Array;
+    /** flat Float32 array that defines per-vertex uvs for the first adj
+     * triangle. */
+    adj_uvs_1: Float32Array;
+    /** flat Float32 array that defines per-vertex uvs for the second adj
+     * triangle. */
+    adj_uvs_2: Float32Array;
+    /** flat Float32 array that defines per-vertex uvs for the third adj
+     * triangle. */
+    adj_uvs_3: Float32Array;
+    /** flat Uint8 array that defines per-vertex hovered state. */
+    hovered: Uint8Array;
+
+    /** used for the state shader program where points are used instead of
+     * vertices.  */
+    // cell_ids: Uint32Array;
+    // cell_uvs: Float32Array;
+    // cell_adj_uvs_1: Float32Array;
+    // cell_adj_uvs_2: Float32Array;
+    // cell_adj_uvs_3: Float32Array;
+    // /** flat Float32 array that defines per-vertex wave color weight state. */
+    // state_weights: Float32Array;
+    // /** flat Float32 array that defines per-vertex wave color state. */
+    // wcolor_dist: Float32Array;
     /** resolution of the grid. */
     side_length: number;
     /** adjacency map, per vertex id returns the list of the adjacent vertex
@@ -34,7 +59,8 @@ interface ColorfulGrid {
     /** number of pixels of the square lut texture. */
     texture_size: number;
     /** number of vertices present in the 2D mesh. */
-    vertex_count:number;
+    vertex_count: number,
+    triangle_count: number;
 }
 
 class ColorfulGrid {
@@ -44,10 +70,11 @@ class ColorfulGrid {
         this.side_length = side_length;
 
         const num_triangles = 6*side_length**2;
+        this.triangle_count = num_triangles;
         this.vertex_count = num_triangles * 3;
 
         this.adj_map = Array(num_triangles+1);
-        this.mesh = new Float32Array(num_triangles*2*3);
+        this.mesh = new Float32Array(num_triangles*6);
 
         const _2_side = side_length * 2;
         const points: [x:number, y:number][][] = 
@@ -211,23 +238,118 @@ class ColorfulGrid {
             --a;
         }
         
-        this.ids = new Uint32Array(num_triangles*3);
+        const texture_size = Math.ceil(Math.sqrt(this.vertex_count));
+        this.texture_size = texture_size;
+
+        const nt6 = num_triangles * 6,
+              nt3 = num_triangles * 3,
+              nt2 = num_triangles * 2;
+
+        this.ids = new Uint32Array(nt3);
+        // this.cell_ids = new Uint32Array(num_triangles);
+        this.uvs = new Float32Array(nt6);
+        // this.cell_uvs = new Float32Array(nt2);
+        this.hovered = new Uint8Array(nt3);
+        this.hovered.fill(0);
         for (let i=0; i<num_triangles; ++i) {
             const id = i + 1,
-                  base_i = i * 3;
+                  base_i = i * 3,
+                  base_u = i * 6,
+                  base_uc = i * 2,
+                  col = id % texture_size,
+                  row = Math.floor(id / texture_size),
+                  u = (col + 0.5) / texture_size,
+                  v = (row + 0.5) / texture_size;
+
+            // this.cell_ids[i] = id;
+
             this.ids[base_i] = id;
             this.ids[base_i+1] = id;
             this.ids[base_i+2] = id;
+
+            // this.cell_uvs[base_uc] = u;
+            // this.cell_uvs[base_uc+1] = v;
+
+            this.uvs[base_u] = u;
+            this.uvs[base_u+1] = v;
+            this.uvs[base_u+2] = u;
+            this.uvs[base_u+3] = v;
+            this.uvs[base_u+4] = u;
+            this.uvs[base_u+5] = v;
         }
 
-        const texture_size = Math.ceil(Math.sqrt(this.vertex_count));
-        this.texture = new Uint8Array(texture_size * texture_size * 4);
-        this.texture_size = texture_size;
+        this.adj_uvs_1 = new Float32Array(nt6);
+        // this.cell_adj_uvs_1 = new Float32Array(nt2);
+        this.adj_uvs_2 = new Float32Array(nt6);
+        // this.cell_adj_uvs_2 = new Float32Array(nt2);
+        this.adj_uvs_3 = new Float32Array(nt6);
+        // this.cell_adj_uvs_3 = new Float32Array(nt2);
+        for (let i=0; i<num_triangles; ++i) {
+            const id = i + 1,
+                  base_i = i * 6,
+                  base_ic = i * 2,
+                  base_1 = this.adj_map[id][0] * 6,
+                  base_2 = this.adj_map[id][1] * 6,
+                  base_3 = this.adj_map[id][2] === undefined ? -1 : this.adj_map[id][2] * 6
 
+            const u1 = this.uvs[base_1], v1 = this.uvs[base_1+1];
+            // this.cell_adj_uvs_1[base_ic] = u1;
+            // this.cell_adj_uvs_1[base_ic+1] = v1;
+
+            this.adj_uvs_1[base_i] = u1;
+            this.adj_uvs_1[base_i+1] = v1;
+            this.adj_uvs_1[base_i+2] = u1;
+            this.adj_uvs_1[base_i+3] = v1;
+            this.adj_uvs_1[base_i+4] = u1;
+            this.adj_uvs_1[base_i+5] = v1;
+
+            const u2 = this.uvs[base_2], v2 = this.uvs[base_2+1];
+            // this.cell_adj_uvs_2[base_ic] = u2;
+            // this.cell_adj_uvs_2[base_ic+1] = v2;
+
+            this.adj_uvs_2[base_i] = u2;
+            this.adj_uvs_2[base_i+1] = v2;
+            this.adj_uvs_2[base_i+2] = u2;
+            this.adj_uvs_2[base_i+3] = v2;
+            this.adj_uvs_2[base_i+4] = u2;
+            this.adj_uvs_2[base_i+5] = v2;
+
+            if (base_3 === -1) {
+                // this.cell_adj_uvs_3[base_ic] = -1;
+                // this.cell_adj_uvs_3[base_ic+1] = -1;
+
+                this.adj_uvs_3[base_i] = -1;
+                this.adj_uvs_3[base_i+1] = -1;
+                this.adj_uvs_3[base_i+2] = -1;
+                this.adj_uvs_3[base_i+3] = -1;
+                this.adj_uvs_3[base_i+4] = -1;
+                this.adj_uvs_3[base_i+5] = -1;
+            }
+            else {
+                const u3 = this.uvs[base_3], v3 = this.uvs[base_3+1];
+                // this.cell_adj_uvs_3[base_ic] = u3;
+                // this.cell_adj_uvs_3[base_ic+1] = v3;
+
+                this.adj_uvs_3[base_i] = u3;
+                this.adj_uvs_3[base_i+1] = v3;
+                this.adj_uvs_3[base_i+2] = u3;
+                this.adj_uvs_3[base_i+3] = v3;
+                this.adj_uvs_3[base_i+4] = u3;
+                this.adj_uvs_3[base_i+5] = v3;
+            }
+        }
+        
+        const tex_length = texture_size * texture_size * 4;
+
+        this.texture = new Uint8Array(tex_length);
         const u32view = new Uint32Array(this.texture.buffer);
         u32view.fill(pack_uint8(color));
-        
         this.texture_u32view = u32view;
+
+        // this.state_weights = new Float32Array(tex_length);
+        // this.state_weights.fill(0.0);
+        // this.wcolor_dist = new Float32Array(tex_length);
+        // this.wcolor_dist.fill(0.0);
 
         this.adj_graph = Array(num_triangles+1);
         for (let id=1; id<this.adj_map.length; ++id) {
