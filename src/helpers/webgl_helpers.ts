@@ -1,25 +1,70 @@
-function compile_shader_program(
+const t = {
+    "u_delta_time": { type:3, default:5 }
+}
+
+type uniform_def = {
+    type:number;
+    default?:number;
+    get?:()=>number;
+}
+
+const NO_DEFAULT = undefined;
+const UPDATE = true,
+      NO_UPDATE = false;
+const GL_INT = 0,
+      GL_FLOAT = 1,
+      GL_MAT4x4 = 2,
+      GL_TEXTURE = 3;
+type uniform_type = 
+    typeof GL_INT | typeof GL_FLOAT | typeof GL_MAT4x4 | typeof GL_TEXTURE;
+type uniform_update = typeof UPDATE | typeof NO_UPDATE;
+interface uniform {
+    name: string;
+    type: uniform_type;
+    update: uniform_update;
+    loc: WebGLUniformLocation|null;
+    important: boolean;
+    get?: () => number;
+    update_value:() => void;
+}
+
+class uniform {
+    constructor(name:string, type:uniform_type, update:uniform_update, get?:()=>any) {
+        const important = name.startsWith("!"),
+              val = important ? name.slice(1) : name;
+        this.name = val;
+        this.important = important;
+        this.update = update;
+        this.get = get;
+        // @ts-ignore
+        this.loc = null;
+        this.type = type;
+        this.get = get;
+    }
+}
+
+function compile_and_use_shader_program(
         gl:WebGL2RenderingContext, vertex_id:string, fragment_id:string,
-        uniforms=[] as string[]
+        uniforms=[] as uniform[]
     ) {
     if (gl === null || gl === undefined)
-        throw "Colorful.js: compile_shader_program(): the passed WebGL " +
+        throw "Colorful.js: compile_and_use_shader_program(): the passed WebGL " +
               "context is null or undefined";
     
     if (!Array.isArray(uniforms))
-        throw "Colorful.js: compile_shader_program(): uniforms must be an " +
-              "array of string";
+        throw "Colorful.js: compile_and_use_shader_program(): uniforms must be an " +
+              "array";
 
     const v_el = document.getElementById(vertex_id),
           f_el = document.getElementById(fragment_id);
 
     if (!(v_el instanceof HTMLScriptElement) || v_el.type !== "x-shader/vs")
-        throw "Colorful.js: compile_shader_program(): vertex source element " +
+        throw "Colorful.js: compile_and_use_shader_program(): vertex source element " +
               // @ts-ignore
               "is expected to be of a <script> element of type 'x-shader/vs' (got " + v_el.type + ")";
 
     if (!(f_el instanceof HTMLScriptElement) || f_el.type !== "x-shader/fs")
-        throw "Colorful.js: compile_shader_program(): fragment source element " +
+        throw "Colorful.js: compile_and_use_shader_program(): fragment source element " +
               "is expected to be of a <script> element of type 'x-shader/vs'";
     
     const v_src = v_el.textContent.trimStart(),
@@ -55,31 +100,68 @@ function compile_shader_program(
         throw "Colorful.js: compile_shader(): failed to link shader program, " +
               "reason: " + gl.getProgramInfoLog(p);
 
+    const uniforms_to_update = [] as string[];
     const o = {
         vertex: v,
         fragment: f,
         program: p,
-        uniforms: {} as Record<string, WebGLUniformLocation|null>,
-        useProgram() { gl.useProgram(p) }
+        uniforms_to_update: uniforms_to_update,
+        uniforms: {} as Record<string, uniform>,
+        use_program_and_update_values() { 
+            gl.useProgram(p);
+            for (const key of uniforms_to_update) {
+                o.uniforms[key].update_value();
+            }
+        }
     }
+    gl.useProgram(p);
 
-    for (const key of uniforms) {
-        const important = key.startsWith("!"),
-              val = important ? key.slice(1) : key,
-              loc = gl.getUniformLocation(p, val);
+    for (const u of uniforms) {
+        const name = u.name,
+              loc = gl.getUniformLocation(p, name);;
         if (loc === null) {
-            const msg = `Colorful.js: the specified uniform named '${key}' is` 
+            const msg = `Colorful.js: the specified uniform named '${name}' is` 
                         + ` not defined within the shader`
                         + ` "#${vertex_id}|#${fragment_id}".`
-            if (!important) {
+            if (!u.important) {
                 console.warn(msg);
-                o.uniforms[val] = null;
                 continue;
             }
             else
                 throw msg;
         }
-        o.uniforms[val] = loc;
+        o.uniforms[name] = u;
+        let pass_to_GPU: (loc:WebGLUniformLocation,x:any)=>void;
+        switch (u.type) {
+            case GL_INT:
+                pass_to_GPU = int_to_gpu;
+                break;
+            case GL_FLOAT:
+                pass_to_GPU = float_to_gpu;
+                break;
+            case GL_MAT4x4:
+                pass_to_GPU = mat4x4_to_gpu;
+                break;
+            case GL_TEXTURE:
+                pass_to_GPU = int_to_gpu;
+                break;
+            default:
+                throw "uniform: invalid type."
+        }
+        if (loc === null)
+            u.update_value =
+                () => console.warn(`uniform '${name}' is not defined in the shader.`);
+        else if (!(u.get instanceof Function))
+            u.update_value =
+                () => console.warn(`uniform '${name}' has no getter function for automatic gpu value update.`);
+        else {
+            // @ts-ignore
+            u.update_value = () => pass_to_GPU(loc, u.get());
+            pass_to_GPU(loc, u.get())
+        }
+        
+        if (u.update)
+            uniforms_to_update.push(name);
     }
 
     return o;
@@ -257,4 +339,16 @@ function resize_R32UI_texture(tex:WebGLTexture, width:number, height:number) {
 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+
+function int_to_gpu(loc:WebGLUniformLocation, x:number) {
+    gl.uniform1i(loc, x);
+}
+
+function float_to_gpu(loc:WebGLUniformLocation, x:number) {
+    gl.uniform1f(loc, x);
+}
+
+function mat4x4_to_gpu(loc:WebGLUniformLocation, x:Float32Array) {
+    gl.uniformMatrix4fv(loc, false, x);
 }

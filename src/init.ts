@@ -1,9 +1,9 @@
 let gl: WebGL2RenderingContext,
     /** grid shader program. */
-    p: ReturnType<typeof compile_shader_program>,
+    p: ReturnType<typeof compile_and_use_shader_program>,
     /** grid vertex mask shader program. */
-    mask_p: ReturnType<typeof compile_shader_program>,
-    state_p: ReturnType<typeof compile_shader_program>,
+    mask_p: ReturnType<typeof compile_and_use_shader_program>,
+    state_p: ReturnType<typeof compile_and_use_shader_program>,
     grid: ColorfulGrid,
     mask_texture:WebGLTexture,
     mask_fbo:WebGLFramebuffer,
@@ -24,10 +24,10 @@ let gl: WebGL2RenderingContext,
     mask_vao:WebGLVertexArrayObject,
     /** state grid vertex array object. */
     state_vao:WebGLVertexArrayObject,
-    state_tex_00:WebGLTexture,
-    state_tex_01:WebGLTexture,
-    state_tex_10:WebGLTexture,
-    state_tex_11:WebGLTexture,
+    state_weights_0:WebGLTexture,
+    wcolor_dist_0:WebGLTexture,
+    state_weights_1:WebGLTexture,
+    wcolor_dist_1:WebGLTexture,
     state_read_index: number,
     hovered_buffer: WebGLBuffer,
     /** grid.vertex_count */
@@ -100,24 +100,6 @@ function init() {
     //         MAIN SHADER          //
     //////////////////////////////////
 
-    if (gpu) {
-        p = compile_shader_program(gl, "gpu-vert", "gpu-frag",
-            [
-                "!u_view_proj","!u_texture","u_state_weights","u_wcolor_dist",
-                "u_blend_value","u_wave_decay","u_decay_min_radius",
-                "u_max_weight"//,"u_wave_id"
-            ]
-        );
-    }
-    else {
-        p = compile_shader_program(gl, "cpu-vert", "cpu-frag",
-            [
-                "!u_view_proj","!u_texture"
-            ]
-        )
-    }
-    p.useProgram();
-
     canvas_rect = canvas_el.getBoundingClientRect();
     units_per_pixel_x = 2 * camera_scale / canvas_rect.width;        
     units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
@@ -131,6 +113,27 @@ function init() {
 
     canvas_el.width = width;
     canvas_el.height = height;
+
+    if (gpu) {
+        p = compile_and_use_shader_program(gl, "gpu-vert", "gpu-frag", [
+            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+            new uniform("u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 1),
+            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 2),
+            new uniform("u_blend_value", GL_FLOAT, UPDATE, () => blend_value),
+            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
+            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
+            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
+            new uniform("u_state_ramp_width", GL_FLOAT, NO_UPDATE, () => 20.0)
+        ]);
+    }
+    else {
+        p = compile_and_use_shader_program(gl, "cpu-vert", "cpu-frag", [
+            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+            new uniform("!u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+        ]);
+    }
+
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
 
     grid = new ColorfulGrid(side_length, gpu, grid_bg, brush_size);
@@ -152,28 +155,15 @@ function init() {
         hovered_buffer = create_dyn_buffer_uint8(grid.hovered, 6);
     }
 
-    gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
-    
     color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
-    gl.uniform1i(p.uniforms["u_texture"], 0);
-    if (gpu) {
-        gl.uniform1i(p.uniforms["u_state_weights"], 1);
-        gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
-        gl.uniform1f(p.uniforms["u_blend_value"], blend_value);
-        gl.uniform1f(p.uniforms["u_wave_decay"], wave_decay);
-        gl.uniform1f(p.uniforms["u_decay_min_radius"], decay_min_radius);
-        gl.uniform1f(p.uniforms["u_max_weight"], max_weight);
-        //gl.uniform1f(p.uniforms["u_wave_id"], 1);
-    }
    
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
 
-    mask_p = compile_shader_program(gl, "mask-vert", "mask-frag",
-        ["!u_view_proj"]
-    );
-    mask_p.useProgram();
+    mask_p = compile_and_use_shader_program(gl, "mask-vert", "mask-frag", [
+        new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+    ]);
     
     mask_vao = create_vertex_array();
 
@@ -184,20 +174,19 @@ function init() {
 
     mask_fbo = create_frame_buffer(mask_texture);
 
-    gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
-
     //////////////////////////////////
     //       STATE SHADER           //
     //////////////////////////////////
 
     if (gpu) {
-        state_p = compile_shader_program(gl, "state-vert", "state-frag",
-            [
-                "!u_state_weights","!u_wcolor_dist","!u_delta_time",
-                "u_max_weight","u_wave_decay","u_decay_min_radius",
-            ]
-        );
-        state_p.useProgram();
+        state_p = compile_and_use_shader_program(gl, "state-vert", "state-frag", [
+            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 0),
+            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 1),
+            new uniform("u_delta_time", GL_FLOAT, UPDATE, () => delta_time),
+            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
+            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
+            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
+        ]);
 
         state_vao = create_vertex_array();
         create_buffer_uint32(grid.cell_ids, 0);
@@ -206,20 +195,13 @@ function init() {
         create_buffer_vec2(grid.cell_adj_uvs_2, 3);
         create_buffer_vec2(grid.cell_adj_uvs_3, 4);
 
-        state_tex_00 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        state_tex_01 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo0 = create_frame_buffer2(state_tex_00, state_tex_01);
+        state_weights_0 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
+        wcolor_dist_0 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
+        state_fbo0 = create_frame_buffer2(state_weights_0, wcolor_dist_0);
 
-        state_tex_10 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        state_tex_11 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo1 = create_frame_buffer2(state_tex_10, state_tex_11);
-
-        gl.uniform1f(state_p.uniforms["u_max_weight"], max_weight);
-        gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
-        gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 1);
-        // gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
-        gl.uniform1f(state_p.uniforms["u_wave_decay"], wave_decay);
-        gl.uniform1f(state_p.uniforms["u_decay_minus_radius"], decay_min_radius);
+        state_weights_1 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
+        wcolor_dist_1 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
+        state_fbo1 = create_frame_buffer2(state_weights_1, wcolor_dist_1);
 
         state_read_index = 0;
     }

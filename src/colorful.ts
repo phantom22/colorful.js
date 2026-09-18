@@ -405,7 +405,8 @@ class ColorfulGrid {
                 }
                 frontier = new_frontier;
             }
-            node.brush = brush;            
+            node.brush = brush;
+            node.brushn = brushn;          
         }
     }
 }

@@ -374,9 +374,9 @@ uniform highp float u_max_weight;
 layout(location = 0) out highp vec4 o_state_weights;
 layout(location = 1) out highp vec4 o_wcolor_dist;
 
-const float STATE_RATE = 100.0;
+const float STATE_RATE = 50.0;
 const float WEIGHT_DECAY = 5.0;  // higher = memory fades faster; ~1/WEIGHT_DECAY sec time-constant
-const float DIFFUSION_RATE = 100.0; // tune: higher = faster global convergence
+const float DIFFUSION_RATE = 300.0; // tune: higher = faster global convergence
 
 void main() {
     bool has_third = v_adj_uv3.x >= 0.0;
@@ -426,7 +426,12 @@ void main() {
         float blend_total = decayed_weight + incoming_weight;
 
         propagated_color = (self_wd.rgb * decayed_weight + incoming_color * incoming_weight) / max(blend_total, 1e-5);
-        new_distance = floor(w1 * wd1.a + w2 * wd2.a + w3 * wd3.a + 1.0 + 0.5);
+        
+        float catch_up_progress = clamp((new_state - this_state) / max(from_state - this_state, 1e-5), 0.0, 1.0);
+        float neighbor_distance = w1 * wd1.a + w2 * wd2.a + w3 * wd3.a;
+        new_distance = self_wd.a + catch_up_progress * ((neighbor_distance + 1.0) - self_wd.a);
+
+        //new_distance = floor(w1 * wd1.a + w2 * wd2.a + w3 * wd3.a + 1.0 + 0.5);
         new_weight = min(blend_total, u_max_weight);
     } else {
         propagated_color = self_wd.rgb;

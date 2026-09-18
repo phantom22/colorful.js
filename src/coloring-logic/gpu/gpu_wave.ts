@@ -23,8 +23,8 @@ function gpu_wave_start(
     const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
     const wcolor_dist = new Float32Array([r, g, b, 0.0]);
 
-    const target_tex0 = state_read_index === 0 ? state_tex_00 : state_tex_10;
-    const target_tex1 = state_read_index === 0 ? state_tex_01 : state_tex_11;
+    const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
+    const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
     for (const id of brush) {
         const col = id % grid.texture_size,
               row = Math.floor(id / grid.texture_size);

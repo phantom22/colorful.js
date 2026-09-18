@@ -246,20 +246,39 @@ const palette = [
     new Uint8Array([64, 64, 64])
 ];
 let palette_color_data = palette.map(v => get_color_data(v));
-function compile_shader_program(gl, vertex_id, fragment_id, uniforms = []) {
+const t = {
+    "u_delta_time": { type: 3, default: 5 }
+};
+const NO_DEFAULT = undefined;
+const UPDATE = true, NO_UPDATE = false;
+const GL_INT = 0, GL_FLOAT = 1, GL_MAT4x4 = 2, GL_TEXTURE = 3;
+class uniform {
+    constructor(name, type, update, get) {
+        const important = name.startsWith("!"), val = important ? name.slice(1) : name;
+        this.name = val;
+        this.important = important;
+        this.update = update;
+        this.get = get;
+        // @ts-ignore
+        this.loc = null;
+        this.type = type;
+        this.get = get;
+    }
+}
+function compile_and_use_shader_program(gl, vertex_id, fragment_id, uniforms = []) {
     if (gl === null || gl === undefined)
-        throw "Colorful.js: compile_shader_program(): the passed WebGL " +
+        throw "Colorful.js: compile_and_use_shader_program(): the passed WebGL " +
             "context is null or undefined";
     if (!Array.isArray(uniforms))
-        throw "Colorful.js: compile_shader_program(): uniforms must be an " +
-            "array of string";
+        throw "Colorful.js: compile_and_use_shader_program(): uniforms must be an " +
+            "array";
     const v_el = document.getElementById(vertex_id), f_el = document.getElementById(fragment_id);
     if (!(v_el instanceof HTMLScriptElement) || v_el.type !== "x-shader/vs")
-        throw "Colorful.js: compile_shader_program(): vertex source element " +
+        throw "Colorful.js: compile_and_use_shader_program(): vertex source element " +
             // @ts-ignore
             "is expected to be of a <script> element of type 'x-shader/vs' (got " + v_el.type + ")";
     if (!(f_el instanceof HTMLScriptElement) || f_el.type !== "x-shader/fs")
-        throw "Colorful.js: compile_shader_program(): fragment source element " +
+        throw "Colorful.js: compile_and_use_shader_program(): fragment source element " +
             "is expected to be of a <script> element of type 'x-shader/vs'";
     const v_src = v_el.textContent.trimStart(), f_src = f_el.textContent.trimStart();
     const v = gl.createShader(gl.VERTEX_SHADER);
@@ -285,28 +304,66 @@ function compile_shader_program(gl, vertex_id, fragment_id, uniforms = []) {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS))
         throw "Colorful.js: compile_shader(): failed to link shader program, " +
             "reason: " + gl.getProgramInfoLog(p);
+    const uniforms_to_update = [];
     const o = {
         vertex: v,
         fragment: f,
         program: p,
+        uniforms_to_update: uniforms_to_update,
         uniforms: {},
-        useProgram() { gl.useProgram(p); }
+        use_program_and_update_values() {
+            gl.useProgram(p);
+            for (const key of uniforms_to_update) {
+                o.uniforms[key].update_value();
+            }
+        }
     };
-    for (const key of uniforms) {
-        const important = key.startsWith("!"), val = important ? key.slice(1) : key, loc = gl.getUniformLocation(p, val);
+    gl.useProgram(p);
+    for (const u of uniforms) {
+        const name = u.name, loc = gl.getUniformLocation(p, name);
+        ;
         if (loc === null) {
-            const msg = `Colorful.js: the specified uniform named '${key}' is`
+            const msg = `Colorful.js: the specified uniform named '${name}' is`
                 + ` not defined within the shader`
                 + ` "#${vertex_id}|#${fragment_id}".`;
-            if (!important) {
+            if (!u.important) {
                 console.warn(msg);
-                o.uniforms[val] = null;
                 continue;
             }
             else
                 throw msg;
         }
-        o.uniforms[val] = loc;
+        o.uniforms[name] = u;
+        let pass_to_GPU;
+        switch (u.type) {
+            case GL_INT:
+                pass_to_GPU = int_to_gpu;
+                break;
+            case GL_FLOAT:
+                pass_to_GPU = float_to_gpu;
+                break;
+            case GL_MAT4x4:
+                pass_to_GPU = mat4x4_to_gpu;
+                break;
+            case GL_TEXTURE:
+                pass_to_GPU = int_to_gpu;
+                break;
+            default:
+                throw "uniform: invalid type.";
+        }
+        if (loc === null)
+            u.update_value =
+                () => console.warn(`uniform '${name}' is not defined in the shader.`);
+        else if (!(u.get instanceof Function))
+            u.update_value =
+                () => console.warn(`uniform '${name}' has no getter function for automatic gpu value update.`);
+        else {
+            // @ts-ignore
+            u.update_value = () => pass_to_GPU(loc, u.get());
+            pass_to_GPU(loc, u.get());
+        }
+        if (u.update)
+            uniforms_to_update.push(name);
     }
     return o;
 }
@@ -429,6 +486,15 @@ function resize_R32UI_texture(tex, width, height) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+function int_to_gpu(loc, x) {
+    gl.uniform1i(loc, x);
+}
+function float_to_gpu(loc, x) {
+    gl.uniform1f(loc, x);
+}
+function mat4x4_to_gpu(loc, x) {
+    gl.uniformMatrix4fv(loc, false, x);
 }
 class adj_node {
     constructor(id) {
@@ -699,6 +765,7 @@ class ColorfulGrid {
                 frontier = new_frontier;
             }
             node.brush = brush;
+            node.brushn = brushn;
         }
     }
 }
@@ -1063,8 +1130,8 @@ function gpu_wave_start(ids, color_data, _wave_id) {
     const [r, g, b] = fcolor;
     const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
     const wcolor_dist = new Float32Array([r, g, b, 0.0]);
-    const target_tex0 = state_read_index === 0 ? state_tex_00 : state_tex_10;
-    const target_tex1 = state_read_index === 0 ? state_tex_01 : state_tex_11;
+    const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
+    const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
     for (const id of brush) {
         const col = id % grid.texture_size, row = Math.floor(id / grid.texture_size);
         gl.bindTexture(gl.TEXTURE_2D, target_tex0);
@@ -1196,12 +1263,16 @@ request_clear = false,
 /** current frame id. */
 frame = 0, 
 /** used to calculate delta_time. */
-prev_frame_timestamp = 0, delta_time = 0;
+prev_frame_timestamp = 0, delta_time = 0, window_hidden = false;
 function draw(timestamp) {
-    ++frame;
-    wheel_already_processed = false;
     delta_time = (timestamp - prev_frame_timestamp) * 0.001;
     prev_frame_timestamp = timestamp;
+    if (window_hidden) {
+        requestAnimationFrame(draw);
+        return;
+    }
+    ++frame;
+    wheel_already_processed = false;
     if (update_view_proj_mat)
         view_proj_mat =
             create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
@@ -1209,31 +1280,31 @@ function draw(timestamp) {
         fill_grid();
         request_clear = false;
     }
-    let source_texture0, source_texture1, target_texture0, target_texture1, target_fbo;
+    let source_state_weights, source_wcolor_dist, target_state_weights, target_wcolor_dist, target_fbo;
     if (gpu) {
         if (state_read_index === 0) {
-            source_texture0 = state_tex_00;
-            source_texture1 = state_tex_01;
+            source_state_weights = state_weights_0;
+            source_wcolor_dist = wcolor_dist_0;
             target_fbo = state_fbo1;
-            target_texture0 = state_tex_10;
-            target_texture1 = state_tex_11;
+            target_state_weights = state_weights_1;
+            target_wcolor_dist = wcolor_dist_1;
         }
         else {
-            source_texture0 = state_tex_10;
-            source_texture1 = state_tex_11;
+            source_state_weights = state_weights_1;
+            source_wcolor_dist = wcolor_dist_1;
             target_fbo = state_fbo0;
-            target_texture0 = state_tex_00;
-            target_texture1 = state_tex_01;
+            target_state_weights = state_weights_0;
+            target_wcolor_dist = wcolor_dist_0;
         }
     }
     if (state_is_dirty) {
-        gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+        gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
-        gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+        gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
         state_is_dirty = false;
     }
-    // fully consume previous syncs
+    // poll previous mouse inputs
     for (let i = 0; i < pbo_count; i++) {
         const sync = syncs[i];
         if (sync) {
@@ -1251,11 +1322,11 @@ function draw(timestamp) {
     if (force_render_mask || request_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
         if (force_render_mask) {
-            mask_p.useProgram();
+            mask_p.use_program_and_update_values();
             gl.bindVertexArray(mask_vao);
             gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
-            gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
+            mask_p.uniforms["u_view_proj"].update_value();
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
             force_render_mask = false;
         }
@@ -1278,10 +1349,7 @@ function draw(timestamp) {
     //       STATE PROPAGATION      //
     //////////////////////////////////
     if (gpu) {
-        state_p.useProgram();
-        gl.uniform1f(state_p.uniforms["u_delta_time"], delta_time);
-        gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
-        gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 1);
+        state_p.use_program_and_update_values();
         gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
         gl.viewport(0, 0, grid.texture_size, grid.texture_size);
         gl.activeTexture(gl.TEXTURE0);
@@ -1291,9 +1359,9 @@ function draw(timestamp) {
             texture_is_dirty = false;
         }
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+        gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+        gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
         gl.bindVertexArray(state_vao);
         gl.disable(gl.BLEND);
         gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
@@ -1302,17 +1370,10 @@ function draw(timestamp) {
     //////////////////////////////////
     //         MAIN SHADER          //
     //////////////////////////////////
-    p.useProgram();
-    // gl.uniform1f(p.uniforms["u_delta_time"], delta_time);
+    p.use_program_and_update_values();
     if (update_view_proj_mat) {
-        gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
+        p.uniforms["u_view_proj"].update_value();
         update_view_proj_mat = false;
-    }
-    //gl.uniform1f(p.uniforms["u_wave_id"], wave_id-1);
-    gl.uniform1i(p.uniforms["u_texture"], 0);
-    if (gpu) {
-        gl.uniform1i(p.uniforms["u_state_weights"], 1);
-        gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
     }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);
@@ -1323,12 +1384,12 @@ function draw(timestamp) {
     }
     if (gpu) {
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, target_texture0);
+        gl.bindTexture(gl.TEXTURE_2D, target_state_weights);
         gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, target_texture1);
+        gl.bindTexture(gl.TEXTURE_2D, target_wcolor_dist);
+        gl.enable(gl.BLEND);
     }
     gl.bindVertexArray(vao);
-    gl.enable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
     if (gpu)
         state_read_index = 1 - state_read_index;
@@ -1352,7 +1413,7 @@ vao, color_texture,
 /** mask grid vertex array object. */
 mask_vao, 
 /** state grid vertex array object. */
-state_vao, state_tex_00, state_tex_01, state_tex_10, state_tex_11, state_read_index, hovered_buffer, 
+state_vao, state_weights_0, wcolor_dist_0, state_weights_1, wcolor_dist_1, state_read_index, hovered_buffer, 
 /** grid.vertex_count */
 vertex_count, 
 /** used to asynchronously read from gpu without cpu stalls. */
@@ -1395,19 +1456,6 @@ function init() {
     //////////////////////////////////
     //         MAIN SHADER          //
     //////////////////////////////////
-    if (gpu) {
-        p = compile_shader_program(gl, "gpu-vert", "gpu-frag", [
-            "!u_view_proj", "!u_texture", "u_state_weights", "u_wcolor_dist",
-            "u_blend_value", "u_wave_decay", "u_decay_min_radius",
-            "u_max_weight" //,"u_wave_id"
-        ]);
-    }
-    else {
-        p = compile_shader_program(gl, "cpu-vert", "cpu-frag", [
-            "!u_view_proj", "!u_texture"
-        ]);
-    }
-    p.useProgram();
     canvas_rect = canvas_el.getBoundingClientRect();
     units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
     units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
@@ -1418,6 +1466,25 @@ function init() {
         create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
     canvas_el.width = width;
     canvas_el.height = height;
+    if (gpu) {
+        p = compile_and_use_shader_program(gl, "gpu-vert", "gpu-frag", [
+            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+            new uniform("u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 1),
+            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 2),
+            new uniform("u_blend_value", GL_FLOAT, UPDATE, () => blend_value),
+            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
+            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
+            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
+            new uniform("u_state_ramp_width", GL_FLOAT, NO_UPDATE, () => 20.0)
+        ]);
+    }
+    else {
+        p = compile_and_use_shader_program(gl, "cpu-vert", "cpu-frag", [
+            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+            new uniform("!u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+        ]);
+    }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     grid = new ColorfulGrid(side_length, gpu, grid_bg, brush_size);
     vertex_count = grid.vertex_count;
@@ -1433,56 +1500,42 @@ function init() {
         create_buffer_vec2(grid.adj_uvs_3, 5); // adj3_buffer
         hovered_buffer = create_dyn_buffer_uint8(grid.hovered, 6);
     }
-    gl.uniformMatrix4fv(p.uniforms["u_view_proj"], false, view_proj_mat);
     color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
-    gl.uniform1i(p.uniforms["u_texture"], 0);
-    if (gpu) {
-        gl.uniform1i(p.uniforms["u_state_weights"], 1);
-        gl.uniform1i(p.uniforms["u_wcolor_dist"], 2);
-        gl.uniform1f(p.uniforms["u_blend_value"], blend_value);
-        gl.uniform1f(p.uniforms["u_wave_decay"], wave_decay);
-        gl.uniform1f(p.uniforms["u_decay_min_radius"], decay_min_radius);
-        gl.uniform1f(p.uniforms["u_max_weight"], max_weight);
-        //gl.uniform1f(p.uniforms["u_wave_id"], 1);
-    }
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
-    mask_p = compile_shader_program(gl, "mask-vert", "mask-frag", ["!u_view_proj"]);
-    mask_p.useProgram();
+    mask_p = compile_and_use_shader_program(gl, "mask-vert", "mask-frag", [
+        new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+    ]);
     mask_vao = create_vertex_array();
     bind_vec2_attr(pos_buffer, 0);
     bind_uint32_attr(id_buffer, 1);
     mask_texture = create_R32UI_texture(width, height);
     mask_fbo = create_frame_buffer(mask_texture);
-    gl.uniformMatrix4fv(mask_p.uniforms["u_view_proj"], false, view_proj_mat);
     //////////////////////////////////
     //       STATE SHADER           //
     //////////////////////////////////
     if (gpu) {
-        state_p = compile_shader_program(gl, "state-vert", "state-frag", [
-            "!u_state_weights", "!u_wcolor_dist", "!u_delta_time",
-            "u_max_weight", "u_wave_decay", "u_decay_min_radius",
+        state_p = compile_and_use_shader_program(gl, "state-vert", "state-frag", [
+            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 0),
+            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 1),
+            new uniform("u_delta_time", GL_FLOAT, UPDATE, () => delta_time),
+            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
+            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
+            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
         ]);
-        state_p.useProgram();
         state_vao = create_vertex_array();
         create_buffer_uint32(grid.cell_ids, 0);
         create_buffer_vec2(grid.cell_uvs, 1);
         create_buffer_vec2(grid.cell_adj_uvs_1, 2);
         create_buffer_vec2(grid.cell_adj_uvs_2, 3);
         create_buffer_vec2(grid.cell_adj_uvs_3, 4);
-        state_tex_00 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        state_tex_01 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo0 = create_frame_buffer2(state_tex_00, state_tex_01);
-        state_tex_10 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        state_tex_11 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo1 = create_frame_buffer2(state_tex_10, state_tex_11);
-        gl.uniform1f(state_p.uniforms["u_max_weight"], max_weight);
-        gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
-        gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 1);
-        // gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
-        gl.uniform1f(state_p.uniforms["u_wave_decay"], wave_decay);
-        gl.uniform1f(state_p.uniforms["u_decay_minus_radius"], decay_min_radius);
+        state_weights_0 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
+        wcolor_dist_0 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
+        state_fbo0 = create_frame_buffer2(state_weights_0, wcolor_dist_0);
+        state_weights_1 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
+        wcolor_dist_1 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
+        state_fbo1 = create_frame_buffer2(state_weights_1, wcolor_dist_1);
         state_read_index = 0;
     }
     if (gpu) {
@@ -1695,8 +1748,12 @@ function state_cleanup() {
     queued_strokes = [];
     stroke_count = -1;
 }
+function d_visibilitychange() {
+    window_hidden = document.hidden;
+}
 window.onresize = update_viewport;
 window.onblur = state_cleanup;
+document.onvisibilitychange = d_visibilitychange;
 // window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, { passive: false });
 window.onload = init;
