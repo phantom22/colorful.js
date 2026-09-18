@@ -63,7 +63,8 @@ const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0,1)),
       new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0,1),
       new_color_p = searchParams.getNumber("new_color_p", 0.1, 0,1),
       new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0,1),
-      grid_bg = searchParams.getUint8Color("grid_bg");
+      grid_bg = searchParams.getUint8Color("grid_bg"),
+      max_weight = 3.0;
 
 const params = new URLSearchParams([
     ["gpu", `${gpu}`],

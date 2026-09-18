@@ -59,7 +59,7 @@ function compile_shader_program(
         vertex: v,
         fragment: f,
         program: p,
-        uniforms: {} as Record<string, WebGLUniformLocation>,
+        uniforms: {} as Record<string, WebGLUniformLocation|null>,
         useProgram() { gl.useProgram(p) }
     }
 

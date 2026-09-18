@@ -24,7 +24,7 @@ function cpu_wave_start(
     if (_state <= prevent_waves_last_id)
         return;
 
-    let color: Uint8Array, fcolor: Float32Array, color_packed:number;
+    let color: Uint8Array, fcolor: Float32Array, packed:number;
     if (color_data === undefined) {
         const data = choosen_palette[palette_color];
         color = data.color;
@@ -32,12 +32,12 @@ function cpu_wave_start(
             palette_color = (palette_color+1) % choosen_palette.length;
 
         fcolor = data.fcolor;
-        color_packed = data.color_packed;
+        packed = data.packed;
     }
     else {
         color = color_data.color;
         fcolor = color_data.fcolor;
-        color_packed = color_data.color_packed;
+        packed = color_data.packed;
     }
 
     let next: Set<adj_node>;
@@ -51,7 +51,7 @@ function cpu_wave_start(
             grid.texture[offset+3] = 255;
         }
         else
-            grid.texture_u32view[ids] = color_packed;
+            grid.texture_u32view[ids] = packed;
         
         next = new Set(grid.adj_graph[ids].next);
     }
@@ -60,7 +60,7 @@ function cpu_wave_start(
         for (const id of ids) {
             const node = grid.adj_graph[id];
             node.state = _state;
-            grid.texture_u32view[id] = color_packed;
+            grid.texture_u32view[id] = packed;
 
             for (const nnext of node.next) {
                 if (next.has(nnext))
@@ -71,7 +71,7 @@ function cpu_wave_start(
     }
 
     texture_is_dirty = true;
-    cpu_wave_propagate(next, _state, {color,fcolor,color_packed}, 0);
+    cpu_wave_propagate(next, _state, {color,fcolor,packed}, 0);
 }
 
 function cpu_wave_propagate(
@@ -90,7 +90,7 @@ function cpu_wave_propagate(
     if (wave_decay < 1)
         factor *= wave_decay ** Math.max(depth-decay_min_radius-1, 0);
 
-    const {color,color_packed} = color_data;
+    const {color,packed} = color_data;
     for (const node of ids) {
         if (node.state === state) {
             ids.delete(node);
@@ -147,7 +147,7 @@ function cpu_wave_propagate(
                 grid.texture[offset+3] = 255;
             }
             else
-                grid.texture_u32view[node_id] = color_packed;
+                grid.texture_u32view[node_id] = packed;
         }
         else if (factor > 0) {
             const p_in = 1-factor,
@@ -265,8 +265,9 @@ function cpu_inward_wave() {
 function cpu_fill_grid(color?:color_data) {
     const clear_color = color === undefined ?
         pack_uint8(grid_bg) :
-        color.color_packed;
+        color.packed;
     grid.texture_u32view.fill(clear_color);
+    grid.texture_u32view[0] = 0;
 
     if (queued_wave_count > 0) {
         prevent_waves_last_id = wave_id + queued_wave_count;

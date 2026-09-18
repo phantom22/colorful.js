@@ -38,6 +38,40 @@ function draw(timestamp:number) {
         request_clear = false;
     }
 
+    let source_texture0: WebGLTexture, source_texture1: WebGLTexture,
+        target_texture0: WebGLTexture, target_texture1: WebGLTexture,
+        target_fbo: WebGLBuffer;
+    if (gpu) {
+        if (state_read_index === 0) {
+            source_texture0 = state_tex_00;
+            source_texture1 = state_tex_01;
+            target_fbo = state_fbo1;
+            target_texture0 = state_tex_10;
+            target_texture1 = state_tex_11;
+        }
+        else {
+            source_texture0 = state_tex_10;
+            source_texture1 = state_tex_11;
+            target_fbo = state_fbo0;
+            target_texture0 = state_tex_00;
+            target_texture1 = state_tex_01;
+        }
+    }
+
+    if (state_is_dirty) {
+        gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
+            grid.texture_size, grid.texture_size,
+            gl.RGBA, gl.FLOAT, grid.state_weights);
+
+        gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
+            grid.texture_size, grid.texture_size,
+            gl.RGBA, gl.FLOAT, grid.wcolor_dist);
+
+        state_is_dirty = false;
+    }
+
     // fully consume previous syncs
     for (let i = 0; i < pbo_count; i++) {
         const sync = syncs[i];
@@ -100,25 +134,7 @@ function draw(timestamp:number) {
     //       STATE PROPAGATION      //
     //////////////////////////////////
 
-    let source_texture0: WebGLTexture, source_texture1: WebGLTexture,
-        target_texture0: WebGLTexture, target_texture1: WebGLTexture,
-        target_fbo: WebGLBuffer;
     if (gpu) {
-        if (state_read_index === 0) {
-            source_texture0 = state_tex_00;
-            source_texture1 = state_tex_01;
-            target_fbo = state_fbo1;
-            target_texture0 = state_tex_10;
-            target_texture1 = state_tex_11;
-        }
-        else {
-            source_texture0 = state_tex_10;
-            source_texture1 = state_tex_11;
-            target_fbo = state_fbo0;
-            target_texture0 = state_tex_00;
-            target_texture1 = state_tex_01;
-        }
-
         state_p.useProgram();
         gl.uniform1f(state_p.uniforms["u_delta_time"], delta_time); 
         gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
@@ -141,26 +157,9 @@ function draw(timestamp:number) {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, source_texture0);
-        if (state_is_dirty) {
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0, 
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.FLOAT, grid.state_weights
-            );
-        }
 
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, source_texture1);
-        if (state_is_dirty) {
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0, 
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.FLOAT, grid.wcolor_dist
-            );
-            state_is_dirty = false;
-        }
 
         gl.bindVertexArray(state_vao);
         gl.disable(gl.BLEND)

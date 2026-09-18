@@ -44,7 +44,7 @@ const searchParams = new (class {
         return this.url.searchParams.get(p) || fallback;
     }
 });
-const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0, 1)), side_length = searchParams.getNumber("side_length", gpu ? 64 : 32, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5 : 1, 0)), blend_value = searchParams.getNumber("blend_value", gpu ? 0.6 : 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999 : 0.9, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg");
+const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0, 1)), side_length = searchParams.getNumber("side_length", gpu ? 64 : 32, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5 : 1, 0)), blend_value = searchParams.getNumber("blend_value", gpu ? 0.6 : 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999 : 0.9, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), max_weight = 3.0;
 const params = new URLSearchParams([
     ["gpu", `${gpu}`],
     ["side_length", `${side_length}`],
@@ -180,7 +180,7 @@ function get_color_data(color) {
     return {
         color,
         fcolor: uint8_to_float32(color),
-        color_packed: pack_uint8(color)
+        packed: pack_uint8(color)
     };
 }
 function luminance(color) {
@@ -742,19 +742,19 @@ function cpu_wave_start(ids, color_data, _wave_id) {
         : _wave_id;
     if (_state <= prevent_waves_last_id)
         return;
-    let color, fcolor, color_packed;
+    let color, fcolor, packed;
     if (color_data === undefined) {
         const data = choosen_palette[palette_color];
         color = data.color;
         if (choosen_palette.length > 1)
             palette_color = (palette_color + 1) % choosen_palette.length;
         fcolor = data.fcolor;
-        color_packed = data.color_packed;
+        packed = data.packed;
     }
     else {
         color = color_data.color;
         fcolor = color_data.fcolor;
-        color_packed = color_data.color_packed;
+        packed = color_data.packed;
     }
     let next;
     if (typeof ids === "number") {
@@ -767,7 +767,7 @@ function cpu_wave_start(ids, color_data, _wave_id) {
             grid.texture[offset + 3] = 255;
         }
         else
-            grid.texture_u32view[ids] = color_packed;
+            grid.texture_u32view[ids] = packed;
         next = new Set(grid.adj_graph[ids].next);
     }
     else {
@@ -775,7 +775,7 @@ function cpu_wave_start(ids, color_data, _wave_id) {
         for (const id of ids) {
             const node = grid.adj_graph[id];
             node.state = _state;
-            grid.texture_u32view[id] = color_packed;
+            grid.texture_u32view[id] = packed;
             for (const nnext of node.next) {
                 if (next.has(nnext))
                     continue;
@@ -784,7 +784,7 @@ function cpu_wave_start(ids, color_data, _wave_id) {
         }
     }
     texture_is_dirty = true;
-    cpu_wave_propagate(next, _state, { color, fcolor, color_packed }, 0);
+    cpu_wave_propagate(next, _state, { color, fcolor, packed }, 0);
 }
 function cpu_wave_propagate(ids, state, color_data, depth) {
     --queued_wave_count;
@@ -795,7 +795,7 @@ function cpu_wave_propagate(ids, state, color_data, depth) {
     let factor = blend_value;
     if (wave_decay < 1)
         factor *= wave_decay ** Math.max(depth - decay_min_radius - 1, 0);
-    const { color, color_packed } = color_data;
+    const { color, packed } = color_data;
     for (const node of ids) {
         if (node.state === state) {
             ids.delete(node);
@@ -842,7 +842,7 @@ function cpu_wave_propagate(ids, state, color_data, depth) {
                 grid.texture[offset + 3] = 255;
             }
             else
-                grid.texture_u32view[node_id] = color_packed;
+                grid.texture_u32view[node_id] = packed;
         }
         else if (factor > 0) {
             const p_in = 1 - factor, p = factor;
@@ -939,8 +939,9 @@ function cpu_inward_wave() {
 function cpu_fill_grid(color) {
     const clear_color = color === undefined ?
         pack_uint8(grid_bg) :
-        color.color_packed;
+        color.packed;
     grid.texture_u32view.fill(clear_color);
+    grid.texture_u32view[0] = 0;
     if (queued_wave_count > 0) {
         prevent_waves_last_id = wave_id + queued_wave_count;
         wave_id = prevent_waves_last_id + 1;
@@ -1060,7 +1061,7 @@ function gpu_wave_start(ids, color_data, _wave_id) {
     if (color_data === undefined && choosen_palette.length > 1)
         palette_color = (palette_color + 1) % choosen_palette.length;
     const [r, g, b] = fcolor;
-    const state_weights = new Float32Array([++wave_id, 0.0, 0.0, 0.0]);
+    const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
     const wcolor_dist = new Float32Array([r, g, b, 0.0]);
     const target_tex0 = state_read_index === 0 ? state_tex_00 : state_tex_10;
     const target_tex1 = state_read_index === 0 ? state_tex_01 : state_tex_11;
@@ -1088,15 +1089,15 @@ function gpu_fill_grid(color) {
     const clear_color = color === undefined ?
         get_color_data(grid_bg) :
         color;
-    const [r, g, b] = clear_color.fcolor;
-    grid.texture_u32view.fill(clear_color.color_packed);
+    grid.texture_u32view.fill(clear_color.packed);
     grid.state_weights.fill(0.0);
-    for (let i = 0; i < grid.adj_graph.length; ++i) {
+    // start from 1, because there is no vertex id equal to zero
+    for (let i = 1; i < grid.adj_graph.length; ++i) {
         const offset = i * 4;
         grid.wcolor_dist[offset] = 0;
-        grid.wcolor_dist[offset + 1] = r;
-        grid.wcolor_dist[offset + 1] = g;
-        grid.wcolor_dist[offset + 1] = b;
+        grid.wcolor_dist[offset + 1] = 0;
+        grid.wcolor_dist[offset + 2] = 0;
+        grid.wcolor_dist[offset + 3] = 0;
     }
     wave_id = 0;
     texture_is_dirty = true;
@@ -1208,6 +1209,30 @@ function draw(timestamp) {
         fill_grid();
         request_clear = false;
     }
+    let source_texture0, source_texture1, target_texture0, target_texture1, target_fbo;
+    if (gpu) {
+        if (state_read_index === 0) {
+            source_texture0 = state_tex_00;
+            source_texture1 = state_tex_01;
+            target_fbo = state_fbo1;
+            target_texture0 = state_tex_10;
+            target_texture1 = state_tex_11;
+        }
+        else {
+            source_texture0 = state_tex_10;
+            source_texture1 = state_tex_11;
+            target_fbo = state_fbo0;
+            target_texture0 = state_tex_00;
+            target_texture1 = state_tex_01;
+        }
+    }
+    if (state_is_dirty) {
+        gl.bindTexture(gl.TEXTURE_2D, source_texture0);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
+        gl.bindTexture(gl.TEXTURE_2D, source_texture1);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
+        state_is_dirty = false;
+    }
     // fully consume previous syncs
     for (let i = 0; i < pbo_count; i++) {
         const sync = syncs[i];
@@ -1252,22 +1277,7 @@ function draw(timestamp) {
     //////////////////////////////////
     //       STATE PROPAGATION      //
     //////////////////////////////////
-    let source_texture0, source_texture1, target_texture0, target_texture1, target_fbo;
     if (gpu) {
-        if (state_read_index === 0) {
-            source_texture0 = state_tex_00;
-            source_texture1 = state_tex_01;
-            target_fbo = state_fbo1;
-            target_texture0 = state_tex_10;
-            target_texture1 = state_tex_11;
-        }
-        else {
-            source_texture0 = state_tex_10;
-            source_texture1 = state_tex_11;
-            target_fbo = state_fbo0;
-            target_texture0 = state_tex_00;
-            target_texture1 = state_tex_01;
-        }
         state_p.useProgram();
         gl.uniform1f(state_p.uniforms["u_delta_time"], delta_time);
         gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
@@ -1282,15 +1292,8 @@ function draw(timestamp) {
         }
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, source_texture0);
-        if (state_is_dirty) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
-        }
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, source_texture1);
-        if (state_is_dirty) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
-            state_is_dirty = false;
-        }
         gl.bindVertexArray(state_vao);
         gl.disable(gl.BLEND);
         gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
@@ -1395,7 +1398,8 @@ function init() {
     if (gpu) {
         p = compile_shader_program(gl, "gpu-vert", "gpu-frag", [
             "!u_view_proj", "!u_texture", "u_state_weights", "u_wcolor_dist",
-            "u_blend_value", "u_wave_decay", "u_decay_min_radius" //,"u_wave_id"
+            "u_blend_value", "u_wave_decay", "u_decay_min_radius",
+            "u_max_weight" //,"u_wave_id"
         ]);
     }
     else {
@@ -1438,6 +1442,7 @@ function init() {
         gl.uniform1f(p.uniforms["u_blend_value"], blend_value);
         gl.uniform1f(p.uniforms["u_wave_decay"], wave_decay);
         gl.uniform1f(p.uniforms["u_decay_min_radius"], decay_min_radius);
+        gl.uniform1f(p.uniforms["u_max_weight"], max_weight);
         //gl.uniform1f(p.uniforms["u_wave_id"], 1);
     }
     //////////////////////////////////
@@ -1455,7 +1460,10 @@ function init() {
     //       STATE SHADER           //
     //////////////////////////////////
     if (gpu) {
-        state_p = compile_shader_program(gl, "state-vert", "state-frag", ["!u_state_weights", "!u_wcolor_dist", "!u_blend_value"]);
+        state_p = compile_shader_program(gl, "state-vert", "state-frag", [
+            "!u_state_weights", "!u_wcolor_dist", "!u_delta_time",
+            "u_max_weight", "u_wave_decay", "u_decay_min_radius",
+        ]);
         state_p.useProgram();
         state_vao = create_vertex_array();
         create_buffer_uint32(grid.cell_ids, 0);
@@ -1469,9 +1477,12 @@ function init() {
         state_tex_10 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
         state_tex_11 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
         state_fbo1 = create_frame_buffer2(state_tex_10, state_tex_11);
+        gl.uniform1f(state_p.uniforms["u_max_weight"], max_weight);
         gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
         gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 1);
-        gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
+        // gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
+        gl.uniform1f(state_p.uniforms["u_wave_decay"], wave_decay);
+        gl.uniform1f(state_p.uniforms["u_decay_minus_radius"], decay_min_radius);
         state_read_index = 0;
     }
     if (gpu) {
@@ -1576,11 +1587,14 @@ function c_mousedown(e) {
         if (!shift_down)
             palette_color = 0;
     }
-    else if (!mouse1_down) {
+    else if (!mouse1_down && e.button === 1) {
         prev_clientX = e.clientX;
         prev_clientY = e.clientY;
         mouse3_down = true;
         last_mouse_sample_frame = frame;
+        return;
+    }
+    else {
         return;
     }
     if (force_render_mask)
@@ -1686,7 +1700,3 @@ window.onblur = state_cleanup;
 // window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, { passive: false });
 window.onload = init;
-// mix colors in different color space
-// add esc menu sliders
-// migrate wave propagation to ping-pong GPGPU shader
-//

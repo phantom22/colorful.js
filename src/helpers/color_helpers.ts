@@ -26,13 +26,13 @@ function uint8_to_float32(color:Uint8Array) {
 type color_data = {
     color: Uint8Array,
     fcolor: Float32Array,
-    color_packed: number
+    packed: number
 };
 function get_color_data(color:Uint8Array) {
     return {
         color,
         fcolor: uint8_to_float32(color),
-        color_packed: pack_uint8(color)
+        packed: pack_uint8(color)
     } as color_data;
 }
 

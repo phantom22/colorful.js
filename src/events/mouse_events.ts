@@ -35,11 +35,14 @@ function c_mousedown(e:MouseEvent) {
         if (!shift_down)
             palette_color = 0;
     }
-    else if (!mouse1_down) {
+    else if (!mouse1_down && e.button === 1) {
         prev_clientX = e.clientX;
         prev_clientY = e.clientY;
         mouse3_down = true;
         last_mouse_sample_frame = frame;
+        return;
+    }
+    else {
         return;
     }
 

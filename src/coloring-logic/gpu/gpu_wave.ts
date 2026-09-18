@@ -20,7 +20,7 @@ function gpu_wave_start(
         palette_color = (palette_color+1) % choosen_palette.length;
     const [r,g,b] = fcolor;
 
-    const state_weights = new Float32Array([++wave_id, 0.0, 0.0, 0.0]);
+    const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
     const wcolor_dist = new Float32Array([r, g, b, 0.0]);
 
     const target_tex0 = state_read_index === 0 ? state_tex_00 : state_tex_10;
@@ -63,15 +63,15 @@ function gpu_fill_grid(color?:color_data) {
     const clear_color = color === undefined ?
         get_color_data(grid_bg) :
         color;
-    const [r,g,b] = clear_color.fcolor;
-    grid.texture_u32view.fill(clear_color.color_packed);
+    grid.texture_u32view.fill(clear_color.packed);
     grid.state_weights.fill(0.0)
-    for (let i=0; i<grid.adj_graph.length; ++i) {
+    // start from 1, because there is no vertex id equal to zero
+    for (let i=1; i<grid.adj_graph.length; ++i) {
         const offset = i*4;
         grid.wcolor_dist[offset] = 0;
-        grid.wcolor_dist[offset+1] = r;
-        grid.wcolor_dist[offset+1] = g;
-        grid.wcolor_dist[offset+1] = b;
+        grid.wcolor_dist[offset+1] = 0;
+        grid.wcolor_dist[offset+2] = 0;
+        grid.wcolor_dist[offset+3] = 0;
     }
     
     wave_id = 0;

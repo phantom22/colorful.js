@@ -104,7 +104,8 @@ function init() {
         p = compile_shader_program(gl, "gpu-vert", "gpu-frag",
             [
                 "!u_view_proj","!u_texture","u_state_weights","u_wcolor_dist",
-                "u_blend_value","u_wave_decay","u_decay_min_radius"//,"u_wave_id"
+                "u_blend_value","u_wave_decay","u_decay_min_radius",
+                "u_max_weight"//,"u_wave_id"
             ]
         );
     }
@@ -161,6 +162,7 @@ function init() {
         gl.uniform1f(p.uniforms["u_blend_value"], blend_value);
         gl.uniform1f(p.uniforms["u_wave_decay"], wave_decay);
         gl.uniform1f(p.uniforms["u_decay_min_radius"], decay_min_radius);
+        gl.uniform1f(p.uniforms["u_max_weight"], max_weight);
         //gl.uniform1f(p.uniforms["u_wave_id"], 1);
     }
    
@@ -190,7 +192,10 @@ function init() {
 
     if (gpu) {
         state_p = compile_shader_program(gl, "state-vert", "state-frag",
-            ["!u_state_weights","!u_wcolor_dist","!u_blend_value"]
+            [
+                "!u_state_weights","!u_wcolor_dist","!u_delta_time",
+                "u_max_weight","u_wave_decay","u_decay_min_radius",
+            ]
         );
         state_p.useProgram();
 
@@ -209,9 +214,12 @@ function init() {
         state_tex_11 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
         state_fbo1 = create_frame_buffer2(state_tex_10, state_tex_11);
 
+        gl.uniform1f(state_p.uniforms["u_max_weight"], max_weight);
         gl.uniform1i(state_p.uniforms["u_state_weights"], 0);
         gl.uniform1i(state_p.uniforms["u_wcolor_dist"], 1);
-        gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
+        // gl.uniform1f(state_p.uniforms["u_blend_value"], blend_value);
+        gl.uniform1f(state_p.uniforms["u_wave_decay"], wave_decay);
+        gl.uniform1f(state_p.uniforms["u_decay_minus_radius"], decay_min_radius);
 
         state_read_index = 0;
     }
