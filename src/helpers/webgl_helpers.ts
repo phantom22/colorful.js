@@ -73,6 +73,7 @@ function compile_shader_program(
                         + ` "#${vertex_id}|#${fragment_id}".`
             if (!important) {
                 console.warn(msg);
+                o.uniforms[val] = null;
                 continue;
             }
             else
@@ -93,26 +94,6 @@ function mat4x4_mul(A:Float32Array, B:Float32Array) {
         i*$+j*E+k*I+l*M, i*_+j*F+k*J+l*N, i*C+j*G+k*K+l*O, i*D+j*H+k*L+l*P,
         m*$+n*E+o*I+p*M, m*_+n*F+o*J+p*N, m*C+n*G+o*K+p*O, m*D+n*H+o*L+p*P,
     ])
-}
-
-function create_orthographic_matrix(
-    l:number, r:number, b:number, t:number, n:number, f:number
-) {
-    return new Float32Array([
-        2/(r-l), 0, 0, 0,
-        0, 2/(t-b), 0, 0,
-        0, 0, -2/(f-n), 0,
-        -(r+l)/(r-l), -(t+b)/(t-b), -(f+n)/(f-n), 1
-    ]);
-}
-
-function create_view_matrix(x:number, y:number, s:number) {
-    return new Float32Array([
-        1/s, 0, 0, 0,
-        0, 1/s, 0, 0,
-        0, 0, 1, 0,
-        -x, -y, 0, 1
-    ]);
 }
 
 function create_view_projection_matrix(x:number, y:number, s:number, ar:number) {
@@ -166,10 +147,10 @@ function bind_uint32_attr(buffer:WebGLBuffer, at:number) {
     gl.enableVertexAttribArray(at);
 }
 
-function create_buffer_uint8(data:Uint8Array, at:number) {
+function create_dyn_buffer_uint8(data:Uint8Array, at:number) {
     const out = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, out);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
     gl.vertexAttribIPointer(at, 1, gl.UNSIGNED_BYTE, 0, 0);
     gl.enableVertexAttribArray(at);
     return out;

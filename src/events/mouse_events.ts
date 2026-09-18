@@ -21,7 +21,7 @@ function c_mouseleave() {
     // shift_down = false;
     // ctrl_down = false;
     hovered_id = undefined;
-    // process_queued_strokes();
+    // cpu_process_queued_strokes();
 }
 
 /** event called on canvas.onmousedown */
@@ -115,7 +115,6 @@ let wheel_already_processed = false,
     /** camera_scale max delta per second. */
     wheel_zoom_factor = 8,
     trackpad_zoom_factor = 2;
-
 
 function event_triggered_by_trackpad(e:WheelEvent) {
     if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {

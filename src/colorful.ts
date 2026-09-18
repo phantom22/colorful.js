@@ -2,7 +2,9 @@ interface adj_node {
     id: number;
     state: number;
     next: Set<adj_node>;
-    next_ids: Set<number>
+    next_ids: Set<number>;
+    brush: Set<number>;
+    brushn: Set<adj_node>;
 }
 
 class adj_node {
@@ -35,15 +37,15 @@ interface ColorfulGrid {
 
     /** used for the state shader program where points are used instead of
      * vertices.  */
-    // cell_ids: Uint32Array;
-    // cell_uvs: Float32Array;
-    // cell_adj_uvs_1: Float32Array;
-    // cell_adj_uvs_2: Float32Array;
-    // cell_adj_uvs_3: Float32Array;
-    // /** flat Float32 array that defines per-vertex wave color weight state. */
-    // state_weights: Float32Array;
-    // /** flat Float32 array that defines per-vertex wave color state. */
-    // wcolor_dist: Float32Array;
+    cell_ids: Uint32Array;
+    cell_uvs: Float32Array;
+    cell_adj_uvs_1: Float32Array;
+    cell_adj_uvs_2: Float32Array;
+    cell_adj_uvs_3: Float32Array;
+    /** flat Float32 array that defines per-vertex wave color weight state. */
+    state_weights: Float32Array;
+    /** flat Float32 array that defines per-vertex wave color state. */
+    wcolor_dist: Float32Array;
     /** resolution of the grid. */
     side_length: number;
     /** adjacency map, per vertex id returns the list of the adjacent vertex
@@ -64,7 +66,7 @@ interface ColorfulGrid {
 }
 
 class ColorfulGrid {
-    constructor(side_length:number, color=new Uint8Array([255,255,255,255])) {
+    constructor(side_length:number, gpu:number, color=new Uint8Array([255,255,255,255]), brush_size=0) {
         if (!Number.isInteger(side_length) || side_length < 1)
             throw `ColorfulGrid: side_length must be an integer greater than 1`;
         this.side_length = side_length;
@@ -181,6 +183,8 @@ class ColorfulGrid {
                             [t1+1, t1+triangle_count-1, t1+next_layer_adj];
                     else
                         this.adj_map[t1] = [t1-1, t1+1, t1+next_layer_adj];
+                    if (last_layer)
+                        this.adj_map[t1].splice(2,1);
                     
                     this.mesh[v+6] = v1[0];
                     this.mesh[v+7] = v1[1];
@@ -215,18 +219,18 @@ class ColorfulGrid {
 
                 const t = ++triangle_id;
  
-                if (s === 0)
+                if (s === 0) {
                     if (d === 0)
-                        this.adj_map[t] =
-                            [t+1, t+triangle_count-1, t+next_layer_adj];
+                        this.adj_map[t] = [t+1, t+triangle_count-1];
                     else
-                        this.adj_map[t] = [t-1, t+1, t+next_layer_adj];
+                        this.adj_map[t] = [t-1, t+1];
+                }
                 else if (s !== 5)
                     this.adj_map[t] = [t-1, t+1];
                 else
                     this.adj_map[t] = [t-triangle_count+1, t-1];
 
-                if (!last_layer && s !== 0)
+                if (!last_layer)
                     this.adj_map[t][2] = t+next_layer_adj;
 
                 v = v+6;
@@ -246,9 +250,9 @@ class ColorfulGrid {
               nt2 = num_triangles * 2;
 
         this.ids = new Uint32Array(nt3);
-        // this.cell_ids = new Uint32Array(num_triangles);
         this.uvs = new Float32Array(nt6);
-        // this.cell_uvs = new Float32Array(nt2);
+        this.cell_ids = new Uint32Array(num_triangles);
+        this.cell_uvs = new Float32Array(nt2);
         this.hovered = new Uint8Array(nt3);
         this.hovered.fill(0);
         for (let i=0; i<num_triangles; ++i) {
@@ -261,14 +265,15 @@ class ColorfulGrid {
                   u = (col + 0.5) / texture_size,
                   v = (row + 0.5) / texture_size;
 
-            // this.cell_ids[i] = id;
+            if (gpu) {
+                this.cell_ids[i] = id;
+                this.cell_uvs[base_uc] = u;
+                this.cell_uvs[base_uc+1] = v;
+            }
 
             this.ids[base_i] = id;
             this.ids[base_i+1] = id;
             this.ids[base_i+2] = id;
-
-            // this.cell_uvs[base_uc] = u;
-            // this.cell_uvs[base_uc+1] = v;
 
             this.uvs[base_u] = u;
             this.uvs[base_u+1] = v;
@@ -278,23 +283,27 @@ class ColorfulGrid {
             this.uvs[base_u+5] = v;
         }
 
-        this.adj_uvs_1 = new Float32Array(nt6);
-        // this.cell_adj_uvs_1 = new Float32Array(nt2);
-        this.adj_uvs_2 = new Float32Array(nt6);
-        // this.cell_adj_uvs_2 = new Float32Array(nt2);
-        this.adj_uvs_3 = new Float32Array(nt6);
-        // this.cell_adj_uvs_3 = new Float32Array(nt2);
-        for (let i=0; i<num_triangles; ++i) {
+        if (gpu) {
+            this.adj_uvs_1 = new Float32Array(nt6);
+            this.cell_adj_uvs_1 = new Float32Array(nt2);
+            this.adj_uvs_2 = new Float32Array(nt6);
+            this.cell_adj_uvs_2 = new Float32Array(nt2);
+            this.adj_uvs_3 = new Float32Array(nt6);
+            this.cell_adj_uvs_3 = new Float32Array(nt2);
+        }
+        for (let i=0; gpu && i<num_triangles; ++i) {
             const id = i + 1,
                   base_i = i * 6,
                   base_ic = i * 2,
-                  base_1 = this.adj_map[id][0] * 6,
-                  base_2 = this.adj_map[id][1] * 6,
-                  base_3 = this.adj_map[id][2] === undefined ? -1 : this.adj_map[id][2] * 6
+                  base_1 = (this.adj_map[id][0]-1) * 6,
+                  base_2 = (this.adj_map[id][1]-1) * 6,
+                  base_3 = this.adj_map[id][2] === undefined ?
+                    -1 :
+                    (this.adj_map[id][2]-1) * 6;
 
             const u1 = this.uvs[base_1], v1 = this.uvs[base_1+1];
-            // this.cell_adj_uvs_1[base_ic] = u1;
-            // this.cell_adj_uvs_1[base_ic+1] = v1;
+            this.cell_adj_uvs_1[base_ic] = u1;
+            this.cell_adj_uvs_1[base_ic+1] = v1;
 
             this.adj_uvs_1[base_i] = u1;
             this.adj_uvs_1[base_i+1] = v1;
@@ -304,8 +313,8 @@ class ColorfulGrid {
             this.adj_uvs_1[base_i+5] = v1;
 
             const u2 = this.uvs[base_2], v2 = this.uvs[base_2+1];
-            // this.cell_adj_uvs_2[base_ic] = u2;
-            // this.cell_adj_uvs_2[base_ic+1] = v2;
+            this.cell_adj_uvs_2[base_ic] = u2;
+            this.cell_adj_uvs_2[base_ic+1] = v2;
 
             this.adj_uvs_2[base_i] = u2;
             this.adj_uvs_2[base_i+1] = v2;
@@ -315,8 +324,8 @@ class ColorfulGrid {
             this.adj_uvs_2[base_i+5] = v2;
 
             if (base_3 === -1) {
-                // this.cell_adj_uvs_3[base_ic] = -1;
-                // this.cell_adj_uvs_3[base_ic+1] = -1;
+                this.cell_adj_uvs_3[base_ic] = -1;
+                this.cell_adj_uvs_3[base_ic+1] = -1;
 
                 this.adj_uvs_3[base_i] = -1;
                 this.adj_uvs_3[base_i+1] = -1;
@@ -327,8 +336,8 @@ class ColorfulGrid {
             }
             else {
                 const u3 = this.uvs[base_3], v3 = this.uvs[base_3+1];
-                // this.cell_adj_uvs_3[base_ic] = u3;
-                // this.cell_adj_uvs_3[base_ic+1] = v3;
+                this.cell_adj_uvs_3[base_ic] = u3;
+                this.cell_adj_uvs_3[base_ic+1] = v3;
 
                 this.adj_uvs_3[base_i] = u3;
                 this.adj_uvs_3[base_i+1] = v3;
@@ -346,11 +355,12 @@ class ColorfulGrid {
         u32view.fill(pack_uint8(color));
         this.texture_u32view = u32view;
 
-        // this.state_weights = new Float32Array(tex_length);
-        // this.state_weights.fill(0.0);
-        // this.wcolor_dist = new Float32Array(tex_length);
-        // this.wcolor_dist.fill(0.0);
-
+        if (gpu) {
+            this.state_weights = new Float32Array(tex_length);
+            this.state_weights.fill(0.0);
+            this.wcolor_dist = new Float32Array(tex_length);
+            this.wcolor_dist.fill(0.0);
+        }
         this.adj_graph = Array(num_triangles+1);
         for (let id=1; id<this.adj_map.length; ++id) {
             const node = new adj_node(id);
@@ -366,8 +376,36 @@ class ColorfulGrid {
                 next_node.next.add(node);
                 next_node.next_ids.add(id);
             }
+
+            if (brush_size === 0) {
+                node.brush = new Set([id]);
+                node.brushn = new Set([node]);
+                continue;
+            }
+            const brush = new Set(adj_ids),
+                  brushn = new Set(node.next);
+            let frontier = new Set(brush);
+            brush.add(id);
+            brushn.add(node);
+            for (let i=1; i<brush_size; ++i) {
+                const new_frontier = new Set() as Set<number>;
+                for (const frontier_id of frontier) {
+                    const next = this.adj_map[frontier_id];
+                    if (next === undefined) {
+                        console.warn(frontier_id);
+                        continue;
+                    }
+                    for (const next_id of next) {
+                        if (brush.has(next_id))
+                            continue;
+                        new_frontier.add(next_id);
+                        brush.add(next_id);
+                        brushn.add(this.adj_graph[next_id]);
+                    }
+                }
+                frontier = new_frontier;
+            }
+            node.brush = brush;            
         }
     }
-
-    
 }

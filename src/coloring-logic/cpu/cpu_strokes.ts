@@ -13,7 +13,7 @@ let hovered_id = undefined as undefined|number,
      * one). */
     stroke_count = -1;
 
-function process_stroke(hovered:number) {
+function cpu_process_stroke(hovered:number) {
     if (hovered !== 0 && hovered !== hovered_id) {
         if (shift_down) {
             if (!wave_queue.has(hovered)) {
@@ -62,27 +62,17 @@ function process_stroke(hovered:number) {
             texture_is_dirty = true;
         }
         else if (ctrl_down) {
-            const clear_color = choosen_palette[palette_color].color_packed;
-            for (let i=0; i<grid.adj_graph.length; ++i)
-                grid.texture_u32view[i] = clear_color;
-
-            if (queued_wave_count > 0) {
-                prevent_waves_last_id = wave_id + queued_wave_count;
-                wave_id = prevent_waves_last_id + 1;
-            }
-
-            texture_is_dirty = true;
+            cpu_fill_grid(choosen_palette[palette_color]);
         }
         else {
-            const brush = new Set(grid.adj_graph[hovered].next_ids);
-            brush.add(hovered);
-            wave_start(brush);
+            const brush = new Set(grid.adj_graph[hovered].brush);
+            cpu_wave_start(brush);
         }
         hovered_id = hovered;
     }
 }
 
-function remove_highlights() {
+function cpu_remove_highlights() {
     for (const id of wave_queue) {
         const offset = id*4;
         grid.texture[offset] = Math.max(2*grid.texture[offset] - 255, 0);
@@ -94,11 +84,11 @@ function remove_highlights() {
     wave_queue.clear();
 }
 
-function process_queued_strokes() {
+function cpu_process_queued_strokes() {
     if (wave_queue.size === 0)
         return;
 
-    remove_highlights();
+    cpu_remove_highlights();
     
     for (let i=0; i<queued_strokes.length; ++i) {
         const q = queued_strokes[i];
@@ -114,12 +104,12 @@ function process_queued_strokes() {
 
             s.add(id);
             if (id % mod === m) {
-                wave_start(s, q.color_data);
+                cpu_wave_start(s, q.color_data);
                 s = new Set();
             }
         }
         if (s.size > 0) {
-            wave_start(s, q.color_data);
+            cpu_wave_start(s, q.color_data);
             s.clear();
         }
     }

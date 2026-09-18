@@ -10,7 +10,7 @@ let wave_id = 0,
     /** each wave_id lower or equal to this value will be discarded. */
     prevent_waves_last_id = 0;
 
-function wave_start(
+function cpu_wave_start(
     ids:number|Set<number>, color_data?:color_data,
     _wave_id?:number
 ) {
@@ -71,12 +71,10 @@ function wave_start(
     }
 
     texture_is_dirty = true;
-
-    ++queued_wave_count;
-    wave_propagate(next, _state, {color,fcolor,color_packed}, 0);
+    cpu_wave_propagate(next, _state, {color,fcolor,color_packed}, 0);
 }
 
-function wave_propagate(
+function cpu_wave_propagate(
     ids:Set<adj_node>, state:number, color_data:color_data, depth:number
 ) {
     --queued_wave_count;
@@ -233,7 +231,7 @@ function wave_propagate(
             new_color_data = get_color_data(new_color);
 
         ++queued_wave_count;
-        setTimeout(wave_start, new_wave_delay, 
+        setTimeout(cpu_wave_start, new_wave_delay, 
             new_id, new_color_data, ++wave_id
         );
     }
@@ -243,12 +241,12 @@ function wave_propagate(
 
     ++queued_wave_count;
     setTimeout(
-        wave_propagate, wave_delay,
+        cpu_wave_propagate, wave_delay,
         collected, state, color_data, depth+1
     );
 }
 
-function inward_wave() {
+function cpu_inward_wave() {
     const from = 6*(side_length-2)**2+1,
           to = 6*side_length**2,
           mod = 5,
@@ -257,9 +255,23 @@ function inward_wave() {
     for (let i=from; i<to; ++i) {
         if (i%mod === m) {
             s.add(i);
-            wave_start(s);
+            cpu_wave_start(s);
             s.clear();
         }
     }
-    wave_start(s);
+    cpu_wave_start(s);
+}
+
+function cpu_fill_grid(color?:color_data) {
+    const clear_color = color === undefined ?
+        pack_uint8(grid_bg) :
+        color.color_packed;
+    grid.texture_u32view.fill(clear_color);
+
+    if (queued_wave_count > 0) {
+        prevent_waves_last_id = wave_id + queued_wave_count;
+        wave_id = prevent_waves_last_id + 1;
+    }
+
+    texture_is_dirty = true;
 }

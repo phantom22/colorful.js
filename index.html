@@ -198,7 +198,7 @@ html, body {
         </div>
     </div>
     <script src="js/index.js"></script>
-<script type="x-shader/vs" id="vertex-shader">
+<script type="x-shader/vs" id="gpu-vert">
 #version 300 es
 layout(location = 0) in vec2 pos;
 layout(location = 1) in uint id;
@@ -229,7 +229,7 @@ void main() {
     gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
 }
 </script>
-<script type="x-shader/fs" id="fragment-shader">
+<script type="x-shader/fs" id="gpu-frag">
 #version 300 es
 precision highp float;
 precision highp sampler2D;
@@ -245,7 +245,74 @@ in vec2 v_local_pos;
 uniform sampler2D u_texture;
 uniform sampler2D u_state_weights;
 uniform sampler2D u_wcolor_dist;
-uniform highp float u_delta_time;
+
+uniform float u_blend_value;
+uniform float u_wave_decay;
+uniform float u_decay_min_radius;
+//uniform float u_wave_id;
+
+out vec4 o_color;
+
+void main() {
+    vec2 p = abs(v_local_pos);
+    float max_dist = max(p.x * 0.8660254 + p.y * 0.5, p.y);
+    if (max_dist > 0.86235) {
+        o_color = vec4(1.0, 1.0, 1.0, 1.0);
+        return;
+    }
+
+    vec3 original_color = texture(u_texture, v_uv).rgb;
+    float state = texture(u_state_weights, v_uv).r;
+
+    if (state <= 0.0) {
+        // never touched by a wave — show the base grid color untouched
+        o_color = vec4(original_color, 1.0);
+    }
+    else {
+        vec4 wcolor_dist = texture(u_wcolor_dist, v_uv);
+        vec3 wave_color = wcolor_dist.rgb;
+        float distance = wcolor_dist.a;
+        float factor = u_blend_value * pow(u_wave_decay, max(distance - u_decay_min_radius - 1.0, 0.0));
+        //float factor = u_blend_value * pow(u_wave_decay, max(distance - u_decay_min_radius - 1.0, 0.0));
+        factor = clamp(factor, 0.0, 1.0);
+        o_color = vec4(mix(original_color, wave_color, factor), 1.0);
+    }
+
+    if (v_hovered == 1u)
+        o_color = vec4((o_color.rgb + vec3(1.0)) * 0.5, 1.0);
+
+    //o_color = vec4(texture(u_state_weights,v_uv).rrr/u_wave_id, 1.0);
+}
+</script>
+<script type="x-shader/vs" id="cpu-vert">
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+layout(location = 2) in vec2 uv;
+
+uniform mat4 u_view_proj;
+
+flat out uint v_id;
+out vec2 v_uv;
+out vec2 v_local_pos;
+
+void main() {
+    v_local_pos = pos;
+    v_id = id;
+    v_uv = uv;
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
+}
+</script>
+<script type="x-shader/fs" id="cpu-frag">
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+flat in uint v_id;
+in vec2 v_uv;
+in vec2 v_local_pos;
+
+uniform sampler2D u_texture;
 
 out vec4 o_color;
 
@@ -261,7 +328,7 @@ void main() {
     }
 }
 </script>
-<script type="x-shader/vs" id="state-vertex">
+<script type="x-shader/vs" id="state-vert">
 #version 300 es
 layout(location = 0) in uint id;
 layout(location = 1) in vec2 uv;
@@ -297,49 +364,70 @@ in vec2 v_adj_uv1;
 in vec2 v_adj_uv2;
 in vec2 v_adj_uv3;
 
-uniform sampler2D u_texture;
 uniform sampler2D u_state_weights;
 uniform sampler2D u_wcolor_dist;
-uniform highp float u_delta_time;
+//uniform highp float u_delta_time;
+uniform float u_blend_value;
 
 layout(location = 0) out highp vec4 o_state_weights;
 layout(location = 1) out highp vec4 o_wcolor_dist;
 
 void main() {
-    vec4 state_weights = texture(u_state_weights, v_uv);
+    bool has_third = v_adj_uv3.x >= 0.0;
 
-    //int from = 0;
-    //float from_state = this_state;
-    //float s1 = texture(u_state_weights, v_adj_uv1).x;
-    //float s2 = texture(u_state_weights, v_adj_uv2).x;
-    //if (from_state < s1) {
-    //    from = 1;
-    //    from_state = s1;
-    //}
-    //if (from_state < s2) {
-    //    from = 2;
-    //    from_state = s2;
-    //}
-    //if (v_adj_uv3.x < 0.0) {
-    //    float s3 = texture(u_state_weights, v_adj_uv3).x;
-    //    if (from_state < s3) {
-    //        from = 3;
-    //        from_state = s3;
-    //    }
-    //}
-    
-    float state = state_weights.r + u_delta_time * 0.1;
-    vec3 weights = vec3(0.0, 0.0, 0.0);
-    o_state_weights = vec4(state, state_weights.gba);
+    float this_state = texture(u_state_weights, v_uv).r;
 
-    vec3 original_color = texture(u_texture, v_uv).xyz;
-    vec4 wcolor_dist = texture(u_wcolor_dist, v_uv);
-    vec3 wcolor = wcolor_dist.xyz;
-    float distance = wcolor_dist.w;
-    o_wcolor_dist = vec4(original_color + wcolor, distance);
+    float s1 = texture(u_state_weights, v_adj_uv1).r;
+    float s2 = texture(u_state_weights, v_adj_uv2).r;
+    float s3 = has_third ? texture(u_state_weights, v_adj_uv3).r : 0.0;
+
+    // advantage = how far ahead each neighbor is; 0 if behind or tied (rule 1)
+    float a1 = max(s1 - this_state, 0.0);
+    float a2 = max(s2 - this_state, 0.0);
+    float a3 = has_third ? max(s3 - this_state, 0.0) : 0.0;
+    float total = a1 + a2 + a3;
+
+    float w1, w2, w3;
+    if (total > 0.0) {
+        w1 = a1 / total;
+        w2 = a2 / total;
+        w3 = a3 / total;
+    } else {
+        // no neighbor ahead: nothing to weight by, split evenly (rule 2)
+        // — change to w1=w2=w3=0.0 instead if a front cell should freeze, not blend
+        float n = has_third ? 3.0 : 2.0;
+        w1 = 1.0 / n;
+        w2 = 1.0 / n;
+        w3 = has_third ? 1.0 / n : 0.0;
+    }
+
+    // state rides toward whichever of {self, neighbors} is furthest along,
+    // capped at CATCHUP_RATE units/sec so it can't overshoot in one big frame
+    float from_state = max(this_state, max(s1, s2));
+    if (has_third) from_state = max(from_state, s3);
+    //float new_state = this_state + min(u_delta_time * CATCHUP_RATE, from_state - this_state);
+    //new_state = min(new_state, from_state);
+    o_state_weights = vec4(from_state, w1, w2, w3);
+
+    vec4 self_wd = texture(u_wcolor_dist, v_uv);
+
+    if (total > 0.0) {
+        vec4 wd1 = texture(u_wcolor_dist, v_adj_uv1);
+        vec4 wd2 = texture(u_wcolor_dist, v_adj_uv2);
+        vec4 wd3 = has_third ? texture(u_wcolor_dist, v_adj_uv3) : vec4(0.0);
+
+        vec3 incoming_color = w1 * wd1.rgb + w2 * wd2.rgb + w3 * wd3.rgb;
+        vec3 new_wcolor = mix(self_wd.rgb, incoming_color, u_blend_value);
+        float new_distance = floor(w1 * wd1.a + w2 * wd2.a + w3 * wd3.a + 1.0 + 0.5);
+
+        o_wcolor_dist = vec4(new_wcolor, new_distance);
+    } else {
+        // front / untouched cell: hold whatever was seeded CPU-side
+        o_wcolor_dist = self_wd;
+    }
 }
 </script>
-<script type="x-shader/vs" id="mask-vertex">
+<script type="x-shader/vs" id="mask-vert">
 #version 300 es
 layout(location = 0) in vec2 pos;
 layout(location = 1) in uint id;
@@ -353,7 +441,7 @@ void main() {
     gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
 }
 </script>
-<script type="x-shader/fs" id="mask-fragment">
+<script type="x-shader/fs" id="mask-frag">
 #version 300 es
 precision highp float;
 precision highp int;
