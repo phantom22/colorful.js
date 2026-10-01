@@ -44,21 +44,49 @@ const searchParams = new (class {
         return this.url.searchParams.get(p) || fallback;
     }
 });
-const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0, 1)), side_length = searchParams.getNumber("side_length", gpu ? 64 : 32, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5 : 1, 0)), blend_value = searchParams.getNumber("blend_value", gpu ? 0.6 : 0.008, 0, 1), wave_delay = searchParams.getNumber("wave_delay", 30, 1), wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999 : 0.9, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), max_weight = 3.0;
-const params = new URLSearchParams([
-    ["gpu", `${gpu}`],
-    ["side_length", `${side_length}`],
-    ["brush_size", `${brush_size}`],
-    ["blend_value", `${blend_value}`],
-    ["wave_delay", `${wave_delay}`],
-    ["wave_decay", `${wave_decay}`],
-    ["decay_min_radius", `${decay_min_radius}`],
-    ["new_wave_delay", `${new_wave_delay}`],
-    ["new_wave_p", `${new_wave_p}`],
-    ["new_color_p", `${new_color_p}`],
-    ["new_color_compl_p", `${new_color_compl_p}`]
-]);
+const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0, 1)), side_length = searchParams.getNumber("side_length", gpu ? 64 : 32, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5 : 1, 0)), blend_value = searchParams.getNumber("blend_value", gpu ? 0.6 : 0.008, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999 : 0.9, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), wave_delay = searchParams.getNumber("wave_delay", 30, 1), 
+// cpu-side specific
+new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), 
+// gpu-side specific
+max_weight = 3.0;
+let state_rate = searchParams.getNumber("wave_delay_ms", 60, 1), weight_decay = searchParams.getNumber("color_decay_ms", 600, 1), diffusion_rate = searchParams.getNumber("color_diffusion_ms", 10, 1);
+function rate_from_ms(wave_delay_ms, convergence_fraction = 0.95) {
+    const t_seconds = wave_delay_ms * 0.001;
+    return -Math.log(1 - convergence_fraction) / t_seconds;
+}
+function ms_from_rate(rate, convergence_fraction = 0.95) {
+    return (-Math.log(1 - convergence_fraction) / rate) * 1000;
+}
+function not_saturated(target_ms, threshold = 1.0) {
+    return (renderer.delta_time * 1000 / target_ms) < threshold;
+}
 {
+    let params;
+    if (gpu) {
+        params = new URLSearchParams([
+            ["gpu", `${gpu}`],
+            ["side_length", `${side_length}`],
+            ["brush_size", `${brush_size}`],
+            ["wave_delay_ms", `${state_rate}`],
+            ["color_decay_ms", `${weight_decay}`],
+            ["color_diffusion_ms", `${diffusion_rate}`]
+        ]);
+    }
+    else {
+        params = new URLSearchParams([
+            ["gpu", `${gpu}`],
+            ["side_length", `${side_length}`],
+            ["brush_size", `${brush_size}`],
+            ["blend_value", `${blend_value}`],
+            ["wave_delay", `${wave_delay}`],
+            ["wave_decay", `${wave_decay}`],
+            ["decay_min_radius", `${decay_min_radius}`],
+            ["new_wave_delay", `${new_wave_delay}`],
+            ["new_wave_p", `${new_wave_p}`],
+            ["new_color_p", `${new_color_p}`],
+            ["new_color_compl_p", `${new_color_compl_p}`]
+        ]);
+    }
     const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
     if (window.location.search !== updated_search_params)
         window.history.replaceState({}, '', updated_search_params);
@@ -67,10 +95,10 @@ let show_menu = false;
 function dom_toggle_menu() {
     show_menu = show_menu ? false : true;
     menu_el.style.visibility = show_menu ? "visible" : "hidden";
-    shift_down = false;
-    ctrl_down = false;
-    mouse1_down = false;
-    wave_queue.clear();
+    keyboard.shift_down = false;
+    keyboard.ctrl_down = false;
+    mouse.m1_down = false;
+    stroke.flat_queue.clear();
 }
 /** last cliked button from #color-picker */
 let picked_colors_els = new Set();
@@ -101,7 +129,7 @@ function dom_update_color_picker() {
         el.classList.add("picked");
         el.textContent = "1";
         picked_colors_els.add(el);
-        choosen_palette = [palette_color_data[0]];
+        stroke.choosen_palette = [palette_color_data[0]];
     }
 }
 let mouse_down_on_color = false, 
@@ -129,8 +157,8 @@ function color_mouseenter(e) {
         bttn.classList.remove("picked");
         bttn.textContent = "";
         picked_colors_els.delete(bttn);
-        const els_array = [...picked_colors_els], ind = choosen_palette.indexOf(data);
-        choosen_palette.splice(ind, 1);
+        const els_array = [...picked_colors_els], ind = stroke.choosen_palette.indexOf(data);
+        stroke.choosen_palette.splice(ind, 1);
         for (let i = ind; i < els_array.length; ++i)
             els_array[i].textContent = (i + 1).toString();
     }
@@ -138,13 +166,13 @@ function color_mouseenter(e) {
         bttn.classList.add("picked");
         picked_colors_els.add(bttn);
         bttn.textContent = picked_colors_els.size.toString();
-        choosen_palette.push(data);
+        stroke.choosen_palette.push(data);
     }
 }
 function color_mouseup(e) {
     const bttn = e.target, color = palette_color_data[color_button_to_pallete_id.get(bttn)];
     if (!e.shiftKey) {
-        palette_color = 0;
+        stroke.palette_color = 0;
         for (const el of picked_colors_els) {
             el.classList.remove("picked");
             el.textContent = "";
@@ -153,7 +181,7 @@ function color_mouseup(e) {
         bttn.classList.add("picked");
         bttn.textContent = "1";
         picked_colors_els.add(bttn);
-        choosen_palette = [color];
+        stroke.choosen_palette = [color];
         return;
     }
 }
@@ -246,127 +274,6 @@ const palette = [
     new Uint8Array([64, 64, 64])
 ];
 let palette_color_data = palette.map(v => get_color_data(v));
-const t = {
-    "u_delta_time": { type: 3, default: 5 }
-};
-const NO_DEFAULT = undefined;
-const UPDATE = true, NO_UPDATE = false;
-const GL_INT = 0, GL_FLOAT = 1, GL_MAT4x4 = 2, GL_TEXTURE = 3;
-class uniform {
-    constructor(name, type, update, get) {
-        const important = name.startsWith("!"), val = important ? name.slice(1) : name;
-        this.name = val;
-        this.important = important;
-        this.update = update;
-        this.get = get;
-        // @ts-ignore
-        this.loc = null;
-        this.type = type;
-        this.get = get;
-    }
-}
-function compile_and_use_shader_program(gl, vertex_id, fragment_id, uniforms = []) {
-    if (gl === null || gl === undefined)
-        throw "Colorful.js: compile_and_use_shader_program(): the passed WebGL " +
-            "context is null or undefined";
-    if (!Array.isArray(uniforms))
-        throw "Colorful.js: compile_and_use_shader_program(): uniforms must be an " +
-            "array";
-    const v_el = document.getElementById(vertex_id), f_el = document.getElementById(fragment_id);
-    if (!(v_el instanceof HTMLScriptElement) || v_el.type !== "x-shader/vs")
-        throw "Colorful.js: compile_and_use_shader_program(): vertex source element " +
-            // @ts-ignore
-            "is expected to be of a <script> element of type 'x-shader/vs' (got " + v_el.type + ")";
-    if (!(f_el instanceof HTMLScriptElement) || f_el.type !== "x-shader/fs")
-        throw "Colorful.js: compile_and_use_shader_program(): fragment source element " +
-            "is expected to be of a <script> element of type 'x-shader/vs'";
-    const v_src = v_el.textContent.trimStart(), f_src = f_el.textContent.trimStart();
-    const v = gl.createShader(gl.VERTEX_SHADER);
-    if (v === null)
-        throw "Colorful.js: couldn't create vertex shader";
-    gl.shaderSource(v, v_src);
-    gl.compileShader(v);
-    if (!gl.getShaderParameter(v, gl.COMPILE_STATUS))
-        throw "Colorful.js: compile_shader(): failed to compile vertex " +
-            `shader "#${vertex_id}", reason: ` + gl.getShaderInfoLog(v);
-    const f = gl.createShader(gl.FRAGMENT_SHADER);
-    if (f === null)
-        throw "Colorful.js: couldn't create fragment shader";
-    gl.shaderSource(f, f_src);
-    gl.compileShader(f);
-    if (!gl.getShaderParameter(f, gl.COMPILE_STATUS))
-        throw "Colorful.js: compile_shader(): failed to compile fragment " +
-            `shader "#${fragment_id}", reason: ` + gl.getShaderInfoLog(f);
-    const p = gl.createProgram();
-    gl.attachShader(p, v);
-    gl.attachShader(p, f);
-    gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-        throw "Colorful.js: compile_shader(): failed to link shader program, " +
-            "reason: " + gl.getProgramInfoLog(p);
-    const uniforms_to_update = [];
-    const o = {
-        vertex: v,
-        fragment: f,
-        program: p,
-        uniforms_to_update: uniforms_to_update,
-        uniforms: {},
-        use_program_and_update_values() {
-            gl.useProgram(p);
-            for (const key of uniforms_to_update) {
-                o.uniforms[key].update_value();
-            }
-        }
-    };
-    gl.useProgram(p);
-    for (const u of uniforms) {
-        const name = u.name, loc = gl.getUniformLocation(p, name);
-        ;
-        if (loc === null) {
-            const msg = `Colorful.js: the specified uniform named '${name}' is`
-                + ` not defined within the shader`
-                + ` "#${vertex_id}|#${fragment_id}".`;
-            if (!u.important) {
-                console.warn(msg);
-                continue;
-            }
-            else
-                throw msg;
-        }
-        o.uniforms[name] = u;
-        let pass_to_GPU;
-        switch (u.type) {
-            case GL_INT:
-                pass_to_GPU = int_to_gpu;
-                break;
-            case GL_FLOAT:
-                pass_to_GPU = float_to_gpu;
-                break;
-            case GL_MAT4x4:
-                pass_to_GPU = mat4x4_to_gpu;
-                break;
-            case GL_TEXTURE:
-                pass_to_GPU = int_to_gpu;
-                break;
-            default:
-                throw "uniform: invalid type.";
-        }
-        if (loc === null)
-            u.update_value =
-                () => console.warn(`uniform '${name}' is not defined in the shader.`);
-        else if (!(u.get instanceof Function))
-            u.update_value =
-                () => console.warn(`uniform '${name}' has no getter function for automatic gpu value update.`);
-        else {
-            // @ts-ignore
-            u.update_value = () => pass_to_GPU(loc, u.get());
-            pass_to_GPU(loc, u.get());
-        }
-        if (u.update)
-            uniforms_to_update.push(name);
-    }
-    return o;
-}
 function mat4x4_mul(A, B) {
     const [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] = A, [$, _, C, D, E, F, G, H, I, J, K, L, M, N, O, P] = B;
     return new Float32Array([
@@ -495,6 +402,469 @@ function float_to_gpu(loc, x) {
 }
 function mat4x4_to_gpu(loc, x) {
     gl.uniformMatrix4fv(loc, false, x);
+}
+const gpu_vert = `
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+layout(location = 2) in vec2 uv;
+layout(location = 3) in vec2 adj_uv1;
+layout(location = 4) in vec2 adj_uv2;
+layout(location = 5) in vec2 adj_uv3;
+layout(location = 6) in uint hovered;
+
+uniform mat4 u_view_proj;
+
+flat out uint v_id;
+out vec2 v_uv;
+out vec2 v_adj_uv1;
+out vec2 v_adj_uv2;
+out vec2 v_adj_uv3;
+flat out uint v_hovered;
+out vec2 v_local_pos;
+
+void main() {
+    v_local_pos = pos;
+    v_id = id;
+    v_uv = uv;
+    v_adj_uv1 = adj_uv1;
+    v_adj_uv2 = adj_uv2;
+    v_adj_uv3 = adj_uv3;
+    v_hovered = hovered;
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
+}`;
+const gpu_frag = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+flat in uint v_id;
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+flat in uint v_hovered;
+in vec2 v_local_pos;
+
+uniform sampler2D u_texture;
+uniform sampler2D u_state_weights;
+uniform sampler2D u_wcolor_dist;
+uniform sampler2D u_hcolor;
+
+uniform float u_blend_value;
+uniform float u_wave_decay;
+uniform float u_decay_min_radius;
+
+out vec4 o_color;
+
+void main() {
+    vec2 p = abs(v_local_pos);
+    float max_dist = max(p.x * 0.8660254 + p.y * 0.5, p.y);
+    if (max_dist > 0.86235) {
+        o_color = vec4(1.0, 1.0, 1.0, 1.0);
+        return;
+    }
+
+    vec3 original_color = texture(u_texture, v_uv).rgb;
+    float state = texture(u_state_weights, v_uv).r;
+
+    vec4 wcolor_dist = texture(u_wcolor_dist, v_uv);
+    vec3 wave_color = wcolor_dist.rgb;
+    
+    // float distance = wcolor_dist.a;
+    // float decay_factor = u_blend_value * pow(u_wave_decay, max(distance - u_decay_min_radius - 1.0, 0.0));
+    // decay_factor = clamp(decay_factor, 0.0, 1.0);
+
+    float factor = smoothstep(0.0, 0.15, state);
+    o_color = vec4(mix(original_color, wave_color, factor), 1.0);
+
+    if (v_hovered == 1u) {
+        vec3 hcolor = texture(u_hcolor, v_uv).rgb;
+
+        // tint toward the stroke colour
+        vec3 tinted = mix(o_color.rgb, hcolor, 0.6);
+
+        // then keep your contrast rule, based on the tinted result
+        float lum = dot(tinted, vec3(0.299, 0.587, 0.114));
+        tinted = lum > 0.5 ? tinted * 0.6
+                        : mix(tinted, vec3(1.0), 0.35);
+
+        o_color = vec4(tinted, 1.0);
+    }
+}`;
+const cpu_vert = `
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+layout(location = 2) in vec2 uv;
+
+uniform mat4 u_view_proj;
+
+flat out uint v_id;
+out vec2 v_uv;
+out vec2 v_local_pos;
+
+void main() {
+    v_local_pos = pos;
+    v_id = id;
+    v_uv = uv;
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
+}`;
+const cpu_frag = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+flat in uint v_id;
+in vec2 v_uv;
+in vec2 v_local_pos;
+
+uniform sampler2D u_texture;
+
+out vec4 o_color;
+
+void main() {
+    vec2 p = abs(v_local_pos);
+    float max_dist = max(p.x * 0.8660254 + p.y * 0.5, p.y);
+
+    if (max_dist > 0.86235) {
+        o_color = vec4(1.0, 1.0, 1.0, 1.0);
+    }
+    else {  
+        o_color = texture(u_texture, v_uv);
+    }
+}`;
+const state_vert = `
+#version 300 es
+layout(location = 0) in uint id;
+layout(location = 1) in vec2 uv;
+layout(location = 2) in vec2 adj_uv1;
+layout(location = 3) in vec2 adj_uv2;
+layout(location = 4) in vec2 adj_uv3;
+
+flat out uint v_id;
+out vec2 v_uv;
+out vec2 v_adj_uv1;
+out vec2 v_adj_uv2;
+out vec2 v_adj_uv3;
+
+void main() {
+    v_id = id;
+    v_uv = uv;
+    v_adj_uv1 = adj_uv1;
+    v_adj_uv2 = adj_uv2;
+    v_adj_uv3 = adj_uv3;
+
+    gl_Position = vec4(v_uv * 2.0 - 1.0, 0.0, 1.0);
+    gl_PointSize = 1.0;
+}`;
+const state_frag = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+flat in uint v_id;
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+
+uniform sampler2D u_state_weights;
+uniform sampler2D u_wcolor_dist;
+
+const float MAX_WEIGHT = ${max_weight.toFixed(1)};
+
+uniform highp float u_delta_time;
+uniform highp float u_state_rate;
+uniform highp float u_weight_decay;
+uniform highp float u_diffusion_rate;
+
+layout(location = 0) out highp vec4 o_state_weights;
+layout(location = 1) out highp vec4 o_wcolor_dist;
+
+void main() {
+    bool has_third = v_adj_uv3.x > -1.0;
+
+    float this_state  = texture(u_state_weights, v_uv).r;
+    float this_weight = texture(u_state_weights, v_uv).g;
+
+    float s1 = texture(u_state_weights, v_adj_uv1).r;
+    float s2 = texture(u_state_weights, v_adj_uv2).r;
+    float s3 = has_third ? texture(u_state_weights, v_adj_uv3).r : 0.0;
+
+    float nw1 = texture(u_state_weights, v_adj_uv1).g;
+    float nw2 = texture(u_state_weights, v_adj_uv2).g;
+    float nw3 = has_third ? texture(u_state_weights, v_adj_uv3).g : 0.0;
+
+    float a1 = max(s1 - this_state, 0.0);
+    float a2 = max(s2 - this_state, 0.0);
+    float a3 = has_third ? max(s3 - this_state, 0.0) : 0.0;
+    float total = a1 + a2 + a3;
+
+    float w1, w2, w3;
+    if (total > 0.0) {
+        w1 = a1 / total; w2 = a2 / total; w3 = a3 / total;
+    } else {
+        float n = has_third ? 3.0 : 2.0;
+        w1 = 1.0 / n; w2 = 1.0 / n; w3 = has_third ? 1.0 / n : 0.0;
+    }
+
+    float from_state = max(this_state, max(s1, s2));
+    if (has_third) from_state = max(from_state, s3);
+    float new_state = from_state - (from_state - this_state) * exp(-u_state_rate * u_delta_time);
+
+    vec4 self_wd = texture(u_wcolor_dist, v_uv);
+    vec4 wd1 = texture(u_wcolor_dist, v_adj_uv1);
+    vec4 wd2 = texture(u_wcolor_dist, v_adj_uv2);
+    vec4 wd3 = has_third ? texture(u_wcolor_dist, v_adj_uv3) : vec4(0.0);
+
+    float decayed_weight = this_weight * exp(-u_weight_decay * u_delta_time);
+
+    vec3 propagated_color;
+    float new_weight;
+    float new_distance;
+    if (total > 0.0) {
+        // contribution = state advantage * how much real colour the neighbor holds
+        float c1 = a1 * nw1;
+        float c2 = a2 * nw2;
+        float c3 = a3 * nw3;
+        float ct = c1 + c2 + c3;
+
+        if (ct > 1e-9) {
+            vec3 incoming_color = (c1 * wd1.rgb + c2 * wd2.rgb + c3 * wd3.rgb) / ct;
+            float incoming_weight = total * u_delta_time;
+            float blend_total = decayed_weight + incoming_weight;
+            propagated_color = (self_wd.rgb * decayed_weight + incoming_color * incoming_weight) / blend_total;
+            new_weight = min(blend_total, MAX_WEIGHT);
+        } else {
+            // ahead neighbors carry no real colour: don't pull anything in
+            propagated_color = self_wd.rgb;
+            new_weight = decayed_weight;
+        }
+
+        // ignore float-noise "advantage"
+        const float EPS = 1e-6;
+        float d = 1e9;
+        if (a1 > EPS) d = min(d, wd1.a);
+        if (a2 > EPS) d = min(d, wd2.a);
+        if (has_third && a3 > EPS) d = min(d, wd3.a);
+        new_distance = (d < 1e8) ? d + 1.0 : self_wd.a;
+    } else {
+        propagated_color = self_wd.rgb;
+        new_distance = self_wd.a;
+        new_weight = this_weight;
+    }
+
+    // unconditional diffusion pass — always runs, driven by neighbor weight
+    // (not state advantage), so it actively mixes at the frontier where
+    // advantage is near zero, but doesn't dilute low-weight/fresh neighbors
+    float diffuse_total = nw1 + nw2 + nw3;
+    vec3 diffuse_target = diffuse_total > 0.0
+        ? (nw1 * wd1.rgb + nw2 * wd2.rgb + nw3 * wd3.rgb) / diffuse_total
+        : propagated_color;
+
+    //float diffusion_amount = clamp(u_diffusion_rate * u_delta_time, 0.0, 1.0);
+    float diffusion_amount = 1.0 - exp(-u_diffusion_rate * u_delta_time);
+    vec3 new_wcolor = mix(propagated_color, diffuse_target, diffusion_amount);
+
+    o_wcolor_dist   = vec4(new_wcolor, new_distance);
+    o_state_weights = vec4(new_state, new_weight, 0.0, 0.0);
+}`;
+const mask_vert = `
+#version 300 es
+layout(location = 0) in vec2 pos;
+layout(location = 1) in uint id;
+
+uniform mat4 u_view_proj;
+
+flat out uint v_id;
+
+void main() {
+    v_id = id;
+    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
+}`;
+const mask_frag = `
+#version 300 es
+precision highp float;
+precision highp int;
+
+flat in uint v_id;
+
+out uint o_color;
+
+void main() {
+    o_color = v_id;
+}`;
+const NO_DEFAULT = undefined;
+const U_UPDATE = 1, U_INIT = 2;
+const GL_INT = 4, GL_FLOAT = 5, GL_MAT4x4 = 6, GL_TEXTURE = 7;
+const MAX_VALIDITY_WARN_COUNT = 30;
+class uniform {
+    constructor(name, type, flags, v, validity_check) {
+        const important = name.startsWith("!"), val = important ? name.slice(1) : name;
+        this.name = val;
+        this.important = important;
+        this.update = flags & U_UPDATE;
+        this.init = flags & U_INIT;
+        if (v instanceof Function)
+            this.get = v;
+        else
+            this.default = v;
+        // @ts-ignore
+        this.loc = null;
+        this.type = type;
+        this.validity_check = validity_check;
+        this.validity_warn_count = 0;
+    }
+    get v() {
+        if (this.get !== undefined)
+            return this.get();
+        return this.default;
+    }
+}
+const _warn_uniform_not_defined = {};
+function warn_uniform_not_defined(from, uniform_name) {
+    if (_warn_uniform_not_defined[from] === undefined) {
+        _warn_uniform_not_defined[from] = {};
+    }
+    if (_warn_uniform_not_defined[from][uniform_name])
+        return;
+    _warn_uniform_not_defined[from][uniform_name] = true;
+    console.warn(`uniform '${uniform_name}' is not defined in the shader.`);
+}
+const _warn_uniform_no_getter = {};
+function warn_uniform_no_getter(from, uniform_name) {
+    if (_warn_uniform_no_getter[from] === undefined) {
+        _warn_uniform_no_getter[from] = {};
+    }
+    if (_warn_uniform_no_getter[from][uniform_name])
+        return;
+    _warn_uniform_no_getter[from][uniform_name] = true;
+    console.warn(`uniform '${uniform_name}' has both no getter function and no default` +
+        ` value for automatic gpu uniform update.`);
+}
+const shaders = {};
+class shader_program {
+    constructor(id, vert_src, frag_src, uniforms) {
+        if (shaders[id] !== undefined)
+            throw `shader_program: a program with id '${id}' already exists.`;
+        const v = gl.createShader(gl.VERTEX_SHADER);
+        if (v === null)
+            throw "shader_program: failed to create vertex shader";
+        gl.shaderSource(v, vert_src.trim());
+        gl.compileShader(v);
+        if (!gl.getShaderParameter(v, gl.COMPILE_STATUS))
+            throw `Shader{${id}}: failed to compile vertex shader, reason:` +
+                gl.getShaderInfoLog(v);
+        const f = gl.createShader(gl.FRAGMENT_SHADER);
+        if (f === null)
+            throw "shader_program: failed to create fragment shader";
+        gl.shaderSource(f, frag_src.trim());
+        gl.compileShader(f);
+        if (!gl.getShaderParameter(f, gl.COMPILE_STATUS))
+            throw `Shader{${id}}: failed to compile fragment shader, reason:` +
+                gl.getShaderInfoLog(f);
+        const p = gl.createProgram();
+        gl.attachShader(p, v);
+        gl.attachShader(p, f);
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+            throw `Shader{${id}}: failed to create link shader program,` +
+                `reason: ${gl.getProgramInfoLog(p)}`;
+        gl.useProgram(p);
+        this.vertex = v;
+        this.fragment = f;
+        this.program = p;
+        const uniforms_to_update = [];
+        this.uniforms_to_update = uniforms_to_update;
+        this.uniforms = {};
+        for (const u of uniforms) {
+            const name = u.name, loc = gl.getUniformLocation(p, name);
+            if (loc === null) {
+                const msg = `Shader{${id},${name}}: not defined.`;
+                if (!u.important) {
+                    console.warn(msg);
+                    continue;
+                }
+                else
+                    throw msg;
+            }
+            u.loc = loc;
+            this.uniforms[name] = u;
+            let pass_to_GPU;
+            switch (u.type) {
+                case GL_INT:
+                    pass_to_GPU = int_to_gpu;
+                    break;
+                case GL_FLOAT:
+                    pass_to_GPU = float_to_gpu;
+                    break;
+                case GL_MAT4x4:
+                    pass_to_GPU = mat4x4_to_gpu;
+                    break;
+                case GL_TEXTURE:
+                    pass_to_GPU = int_to_gpu;
+                    break;
+                default:
+                    throw `Shader{${id},${name}}: invalid uniform type.`;
+            }
+            const no_loc = loc === null, no_getter = u.default === undefined && u.get === undefined;
+            if (no_loc)
+                u.update_value = () => warn_uniform_not_defined(id, name);
+            else if (no_getter)
+                u.update_value = () => warn_uniform_no_getter(id, name);
+            else if (u.validity_check instanceof Function) {
+                if (u.v instanceof Function) {
+                    u.update_value = () => {
+                        const v = u.v;
+                        // @ts-ignore
+                        if (!u.validity_check(v)) {
+                            console.warn(`Shader{${id},${name}}: value ${v}: failed` +
+                                " validity check.");
+                            if (++u.validity_warn_count === MAX_VALIDITY_WARN_COUNT)
+                                u.update_value = () => pass_to_GPU(loc, u.v);
+                        }
+                        pass_to_GPU(loc, v);
+                    };
+                }
+                else {
+                    u.update_value = () => {
+                        const v = u.v;
+                        // @ts-ignore
+                        if (!u.validity_check(v)) {
+                            console.warn(`Shader{${id},${name}}: value` +
+                                // @ts-ignore
+                                typeof v === "number" ? v.toFixed(3) : v.toString() +
+                                `: failed validity check.`);
+                            u.update_value = () => pass_to_GPU(loc, u.v);
+                        }
+                        pass_to_GPU(loc, v);
+                    };
+                }
+            }
+            else // @ts-ignore
+                u.update_value = () => pass_to_GPU(u.loc, u.v);
+            if (u.update)
+                if (no_loc || no_getter)
+                    console.error(`Shader{${id},${name}}: couldn't be added to` +
+                        " uniforms_to_update.");
+                else
+                    uniforms_to_update.push(name);
+            if (u.init)
+                if (no_getter)
+                    console.error(`Shader{${id},${name}}: couldn't be` +
+                        "initialized.");
+                else
+                    pass_to_GPU(loc, u.v);
+        }
+        shaders[id] = this;
+    }
+    use_program() {
+        gl.useProgram(this.program);
+        for (const key of this.uniforms_to_update) {
+            this.uniforms[key].update_value();
+        }
+    }
 }
 class adj_node {
     constructor(id) {
@@ -713,9 +1083,13 @@ class ColorfulGrid {
         }
         const tex_length = texture_size * texture_size * 4;
         this.texture = new Uint8Array(tex_length);
-        const u32view = new Uint32Array(this.texture.buffer);
-        u32view.fill(pack_uint8(color));
-        this.texture_u32view = u32view;
+        const t_u32view = new Uint32Array(this.texture.buffer);
+        t_u32view.fill(pack_uint8(color));
+        this.texture_u32view = t_u32view;
+        this.hover_texture = new Uint8Array(tex_length);
+        const ht_u32view = new Uint32Array(this.hover_texture.buffer);
+        ht_u32view.fill(0);
+        this.hover_texture_u32view = ht_u32view;
         if (gpu) {
             this.state_weights = new Float32Array(tex_length);
             this.state_weights.fill(0.0);
@@ -774,511 +1148,522 @@ function update_viewport() {
     const _width = window.innerWidth, _height = window.innerHeight;
     if (_width !== width || _height !== height) {
         canvas_rect = canvas_el.getBoundingClientRect();
-        units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
-        units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+        camera.units_per_pixel_x = 2 * camera.scale / canvas_rect.width;
+        camera.units_per_pixel_y = 2 * camera.scale / canvas_rect.height;
         canvas_el.width = width = _width;
         canvas_el.height = height = _height;
         resize_R32UI_texture(mask_texture, width, height);
-        ar = width / height;
-        update_view_proj_mat = true;
-        force_render_mask = true;
-        mouse1_down = false;
-        shift_down = false;
-        ctrl_down = false;
-        queued_strokes = [];
-        wave_queue.clear();
-        hovered_id = undefined;
+        camera.ar = width / height;
+        renderer.update_view_proj_mat = true;
+        renderer.force_render_mask = true;
+        mouse.m1_down = false;
+        keyboard.shift_down = false;
+        keyboard.ctrl_down = false;
+        stroke.queue = [];
+        stroke.flat_queue.clear();
+        mouse.last_hovered_id = -1;
     }
 }
 /** this value is used to  */
-let wave_id = 0, 
-/** */
-choosen_palette = [], 
-/** index of the color used from the current choosen palette of colors. */
-palette_color = 0, 
-/** value used to filter out all the queued waves when filling or clearing
- * the entire grid. */
-queued_wave_count = 0, 
-/** each wave_id lower or equal to this value will be discarded. */
-prevent_waves_last_id = 0;
-function cpu_wave_start(ids, color_data, _wave_id) {
-    --queued_wave_count;
-    queued_wave_count = Math.max(queued_wave_count, 0);
-    const _state = _wave_id === undefined
-        ? ++wave_id
-        : _wave_id;
-    if (_state <= prevent_waves_last_id)
-        return;
-    let color, fcolor, packed;
-    if (color_data === undefined) {
-        const data = choosen_palette[palette_color];
-        color = data.color;
-        if (choosen_palette.length > 1)
-            palette_color = (palette_color + 1) % choosen_palette.length;
-        fcolor = data.fcolor;
-        packed = data.packed;
-    }
-    else {
-        color = color_data.color;
-        fcolor = color_data.fcolor;
-        packed = color_data.packed;
-    }
-    let next;
-    if (typeof ids === "number") {
-        grid.adj_graph[ids].state = _state;
-        if (wave_queue.has(ids)) {
-            const offset = ids * 4;
-            grid.texture[offset] = Math.floor((color[0] + 255) * 0.5);
-            grid.texture[offset + 1] = Math.floor((color[1] + 255) * 0.5);
-            grid.texture[offset + 2] = Math.floor((color[2] + 255) * 0.5);
-            grid.texture[offset + 3] = 255;
+// let wave_id = 0,
+//     /** */
+//     choosen_palette = [] as color_data[],
+//     /** index of the color used from the current choosen palette of colors. */
+//     palette_color = 0,
+//     /** value used to filter out all the queued waves when filling or clearing
+//      * the entire grid. */
+//     queued_wave_count = 0,
+//     /** each wave_id lower or equal to this value will be discarded. */
+//     prevent_waves_last_id = 0;
+let wave_start, fill_grid, inward_wave;
+if (gpu !== 1) {
+    function cpu_wave_start(ids, color_data, _wave_id) {
+        --stroke.queued_wave_count;
+        stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
+        const _state = _wave_id === undefined
+            ? ++stroke.wave_id
+            : _wave_id;
+        if (_state <= stroke.prevent_waves_last_id)
+            return;
+        let color, fcolor, packed;
+        if (color_data === undefined) {
+            const data = stroke.choosen_palette[stroke.palette_color];
+            color = data.color;
+            if (stroke.choosen_palette.length > 1)
+                stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
+            fcolor = data.fcolor;
+            packed = data.packed;
         }
-        else
-            grid.texture_u32view[ids] = packed;
-        next = new Set(grid.adj_graph[ids].next);
-    }
-    else {
-        next = new Set();
-        for (const id of ids) {
-            const node = grid.adj_graph[id];
-            node.state = _state;
-            grid.texture_u32view[id] = packed;
-            for (const nnext of node.next) {
-                if (next.has(nnext))
-                    continue;
-                next.add(nnext);
-            }
+        else {
+            color = color_data.color;
+            fcolor = color_data.fcolor;
+            packed = color_data.packed;
         }
-    }
-    texture_is_dirty = true;
-    cpu_wave_propagate(next, _state, { color, fcolor, packed }, 0);
-}
-function cpu_wave_propagate(ids, state, color_data, depth) {
-    --queued_wave_count;
-    queued_wave_count = Math.max(queued_wave_count, 0);
-    if (state <= prevent_waves_last_id)
-        return;
-    const collected = new Set(), new_wave = new Set();
-    let factor = blend_value;
-    if (wave_decay < 1)
-        factor *= wave_decay ** Math.max(depth - decay_min_radius - 1, 0);
-    const { color, packed } = color_data;
-    for (const node of ids) {
-        if (node.state === state) {
-            ids.delete(node);
-            continue;
-        }
-        if (Math.random() <= new_wave_p)
-            new_wave.add(node);
-        const node_id = node.id, offset = node_id * 4, is_hovered = wave_queue.has(node_id);
-        node.state = state;
-        let avg_r = 0, avg_g = 0, avg_b = 0;
-        for (const adj_node of node.next) {
-            const adj_id = adj_node.id, adj_offset = adj_id * 4;
-            if (wave_queue.has(adj_id)) {
-                /** remove applied white highlight color from adjacent nodes
-                 * before adding the true color to the total sum */
-                avg_r +=
-                    Math.max(Math.floor(2 * grid.texture[adj_offset] - 255), 0);
-                avg_g +=
-                    Math.max(Math.floor(2 * grid.texture[adj_offset + 1] - 255), 0);
-                avg_b +=
-                    Math.max(Math.floor(2 * grid.texture[adj_offset + 2] - 255), 0);
-            }
-            else {
-                avg_r += grid.texture[adj_offset];
-                avg_g += grid.texture[adj_offset + 1];
-                avg_b += grid.texture[adj_offset + 2];
-            }
-            if (ids.has(adj_node) || adj_node.state >= state)
-                continue;
-            collected.add(adj_node);
-        }
-        const inv_adj_count = 1 / node.next.size;
-        avg_r *= inv_adj_count;
-        avg_g *= inv_adj_count;
-        avg_b *= inv_adj_count;
-        if (factor >= 1) {
-            if (is_hovered) {
-                grid.texture[offset] =
-                    Math.max(Math.floor((avg_r + 255) * 0.5), 0);
-                grid.texture[offset + 1] =
-                    Math.max(Math.floor((avg_g + 255) * 0.5), 0);
-                grid.texture[offset + 2] =
-                    Math.max(Math.floor((avg_b + 255) * 0.5), 0);
+        let next;
+        if (typeof ids === "number") {
+            grid.adj_graph[ids].state = _state;
+            if (stroke.flat_queue.has(ids)) {
+                const offset = ids * 4;
+                grid.texture[offset] = Math.floor((color[0] + 255) * 0.5);
+                grid.texture[offset + 1] = Math.floor((color[1] + 255) * 0.5);
+                grid.texture[offset + 2] = Math.floor((color[2] + 255) * 0.5);
                 grid.texture[offset + 3] = 255;
             }
             else
-                grid.texture_u32view[node_id] = packed;
-        }
-        else if (factor > 0) {
-            const p_in = 1 - factor, p = factor;
-            if (is_hovered) {
-                grid.texture[offset] =
-                    Math.max(Math.floor((Math.floor(avg_r * p_in + color[0] * p) + 255) * 0.5), 0);
-                grid.texture[offset + 1] =
-                    Math.max(Math.floor((Math.floor(avg_g * p_in + color[1] * p) + 255) * 0.5), 0);
-                grid.texture[offset + 2] =
-                    Math.max(Math.floor((Math.floor(avg_b * p_in + color[2] * p) + 255) * 0.5), 0);
-                grid.texture[offset + 3] = 255;
-            }
-            else {
-                grid.texture[offset] = Math.floor(avg_r * p_in + color[0] * p);
-                grid.texture[offset + 1] = Math.floor(avg_g * p_in + color[1] * p);
-                grid.texture[offset + 2] = Math.floor(avg_b * p_in + color[2] * p);
-                grid.texture[offset + 3] = 255;
-            }
+                grid.texture_u32view[ids] = packed;
+            next = new Set(grid.adj_graph[ids].next);
         }
         else {
-            if (is_hovered) {
-                grid.texture[offset] =
-                    Math.max(Math.floor((avg_r + 255) * 0.5), 0);
-                grid.texture[offset + 1] =
-                    Math.max(Math.floor((avg_g + 255) * 0.5), 0);
-                grid.texture[offset + 2] =
-                    Math.max(Math.floor((avg_b + 255) * 0.5), 0);
-                grid.texture[offset + 3] = 255;
-            }
-            else {
-                grid.texture[offset] = Math.floor(avg_r);
-                grid.texture[offset + 1] = Math.floor(avg_g);
-                grid.texture[offset + 2] = Math.floor(avg_b);
-                grid.texture[offset + 3] = 255;
-            }
-        }
-    }
-    texture_is_dirty = true;
-    for (const new_start of new_wave) {
-        const new_id = new_start.id, new_offset = new_id * 4, is_hovered = wave_queue.has(new_id);
-        let new_color; //, new_color_packed: number;
-        let new_color_data;
-        if (Math.random() <= new_color_p) {
-            if (Math.random() <= new_color_compl_p)
-                new_color = new Uint8Array([
-                    255 - color[0],
-                    255 - color[1],
-                    255 - color[2],
-                    255
-                ]);
-            else
-                new_color = undefined;
-        }
-        else {
-            if (is_hovered) {
-                new_color = new Uint8Array([
-                    Math.max(2 * grid.texture[new_offset] - 255, 0),
-                    Math.max(2 * grid.texture[new_offset + 1] - 255, 0),
-                    Math.max(2 * grid.texture[new_offset + 2] - 255, 0),
-                    255
-                ]);
-            }
-            else {
-                new_color = new Uint8Array([
-                    grid.texture[new_offset],
-                    grid.texture[new_offset + 1],
-                    grid.texture[new_offset + 2],
-                    255
-                ]);
-            }
-        }
-        if (new_color !== undefined)
-            new_color_data = get_color_data(new_color);
-        ++queued_wave_count;
-        setTimeout(cpu_wave_start, new_wave_delay, new_id, new_color_data, ++wave_id);
-    }
-    if (collected.size === 0)
-        return;
-    ++queued_wave_count;
-    setTimeout(cpu_wave_propagate, wave_delay, collected, state, color_data, depth + 1);
-}
-function cpu_inward_wave() {
-    const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
-    const s = new Set();
-    for (let i = from; i < to; ++i) {
-        if (i % mod === m) {
-            s.add(i);
-            cpu_wave_start(s);
-            s.clear();
-        }
-    }
-    cpu_wave_start(s);
-}
-function cpu_fill_grid(color) {
-    const clear_color = color === undefined ?
-        pack_uint8(grid_bg) :
-        color.packed;
-    grid.texture_u32view.fill(clear_color);
-    grid.texture_u32view[0] = 0;
-    if (queued_wave_count > 0) {
-        prevent_waves_last_id = wave_id + queued_wave_count;
-        wave_id = prevent_waves_last_id + 1;
-    }
-    texture_is_dirty = true;
-}
-/** last hovered vertex id, used to prevent the same vertex from being
- * processed multiple times */
-let hovered_id = undefined, 
-/** this set is used to both apply and remove the highlight color effect. */
-wave_queue = new Set(), 
-/** this array encodes the individual queued strokes with their respective
- * color. */
-queued_strokes = [], 
-/** this value is set to true whenever the left mouse button is lifted. */
-broke_stroke = false, 
-/** default value set to -1, since this variable gets incremented by one
- * each time a new queued stroke is done (this also applied to the first
- * one). */
-stroke_count = -1;
-function cpu_process_stroke(hovered) {
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
-            if (!wave_queue.has(hovered)) {
-                wave_queue.add(hovered);
-                if (broke_stroke) {
-                    queued_strokes[++stroke_count] = {
-                        stroke: new Set(),
-                        color_data: choosen_palette[palette_color]
-                    };
-                    if (choosen_palette.length > 1)
-                        palette_color = (palette_color + 1) % choosen_palette.length;
-                    broke_stroke = false;
+            next = new Set();
+            for (const id of ids) {
+                const node = grid.adj_graph[id];
+                node.state = _state;
+                grid.texture_u32view[id] = packed;
+                for (const nnext of node.next) {
+                    if (next.has(nnext))
+                        continue;
+                    next.add(nnext);
                 }
-                queued_strokes[stroke_count].stroke.add(hovered);
-                const offset = hovered * 4;
-                grid.texture[offset] =
-                    Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset + 1] =
-                    Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
-                grid.texture[offset + 2] =
-                    Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
             }
-            for (const adj of grid.adj_graph[hovered].next) {
-                const id = adj.id, offset = id * 4;
-                if (wave_queue.has(id))
+        }
+        renderer.texture_is_dirty = true;
+        cpu_wave_propagate(next, _state, { color, fcolor, packed }, 0);
+    }
+    function cpu_wave_propagate(ids, state, color_data, depth) {
+        --stroke.queued_wave_count;
+        stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
+        if (state <= stroke.prevent_waves_last_id)
+            return;
+        const collected = new Set(), new_wave = new Set();
+        let factor = blend_value;
+        if (wave_decay < 1)
+            factor *= wave_decay ** Math.max(depth - decay_min_radius - 1, 0);
+        const { color, packed } = color_data;
+        for (const node of ids) {
+            if (node.state === state) {
+                ids.delete(node);
+                continue;
+            }
+            if (Math.random() <= new_wave_p)
+                new_wave.add(node);
+            const node_id = node.id, offset = node_id * 4, is_hovered = stroke.flat_queue.has(node_id);
+            node.state = state;
+            let avg_r = 0, avg_g = 0, avg_b = 0;
+            for (const adj_node of node.next) {
+                const adj_id = adj_node.id, adj_offset = adj_id * 4;
+                if (stroke.flat_queue.has(adj_id)) {
+                    /** remove applied white highlight color from adjacent nodes
+                     * before adding the true color to the total sum */
+                    avg_r +=
+                        Math.max(Math.floor(2 * grid.texture[adj_offset] - 255), 0);
+                    avg_g +=
+                        Math.max(Math.floor(2 * grid.texture[adj_offset + 1] - 255), 0);
+                    avg_b +=
+                        Math.max(Math.floor(2 * grid.texture[adj_offset + 2] - 255), 0);
+                }
+                else {
+                    avg_r += grid.texture[adj_offset];
+                    avg_g += grid.texture[adj_offset + 1];
+                    avg_b += grid.texture[adj_offset + 2];
+                }
+                if (ids.has(adj_node) || adj_node.state >= state)
                     continue;
-                queued_strokes[stroke_count].stroke.add(id);
-                wave_queue.add(id);
-                grid.texture[offset] =
-                    Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset + 1] =
-                    Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
-                grid.texture[offset + 2] =
-                    Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
+                collected.add(adj_node);
             }
-            texture_is_dirty = true;
-        }
-        else if (ctrl_down) {
-            cpu_fill_grid(choosen_palette[palette_color]);
-        }
-        else {
-            const brush = new Set(grid.adj_graph[hovered].brush);
-            cpu_wave_start(brush);
-        }
-        hovered_id = hovered;
-    }
-}
-function cpu_remove_highlights() {
-    for (const id of wave_queue) {
-        const offset = id * 4;
-        grid.texture[offset] = Math.max(2 * grid.texture[offset] - 255, 0);
-        grid.texture[offset + 1] = Math.max(2 * grid.texture[offset + 1] - 255, 0);
-        grid.texture[offset + 2] = Math.max(2 * grid.texture[offset + 2] - 255, 0);
-        grid.texture[offset + 3] = Math.max(2 * grid.texture[offset + 3] - 255, 0);
-    }
-    texture_is_dirty = true;
-    wave_queue.clear();
-}
-function cpu_process_queued_strokes() {
-    if (wave_queue.size === 0)
-        return;
-    cpu_remove_highlights();
-    for (let i = 0; i < queued_strokes.length; ++i) {
-        const q = queued_strokes[i];
-        let s = new Set(), mod = 3, m;
-        for (const id of q.stroke) {
-            if (m === undefined) {
-                m = id % mod;
+            const inv_adj_count = 1 / node.next.size;
+            avg_r *= inv_adj_count;
+            avg_g *= inv_adj_count;
+            avg_b *= inv_adj_count;
+            if (factor >= 1) {
+                if (is_hovered) {
+                    grid.texture[offset] =
+                        Math.max(Math.floor((avg_r + 255) * 0.5), 0);
+                    grid.texture[offset + 1] =
+                        Math.max(Math.floor((avg_g + 255) * 0.5), 0);
+                    grid.texture[offset + 2] =
+                        Math.max(Math.floor((avg_b + 255) * 0.5), 0);
+                    grid.texture[offset + 3] = 255;
+                }
+                else
+                    grid.texture_u32view[node_id] = packed;
             }
-            s.add(id);
-            if (id % mod === m) {
-                cpu_wave_start(s, q.color_data);
-                s = new Set();
+            else if (factor > 0) {
+                const p_in = 1 - factor, p = factor;
+                if (is_hovered) {
+                    grid.texture[offset] =
+                        Math.max(Math.floor((Math.floor(avg_r * p_in + color[0] * p) + 255) * 0.5), 0);
+                    grid.texture[offset + 1] =
+                        Math.max(Math.floor((Math.floor(avg_g * p_in + color[1] * p) + 255) * 0.5), 0);
+                    grid.texture[offset + 2] =
+                        Math.max(Math.floor((Math.floor(avg_b * p_in + color[2] * p) + 255) * 0.5), 0);
+                    grid.texture[offset + 3] = 255;
+                }
+                else {
+                    grid.texture[offset] = Math.floor(avg_r * p_in + color[0] * p);
+                    grid.texture[offset + 1] = Math.floor(avg_g * p_in + color[1] * p);
+                    grid.texture[offset + 2] = Math.floor(avg_b * p_in + color[2] * p);
+                    grid.texture[offset + 3] = 255;
+                }
+            }
+            else {
+                if (is_hovered) {
+                    grid.texture[offset] =
+                        Math.max(Math.floor((avg_r + 255) * 0.5), 0);
+                    grid.texture[offset + 1] =
+                        Math.max(Math.floor((avg_g + 255) * 0.5), 0);
+                    grid.texture[offset + 2] =
+                        Math.max(Math.floor((avg_b + 255) * 0.5), 0);
+                    grid.texture[offset + 3] = 255;
+                }
+                else {
+                    grid.texture[offset] = Math.floor(avg_r);
+                    grid.texture[offset + 1] = Math.floor(avg_g);
+                    grid.texture[offset + 2] = Math.floor(avg_b);
+                    grid.texture[offset + 3] = 255;
+                }
             }
         }
-        if (s.size > 0) {
-            cpu_wave_start(s, q.color_data);
-            s.clear();
+        renderer.texture_is_dirty = true;
+        for (const new_start of new_wave) {
+            const new_id = new_start.id, new_offset = new_id * 4, is_hovered = stroke.flat_queue.has(new_id);
+            let new_color; //, new_color_packed: number;
+            let new_color_data;
+            if (Math.random() <= new_color_p) {
+                if (Math.random() <= new_color_compl_p)
+                    new_color = new Uint8Array([
+                        255 - color[0],
+                        255 - color[1],
+                        255 - color[2],
+                        255
+                    ]);
+                else
+                    new_color = undefined;
+            }
+            else {
+                if (is_hovered) {
+                    new_color = new Uint8Array([
+                        Math.max(2 * grid.texture[new_offset] - 255, 0),
+                        Math.max(2 * grid.texture[new_offset + 1] - 255, 0),
+                        Math.max(2 * grid.texture[new_offset + 2] - 255, 0),
+                        255
+                    ]);
+                }
+                else {
+                    new_color = new Uint8Array([
+                        grid.texture[new_offset],
+                        grid.texture[new_offset + 1],
+                        grid.texture[new_offset + 2],
+                        255
+                    ]);
+                }
+            }
+            if (new_color !== undefined)
+                new_color_data = get_color_data(new_color);
+            ++stroke.queued_wave_count;
+            setTimeout(cpu_wave_start, new_wave_delay, new_id, new_color_data, ++stroke.wave_id);
+        }
+        if (collected.size === 0)
+            return;
+        ++stroke.queued_wave_count;
+        setTimeout(cpu_wave_propagate, wave_delay, collected, state, color_data, depth + 1);
+    }
+    function cpu_inward_wave() {
+        const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
+        const s = new Set();
+        for (let i = from; i < to; ++i) {
+            if (i % mod === m) {
+                s.add(i);
+                cpu_wave_start(s);
+                s.clear();
+            }
+        }
+        cpu_wave_start(s);
+    }
+    function cpu_fill_grid(color) {
+        const clear_color = color === undefined ?
+            pack_uint8(grid_bg) :
+            color.packed;
+        grid.texture_u32view.fill(clear_color);
+        grid.texture_u32view[0] = 0;
+        if (stroke.queued_wave_count > 0) {
+            stroke.prevent_waves_last_id = stroke.wave_id + stroke.queued_wave_count;
+            stroke.wave_id = stroke.prevent_waves_last_id + 1;
+        }
+        renderer.texture_is_dirty = true;
+    }
+    wave_start = cpu_wave_start;
+    inward_wave = cpu_inward_wave;
+    fill_grid = cpu_fill_grid;
+}
+// let wave_queue = new Set() as Set<number>,
+//     queued_strokes = [] as {stroke:Set<number>, color_data:color_data}[],
+//     stroke_count = -1;
+const stroke = {
+    /** this set is used to both apply and remove the highlight color effect. */
+    flat_queue: new Set(),
+    /** this array encodes the individual queued strokes with their respective
+     * color. */
+    queue: [],
+    /** default value set to -1, since this variable gets incremented by one
+     * each time a new queued stroke is done (this also applied to the first
+     * one). */
+    count: -1,
+    /** this value is used to  */
+    wave_id: 0,
+    choosen_palette: [],
+    /** index of the color used from the current choosen palette of colors. */
+    palette_color: 0,
+    /** gpu = 0: value used to filter out all the queued waves when filling or
+     * clearing the entire grid. */
+    queued_wave_count: 0,
+    /** gpu = 0: each wave_id lower or equal to this value will be discarded. */
+    prevent_waves_last_id: 0
+};
+let process_stroke, remove_highlights, process_queued_strokes;
+if (gpu !== 1) {
+    function cpu_process_stroke(hovered) {
+        if (hovered !== 0 && hovered !== mouse.last_hovered_id) {
+            if (keyboard.shift_down) {
+                const brush = grid.adj_graph[hovered].brush;
+                const newly_hovered = brush.difference(stroke.flat_queue);
+                if (newly_hovered.size === 0)
+                    return;
+                for (const id of newly_hovered) {
+                    stroke.queue[stroke.count].stroke.add(id);
+                    stroke.flat_queue.add(id);
+                    const offset = id * 4;
+                    grid.texture[offset] =
+                        Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
+                    grid.texture[offset + 1] =
+                        Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
+                    grid.texture[offset + 2] =
+                        Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
+                }
+                renderer.texture_is_dirty = true;
+            }
+            else if (keyboard.ctrl_down) {
+                fill_grid(stroke.choosen_palette[stroke.palette_color]);
+            }
+            else {
+                const brush = new Set(grid.adj_graph[hovered].brush);
+                wave_start(brush);
+            }
+            mouse.last_hovered_id = hovered;
         }
     }
-    queued_strokes = [];
-    stroke_count = -1;
-}
-function gpu_wave_start(ids, color_data, _wave_id) {
-    const _state = _wave_id === undefined
-        ? ++wave_id
-        : _wave_id;
-    if (_state <= prevent_waves_last_id)
-        return;
-    const brush = typeof ids === "number" ?
-        new Set(grid.adj_graph[ids].brush) :
-        new Set(ids);
-    const fcolor = color_data !== undefined
-        ? color_data.fcolor
-        : choosen_palette[palette_color].fcolor;
-    if (color_data === undefined && choosen_palette.length > 1)
-        palette_color = (palette_color + 1) % choosen_palette.length;
-    const [r, g, b] = fcolor;
-    const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
-    const wcolor_dist = new Float32Array([r, g, b, 0.0]);
-    const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
-    const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
-    for (const id of brush) {
-        const col = id % grid.texture_size, row = Math.floor(id / grid.texture_size);
-        gl.bindTexture(gl.TEXTURE_2D, target_tex0);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, state_weights);
-        gl.bindTexture(gl.TEXTURE_2D, target_tex1);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, wcolor_dist);
+    function cpu_remove_highlights() {
+        for (const id of stroke.flat_queue) {
+            const offset = id * 4;
+            grid.texture[offset] = Math.max(2 * grid.texture[offset] - 255, 0);
+            grid.texture[offset + 1] = Math.max(2 * grid.texture[offset + 1] - 255, 0);
+            grid.texture[offset + 2] = Math.max(2 * grid.texture[offset + 2] - 255, 0);
+            grid.texture[offset + 3] = Math.max(2 * grid.texture[offset + 3] - 255, 0);
+        }
+        renderer.texture_is_dirty = true;
+        stroke.flat_queue.clear();
     }
+    function cpu_process_queued_strokes() {
+        if (stroke.flat_queue.size === 0)
+            return;
+        cpu_remove_highlights();
+        const mod = 3, s = new Set();
+        for (let i = 0; i < stroke.queue.length; ++i) {
+            const q = stroke.queue[i];
+            const first = q.stroke.entries().next();
+            if (first.done === true)
+                continue;
+            const m = first.value[0] % mod;
+            for (const id of q.stroke) {
+                s.add(id);
+                if (id % mod === m) {
+                    wave_start(s, q.color_data);
+                    s.clear();
+                }
+            }
+            if (s.size > 0) {
+                wave_start(s, q.color_data);
+                s.clear();
+            }
+        }
+        stroke.queue = [];
+        stroke.count = -1;
+    }
+    process_stroke = cpu_process_stroke;
+    remove_highlights = cpu_remove_highlights;
+    process_queued_strokes = cpu_process_queued_strokes;
 }
-function gpu_inward_wave() {
-    const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
-    const s = new Set();
-    for (let i = from; i < to; ++i) {
-        if (i % mod === m) {
-            s.add(i);
-            gpu_wave_start(s);
-            s.clear();
+if (gpu === 1) {
+    function gpu_wave_start(ids, color_data, _wave_id) {
+        const _state = _wave_id === undefined
+            ? ++stroke.wave_id
+            : _wave_id;
+        const brush = typeof ids === "number" ?
+            new Set(grid.adj_graph[ids].brush) :
+            new Set(ids);
+        const fcolor = color_data !== undefined
+            ? color_data.fcolor
+            : stroke.choosen_palette[stroke.palette_color].fcolor;
+        if (color_data === undefined && stroke.choosen_palette.length > 1) {
+            stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
+        }
+        const [r, g, b] = fcolor;
+        const wcolor_dist = new Float32Array([r, g, b, 0.0]);
+        const state_weights = new Float32Array([++stroke.wave_id, max_weight, 0.0, 0.0]);
+        const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
+        const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
+        for (const id of brush) {
+            const col = id % grid.texture_size, row = Math.floor(id / grid.texture_size);
+            gl.bindTexture(gl.TEXTURE_2D, target_tex0);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, state_weights);
+            gl.bindTexture(gl.TEXTURE_2D, target_tex1);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, wcolor_dist);
         }
     }
-    gpu_wave_start(s);
-}
-function gpu_fill_grid(color) {
-    const clear_color = color === undefined ?
-        get_color_data(grid_bg) :
-        color;
-    grid.texture_u32view.fill(clear_color.packed);
-    grid.state_weights.fill(0.0);
-    // start from 1, because there is no vertex id equal to zero
-    for (let i = 1; i < grid.adj_graph.length; ++i) {
-        const offset = i * 4;
-        grid.wcolor_dist[offset] = 0;
-        grid.wcolor_dist[offset + 1] = 0;
-        grid.wcolor_dist[offset + 2] = 0;
-        grid.wcolor_dist[offset + 3] = 0;
+    function gpu_inward_wave() {
+        const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
+        const s = new Set();
+        for (let i = from; i < to; ++i) {
+            if (i % mod === m) {
+                s.add(i);
+                gpu_wave_start(s);
+                s.clear();
+            }
+        }
+        gpu_wave_start(s);
     }
-    wave_id = 0;
-    texture_is_dirty = true;
-    state_is_dirty = true;
+    function gpu_fill_grid(color) {
+        const clear_color = color === undefined ?
+            get_color_data(grid_bg) :
+            color;
+        grid.texture_u32view.fill(clear_color.packed);
+        grid.state_weights.fill(0.0);
+        // start from 1, because there is no vertex id equal to zero
+        for (let i = 1; i < grid.adj_graph.length; ++i) {
+            const offset = i * 4;
+            grid.wcolor_dist[offset] = 0;
+            grid.wcolor_dist[offset + 1] = 0;
+            grid.wcolor_dist[offset + 2] = 0;
+            grid.wcolor_dist[offset + 3] = 0;
+        }
+        stroke.wave_id = 0;
+        renderer.texture_is_dirty = true;
+        renderer.state_is_dirty = true;
+    }
+    wave_start = gpu_wave_start;
+    inward_wave = gpu_inward_wave;
+    fill_grid = gpu_fill_grid;
 }
-function gpu_process_stroke(hovered) {
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
+if (gpu === 1) {
+    function gpu_process_stroke(hovered) {
+        if (hovered === 0 || hovered === mouse.last_hovered_id)
+            return;
+        if (keyboard.shift_down) {
             const brush = grid.adj_graph[hovered].brush;
-            // @ts-ignore
-            const newly_hovered = brush.difference(wave_queue);
+            const newly_hovered = brush.difference(stroke.flat_queue);
             if (newly_hovered.size === 0)
                 return;
-            /* change stroke color only if there were at least one new valid
-             * non hovered vertex. */
-            if (broke_stroke) {
-                queued_strokes[++stroke_count] = {
-                    stroke: new Set(),
-                    color_data: choosen_palette[palette_color]
-                };
-                if (choosen_palette.length > 1)
-                    palette_color = (palette_color + 1) % choosen_palette.length;
-                broke_stroke = false;
-            }
-            for (const id of newly_hovered) {
-                queued_strokes[stroke_count].stroke.add(id);
-                wave_queue.add(id);
-            }
+            const current_color_packed = stroke.queue[stroke.count].color_data.packed;
             const v = new Uint8Array([1, 1, 1]);
             gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
             for (const id of newly_hovered) {
+                stroke.queue[stroke.count].stroke.add(id);
+                stroke.flat_queue.add(id);
                 const byte_offset = id * 3 - 1;
                 gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+                grid.hover_texture_u32view[id] = current_color_packed;
             }
+            renderer.hover_texture_is_dirty = true;
         }
-        else if (ctrl_down) {
-            gpu_fill_grid(choosen_palette[palette_color]);
+        else if (keyboard.ctrl_down) {
+            fill_grid(stroke.choosen_palette[stroke.palette_color]);
         }
         else {
             const brush = new Set(grid.adj_graph[hovered].brush);
-            gpu_wave_start(brush);
+            wave_start(brush);
         }
-        hovered_id = hovered;
+        mouse.last_hovered_id = hovered;
     }
-}
-function gpu_remove_highlights() {
-    const v = new Uint8Array([0, 0, 0]);
-    gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
-    for (const id of wave_queue) {
-        const byte_offset = id * 3 - 1;
-        gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+    function gpu_remove_highlights() {
+        const v = new Uint8Array([0, 0, 0]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
+        for (const id of stroke.flat_queue) {
+            const byte_offset = id * 3 - 1;
+            gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        stroke.flat_queue.clear();
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    wave_queue.clear();
-}
-function gpu_process_queued_strokes() {
-    if (wave_queue.size === 0)
-        return;
-    gpu_remove_highlights();
-    for (let i = 0; i < queued_strokes.length; ++i) {
-        const q = queued_strokes[i];
-        let s = new Set(), mod = 3, m;
-        for (const id of q.stroke) {
-            if (m === undefined) {
-                m = id % mod;
+    function gpu_process_queued_strokes() {
+        if (stroke.flat_queue.size === 0)
+            return;
+        gpu_remove_highlights();
+        const mod = 3, s = new Set();
+        for (let i = 0; i < stroke.queue.length; ++i) {
+            const q = stroke.queue[i];
+            const first = q.stroke.entries().next();
+            if (first.done === true)
+                continue;
+            const m = first.value[0] % mod;
+            for (const id of q.stroke) {
+                s.add(id);
+                if (id % mod === m) {
+                    wave_start(s, q.color_data);
+                    s.clear();
+                }
             }
-            s.add(id);
-            if (id % mod === m) {
-                gpu_wave_start(s, q.color_data);
-                s = new Set();
+            if (s.size > 0) {
+                wave_start(s, q.color_data);
+                s.clear();
             }
         }
-        if (s.size > 0) {
-            gpu_wave_start(s, q.color_data);
-            s.clear();
-        }
+        stroke.queue = [];
+        stroke.count = -1;
     }
-    queued_strokes = [];
-    stroke_count = -1;
+    process_stroke = gpu_process_stroke;
+    remove_highlights = gpu_remove_highlights;
+    process_queued_strokes = gpu_process_queued_strokes;
 }
-/** buffer used to read from the vertex mask texture. */
-let pixel_data = new Uint32Array(1), update_view_proj_mat = false, 
-/** this is set to true on window.onresize; forces to recalculate the vertex
- * mask texture during the draw pass. */
-force_render_mask = true, 
-/** this is set to true any time that grid.texture or grid.texture_u32view
- * get modified; forces to update the shader data. */
-texture_is_dirty = false, state_is_dirty = false, 
-/** when true, considering both mouse and keyboard state, an action is
- * performed (i.e. a verte is clicked or hovered, the grid is filled or
- * cleared); can be set to true only once per frame. */
-request_sample = false, 
-/** when true, the grid vertex color lut table will get cleared with grid_bg
- * color (initial grid color). */
-request_clear = false, 
-/** current frame id. */
-frame = 0, 
-/** used to calculate delta_time. */
-prev_frame_timestamp = 0, delta_time = 0, window_hidden = false;
+const renderer = {
+    /** buffer used to read from the vertex mask texture. */
+    id_mask_data: new Uint32Array(1),
+    update_view_proj_mat: false,
+    /** this is set to true on window.onresize; forces to recalculate the vertex
+     * mask texture during the draw pass. */
+    force_render_mask: true,
+    /** this is set to true any time that grid.texture or grid.texture_u32view
+     * get modified; forces to update the shader data. */
+    texture_is_dirty: false,
+    hover_texture_is_dirty: false,
+    state_is_dirty: false,
+    /** when true, considering both mouse and keyboard state, an action is
+     * performed (i.e. a verte is clicked or hovered, the grid is filled or
+     * cleared); can be set to true only once per frame. */
+    request_mouse_sample: false,
+    /** when true, the grid vertex color lut table will get cleared with grid_bg
+     * color (initial grid color). */
+    request_color_clear: false,
+    /** current frame id. */
+    frame: 0,
+    /** used to calculate delta_time. */
+    prev_timestamp: 0,
+    delta_time: 0,
+    window_hidden: false
+};
 function draw(timestamp) {
-    delta_time = (timestamp - prev_frame_timestamp) * 0.001;
-    prev_frame_timestamp = timestamp;
-    if (window_hidden) {
+    renderer.delta_time = (timestamp - renderer.prev_timestamp) * 0.001;
+    renderer.prev_timestamp = timestamp;
+    if (renderer.window_hidden) {
         requestAnimationFrame(draw);
         return;
     }
-    ++frame;
-    wheel_already_processed = false;
-    if (update_view_proj_mat)
+    ++renderer.frame;
+    mouse.wheel_already_processed = false;
+    if (renderer.update_view_proj_mat)
         view_proj_mat =
-            create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
-    if (request_clear) {
+            create_view_projection_matrix(camera.x, camera.y, camera.scale, camera.ar);
+    if (renderer.request_color_clear) {
         fill_grid();
-        request_clear = false;
+        renderer.request_color_clear = false;
     }
     let source_state_weights, source_wcolor_dist, target_state_weights, target_wcolor_dist, target_fbo;
     if (gpu) {
@@ -1296,19 +1681,19 @@ function draw(timestamp) {
             target_state_weights = state_weights_0;
             target_wcolor_dist = wcolor_dist_0;
         }
-    }
-    if (state_is_dirty) {
-        gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
-        gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
-        state_is_dirty = false;
+        if (renderer.state_is_dirty) {
+            gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
+            gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
+            renderer.state_is_dirty = false;
+        }
     }
     // poll previous mouse inputs
     for (let i = 0; i < pbo_count; i++) {
         const sync = syncs[i];
         if (sync) {
-            const status = gl.clientWaitSync(sync, 0, 0);
+            const status = gl.clientWaitSync(sync, 0, 0), pixel_data = renderer.id_mask_data;
             if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
                 gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[i]);
                 gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixel_data);
@@ -1319,29 +1704,31 @@ function draw(timestamp) {
         }
     }
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    if (force_render_mask || request_sample) {
+    if (renderer.force_render_mask || renderer.request_mouse_sample) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-        if (force_render_mask) {
-            mask_p.use_program_and_update_values();
+        if (renderer.force_render_mask) {
+            mask_p.use_program();
             gl.bindVertexArray(mask_vao);
             gl.viewport(0, 0, width, height);
             gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
             mask_p.uniforms["u_view_proj"].update_value();
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-            force_render_mask = false;
+            renderer.force_render_mask = false;
         }
-        if (request_sample && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        if (renderer.request_mouse_sample &&
+            gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
             gl.readBuffer(gl.COLOR_ATTACHMENT0);
             // orphan the buffer before writing to prevent webgl warnings
             gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[pbo_write_index]);
             gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
-            gl.readPixels(mouse_x, mouse_y, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, 0);
+            gl.readPixels(mouse.x, mouse.y, 1, 1, gl.RED_INTEGER, gl.UNSIGNED_INT, 0);
             if (syncs[pbo_write_index])
                 gl.deleteSync(syncs[pbo_write_index]);
-            syncs[pbo_write_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            syncs[pbo_write_index] =
+                gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
             pbo_write_index = (pbo_write_index + 1) % pbo_count;
             gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-            request_sample = false;
+            renderer.request_mouse_sample = false;
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
@@ -1349,14 +1736,14 @@ function draw(timestamp) {
     //       STATE PROPAGATION      //
     //////////////////////////////////
     if (gpu) {
-        state_p.use_program_and_update_values();
+        state_p.use_program();
         gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
         gl.viewport(0, 0, grid.texture_size, grid.texture_size);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, color_texture);
-        if (texture_is_dirty) {
+        if (renderer.texture_is_dirty) {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
-            texture_is_dirty = false;
+            renderer.texture_is_dirty = false;
         }
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
@@ -1370,23 +1757,29 @@ function draw(timestamp) {
     //////////////////////////////////
     //         MAIN SHADER          //
     //////////////////////////////////
-    p.use_program_and_update_values();
-    if (update_view_proj_mat) {
+    p.use_program();
+    if (renderer.update_view_proj_mat) {
         p.uniforms["u_view_proj"].update_value();
-        update_view_proj_mat = false;
+        renderer.update_view_proj_mat = false;
     }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    if (texture_is_dirty) {
+    if (renderer.texture_is_dirty) {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
-        texture_is_dirty = false;
+        renderer.texture_is_dirty = false;
     }
     if (gpu) {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, target_state_weights);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, target_wcolor_dist);
+        gl.activeTexture(gl.TEXTURE3);
+        if (renderer.hover_texture_is_dirty) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.hover_texture);
+            renderer.hover_texture_is_dirty = false;
+        }
+        gl.bindTexture(gl.TEXTURE_2D, hover_texture);
         gl.enable(gl.BLEND);
     }
     gl.bindVertexArray(vao);
@@ -1401,7 +1794,7 @@ p,
 /** grid vertex mask shader program. */
 mask_p, state_p, grid, mask_texture, mask_fbo, state_fbo0, state_fbo1, 
 /** inner window aspect ratio. */
-ar, 
+//ar:number,
 /** camera (orthographic) projection matrix. */
 view_proj_mat, 
 /** window.innerWidth */
@@ -1409,7 +1802,7 @@ width,
 /** window.innerHeight */
 height, 
 /** grid vertex array object. */
-vao, color_texture, 
+vao, color_texture, hover_texture, 
 /** mask grid vertex array object. */
 mask_vao, 
 /** state grid vertex array object. */
@@ -1427,12 +1820,30 @@ menu_el,
 /** esc button DOM element (#esc-button). */
 esc_button_el, 
 /** updated in update_viewport */
-canvas_rect, 
+canvas_rect;
 /** used for mouse movement scaling to properly move the camera,
  * recalculated both in update_viewport and in w_wheel */
-units_per_pixel_x, units_per_pixel_y;
-let camera_x = 0, camera_y = 0, camera_coord_min = -0.5, camera_coord_max = 0.5, camera_scale_min = 0.0005, camera_scale = 1, camera_scale_max = 2;
-let process_stroke, remove_highlights, process_queued_strokes, wave_start, fill_grid, inward_wave;
+//units_per_pixel_x: number,
+//units_per_pixel_y: number;
+// let camera_x = 0,
+//     camera_y = 0,
+//     camera_coord_min = -0.5,
+//     camera_coord_max = 0.5,
+//     camera_scale_min = 0.0005,
+//     camera_scale = 1,
+//     camera_scale_max = 2;
+const camera = {
+    x: 0,
+    y: 0,
+    scale: 1,
+    ar: 0,
+    min_coord: -0.5,
+    max_coord: 0.5,
+    min_scale: 0.0005,
+    max_scale: 2,
+    units_per_pixel_x: 0,
+    units_per_pixel_y: 0
+};
 /** event called by window.onload */
 function init() {
     canvas_el = document.getElementById("screen");
@@ -1457,32 +1868,31 @@ function init() {
     //         MAIN SHADER          //
     //////////////////////////////////
     canvas_rect = canvas_el.getBoundingClientRect();
-    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
-    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    camera.units_per_pixel_x = 2 * camera.scale / canvas_rect.width;
+    camera.units_per_pixel_y = 2 * camera.scale / canvas_rect.height;
     width = window.innerWidth;
     height = window.innerHeight;
-    ar = width / height;
+    camera.ar = width / height;
     view_proj_mat =
-        create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
+        create_view_projection_matrix(camera.x, camera.y, camera.scale, camera.ar);
     canvas_el.width = width;
     canvas_el.height = height;
     if (gpu) {
-        p = compile_and_use_shader_program(gl, "gpu-vert", "gpu-frag", [
-            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
-            new uniform("u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
-            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 1),
-            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 2),
-            new uniform("u_blend_value", GL_FLOAT, UPDATE, () => blend_value),
-            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
-            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
-            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
-            new uniform("u_state_ramp_width", GL_FLOAT, NO_UPDATE, () => 20.0)
+        p = new shader_program("main", gpu_vert, gpu_frag, [
+            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
+            new uniform("u_texture", GL_TEXTURE, U_INIT, 0),
+            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 1),
+            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 2),
+            new uniform("u_hcolor", GL_TEXTURE, U_INIT, 3),
+            // new uniform("u_blend_value", GL_FLOAT, U_INIT, blend_value),
+            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
+            // new uniform("u_decayt_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
         ]);
     }
     else {
-        p = compile_and_use_shader_program(gl, "cpu-vert", "cpu-frag", [
-            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
-            new uniform("!u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+        p = new shader_program("main", cpu_vert, cpu_frag, [
+            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
+            new uniform("!u_texture", GL_TEXTURE, U_INIT, 0),
         ]);
     }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -1501,11 +1911,12 @@ function init() {
         hovered_buffer = create_dyn_buffer_uint8(grid.hovered, 6);
     }
     color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
+    hover_texture = create_RGBA_texture(grid.texture_size, grid.hover_texture);
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
-    mask_p = compile_and_use_shader_program(gl, "mask-vert", "mask-frag", [
-        new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+    mask_p = new shader_program("mask", mask_vert, mask_frag, [
+        new uniform("!u_view_proj", GL_MAT4x4, 0, () => view_proj_mat),
     ]);
     mask_vao = create_vertex_array();
     bind_vec2_attr(pos_buffer, 0);
@@ -1516,13 +1927,15 @@ function init() {
     //       STATE SHADER           //
     //////////////////////////////////
     if (gpu) {
-        state_p = compile_and_use_shader_program(gl, "state-vert", "state-frag", [
-            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 0),
-            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 1),
-            new uniform("u_delta_time", GL_FLOAT, UPDATE, () => delta_time),
-            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
-            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
-            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
+        state_p = new shader_program("state", state_vert, state_frag, [
+            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 0),
+            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 1),
+            new uniform("u_delta_time", GL_FLOAT, U_UPDATE | U_INIT, () => renderer.delta_time),
+            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
+            // new uniform("u_decay_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
+            new uniform("u_state_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(state_rate), (v) => not_saturated(ms_from_rate(v))),
+            new uniform("u_weight_decay", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(weight_decay), (v) => not_saturated(ms_from_rate(v))),
+            new uniform("u_diffusion_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(diffusion_rate), (v) => not_saturated(ms_from_rate(v))),
         ]);
         state_vao = create_vertex_array();
         create_buffer_uint32(grid.cell_ids, 0);
@@ -1537,22 +1950,6 @@ function init() {
         wcolor_dist_1 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
         state_fbo1 = create_frame_buffer2(state_weights_1, wcolor_dist_1);
         state_read_index = 0;
-    }
-    if (gpu) {
-        process_stroke = gpu_process_stroke;
-        remove_highlights = gpu_remove_highlights;
-        process_queued_strokes = gpu_process_queued_strokes;
-        wave_start = gpu_wave_start;
-        fill_grid = gpu_fill_grid;
-        inward_wave = gpu_inward_wave;
-    }
-    else {
-        process_stroke = cpu_process_stroke;
-        remove_highlights = cpu_remove_highlights;
-        process_queued_strokes = cpu_process_queued_strokes;
-        wave_start = cpu_wave_start;
-        fill_grid = cpu_fill_grid;
-        inward_wave = cpu_inward_wave;
     }
     //////////////////////////////////
     //       MASK SHADER PBOS       //
@@ -1575,115 +1972,130 @@ function init() {
     };
     draw(0);
 }
-/** set to true when the shift button is pressed. */
-let shift_down = false, 
-/** set to true only when the ctrl button is pressed and shift is not. */
-ctrl_down = false;
+const keyboard = {
+    /** set to true when the shift button is pressed. */
+    shift_down: false,
+    /** set to true only when the ctrl button is pressed and shift is not. */
+    ctrl_down: false
+};
 /** event called on window.onkeydown */
 function w_keydown(e) {
     if (e.key === "Shift") {
-        shift_down = true;
-        broke_stroke = true;
-        stroke_count = -1;
-        palette_color = 0;
+        keyboard.shift_down = true;
+        stroke.count = -1;
+        stroke.palette_color = 0;
     }
-    else if (e.key === "Control" && !mouse1_down)
-        ctrl_down = true;
+    else if (e.key === "Control" && !mouse.m1_down)
+        keyboard.ctrl_down = true;
 }
 /** event called on window.onkeyup */
 function w_keyup(e) {
     if (e.key === "Shift") {
-        shift_down = false;
+        keyboard.shift_down = false;
         process_queued_strokes();
     }
     else if (e.key === "Control")
-        ctrl_down = false;
+        keyboard.ctrl_down = false;
     else if (e.key === "p")
         inward_wave();
     else if (e.key === "c")
-        request_clear = true;
+        renderer.request_color_clear = true;
     else if (e.key === "Escape")
         dom_toggle_menu();
 }
 window.onkeydown = w_keydown;
 window.onkeyup = w_keyup;
-/** value set to true whenever the mouse's left button is pressed. */
-let mouse1_down = false, 
-/** value set to true only when mouse1_down is not true and the mouse's
- * wheel button is pressed. */
-mouse3_down = false, 
-/** value used to prevent checking multiple times, on the same frame, which
- * the mouse position and its related events. */
-last_mouse_sample_frame = -1, 
-/** both values used for moving the camera when pressing mouse3. */
-prev_clientX, prev_clientY, 
-/** current frame's sampled mouse x position relative to the canvas. */
-mouse_x, 
-/** current frame's sampled mouse y position relative to the canvas. */
-mouse_y;
+const mouse = {
+    /** current frame's sampled mouse x position relative to the canvas. */
+    x: -1,
+    /** current frame's sampled mouse y position relative to the canvas. */
+    y: -1,
+    /** value set to true whenever the mouse's left button is pressed. */
+    m1_down: false,
+    /** value set to true only when mouse1_down is not true and the mouse's
+      * wheel button is pressed. */
+    m3_down: false,
+    /** both values used for moving the camera when pressing mouse3. */
+    prev_clientX: -1,
+    prev_clientY: -1,
+    /** value used to prevent checking multiple times, on the same frame, which
+     * the mouse position and its related events. */
+    last_sample_frame: -1,
+    wheel_already_processed: false,
+    wheel_zoom_factor: 8,
+    trackpad_zoom_factor: 2,
+    /** last hovered vertex id, used to prevent the same vertex from being
+     * processed multiple times */
+    last_hovered_id: -1
+};
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
-    // mouse1_down = false;
-    // mouse3_down = false;
-    // shift_down = false;
-    // ctrl_down = false;
-    hovered_id = undefined;
-    // cpu_process_queued_strokes();
+    mouse.last_hovered_id = -1;
 }
 /** event called on canvas.onmousedown */
 function c_mousedown(e) {
-    if (e.button === 2 || last_mouse_sample_frame === frame)
+    const frame = renderer.frame;
+    if (e.button === 2 || mouse.last_sample_frame === frame)
         return;
     if (e.button === 0) {
-        mouse1_down = true;
-        mouse3_down = false;
-        if (!shift_down)
-            palette_color = 0;
+        mouse.m1_down = true;
+        mouse.m3_down = false;
+        if (keyboard.shift_down) {
+            /* change stroke color only if there were at least one new valid
+            * non hovered vertex. */
+            stroke.queue[++stroke.count] = {
+                stroke: new Set(),
+                color_data: stroke.choosen_palette[stroke.palette_color]
+            };
+            if (stroke.choosen_palette.length > 1) {
+                stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
+            }
+        }
     }
-    else if (!mouse1_down && e.button === 1) {
-        prev_clientX = e.clientX;
-        prev_clientY = e.clientY;
-        mouse3_down = true;
-        last_mouse_sample_frame = frame;
+    else if (!mouse.m1_down && e.button === 1) {
+        mouse.prev_clientX = e.clientX;
+        mouse.prev_clientY = e.clientY;
+        mouse.m3_down = true;
+        mouse.last_sample_frame = frame;
         return;
     }
     else {
         return;
     }
-    if (force_render_mask)
+    if (renderer.force_render_mask)
         return;
-    mouse_x =
+    mouse.x =
         Math.floor((e.clientX - canvas_rect.left) * width / canvas_rect.width);
-    mouse_y =
+    mouse.y =
         Math.floor((canvas_rect.bottom - e.clientY) * height / canvas_rect.height);
-    request_sample = true;
-    last_mouse_sample_frame = frame;
+    renderer.request_mouse_sample = true;
+    mouse.last_sample_frame = frame;
 }
 /** event called on window.onmousemove */
 function w_mousemove(e) {
-    if ((!mouse1_down && !mouse3_down) || force_render_mask
-        || last_mouse_sample_frame === frame)
+    if ((!mouse.m1_down && !mouse.m3_down) || renderer.force_render_mask
+        || mouse.last_sample_frame === renderer.frame)
         return;
     const clientX = e.clientX, clientY = e.clientY;
-    mouse_x =
+    mouse.x =
         Math.floor((clientX - canvas_rect.left) * width / canvas_rect.width);
-    mouse_y =
+    mouse.y =
         Math.floor((canvas_rect.bottom - clientY) * height / canvas_rect.height);
-    if (mouse3_down) {
-        camera_x -= (clientX - prev_clientX) * units_per_pixel_x;
-        camera_y += (clientY - prev_clientY) * units_per_pixel_y;
-        camera_x =
-            Math.max(Math.min(camera_x, camera_coord_max), camera_coord_min);
-        camera_y =
-            Math.max(Math.min(camera_y, camera_coord_max), camera_coord_min);
-        prev_clientX = clientX;
-        prev_clientY = clientY;
-        update_view_proj_mat = true;
-        force_render_mask = true;
+    if (mouse.m3_down) {
+        camera.x -= (clientX - mouse.prev_clientX) * camera.units_per_pixel_x;
+        camera.y += (clientY - mouse.prev_clientY) * camera.units_per_pixel_y;
+        camera.x =
+            Math.max(Math.min(camera.x, camera.max_coord), camera.min_coord);
+        camera.y =
+            Math.max(Math.min(camera.y, camera.max_coord), camera.min_coord);
+        mouse.prev_clientX = clientX;
+        mouse.prev_clientY = clientY;
+        renderer.update_view_proj_mat = true;
+        renderer.force_render_mask = true;
     }
     else {
-        request_sample = true;
-        last_mouse_sample_frame = frame;
+        renderer.request_mouse_sample = true;
+        mouse.last_sample_frame = renderer.frame;
     }
 }
 /** event called on window.onmouseup */
@@ -1695,18 +2107,14 @@ function w_mouseup(e) {
     if (e.button === 1) {
         // @ts-ignore
         prev_clientX = prev_clientY = undefined;
-        mouse3_down = false;
+        mouse.m3_down = false;
     }
     if (e.button !== 0)
         return;
-    broke_stroke = shift_down ? true : false;
-    mouse1_down = false;
-    hovered_id = undefined;
+    mouse.m1_down = false;
+    mouse.last_hovered_id = -1;
     mouse_down_on_color = false;
 }
-let wheel_already_processed = false, 
-/** camera_scale max delta per second. */
-wheel_zoom_factor = 8, trackpad_zoom_factor = 2;
 function event_triggered_by_trackpad(e) {
     if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
         return false;
@@ -1723,33 +2131,33 @@ function w_wheel(e) {
         e.preventDefault();
         return;
     }
-    if (wheel_already_processed)
+    if (mouse.wheel_already_processed)
         return;
-    wheel_already_processed = true;
+    mouse.wheel_already_processed = true;
     const factor = event_triggered_by_trackpad(e)
-        ? trackpad_zoom_factor * delta_time
-        : wheel_zoom_factor * delta_time;
-    camera_scale += e.deltaY < 0 ? factor : -factor;
-    camera_scale =
-        Math.min(Math.max(camera_scale, camera_scale_min), camera_scale_max);
-    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;
-    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
-    update_view_proj_mat = true;
-    force_render_mask = true;
+        ? mouse.trackpad_zoom_factor * renderer.delta_time
+        : mouse.wheel_zoom_factor * renderer.delta_time;
+    camera.scale += e.deltaY < 0 ? factor : -factor;
+    camera.scale =
+        Math.min(Math.max(camera.scale, camera.min_scale), camera.max_scale);
+    camera.units_per_pixel_x = 2 * camera.scale / canvas_rect.width;
+    camera.units_per_pixel_y = 2 * camera.scale / canvas_rect.height;
+    renderer.update_view_proj_mat = true;
+    renderer.force_render_mask = true;
 }
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
-    mouse1_down = false;
-    mouse3_down = false;
-    shift_down = false;
-    ctrl_down = false;
-    hovered_id = undefined;
+    mouse.m1_down = false;
+    mouse.m3_down = false;
+    keyboard.shift_down = false;
+    keyboard.ctrl_down = false;
+    mouse.last_hovered_id = -1;
     remove_highlights();
-    queued_strokes = [];
-    stroke_count = -1;
+    stroke.queue = [];
+    stroke.count = -1;
 }
 function d_visibilitychange() {
-    window_hidden = document.hidden;
+    renderer.window_hidden = document.hidden;
 }
 window.onresize = update_viewport;
 window.onblur = state_cleanup;
@@ -1757,3 +2165,5 @@ document.onvisibilitychange = d_visibilitychange;
 // window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, { passive: false });
 window.onload = init;
+// mix colors in different color space
+// add esc menu sliders

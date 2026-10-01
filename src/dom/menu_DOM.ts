@@ -5,8 +5,9 @@ function dom_toggle_menu() {
 
     menu_el.style.visibility = show_menu ? "visible" : "hidden";
     
-    shift_down = false;
-    ctrl_down = false;
-    mouse1_down = false;
-    wave_queue.clear();
+    keyboard.shift_down = false;
+    keyboard.ctrl_down = false;
+    mouse.m1_down = false;
+    
+    stroke.flat_queue.clear();
 }

@@ -56,31 +56,61 @@ const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0,1)),
       side_length = searchParams.getNumber("side_length", gpu ? 64:32, 1),
       brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5:1, 0)),
       blend_value = searchParams.getNumber("blend_value", gpu ? 0.6:0.008, 0,1),
-      wave_delay = searchParams.getNumber("wave_delay", 30, 1),
-      wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999:0.9, 0,1),
       decay_min_radius = searchParams.getNumber("decay_min_radius", -2),
+      wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999:0.9, 0,1),
+      grid_bg = searchParams.getUint8Color("grid_bg"),
+      wave_delay = searchParams.getNumber("wave_delay", 30, 1),
+      // cpu-side specific
       new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1),
       new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0,1),
       new_color_p = searchParams.getNumber("new_color_p", 0.1, 0,1),
       new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0,1),
-      grid_bg = searchParams.getUint8Color("grid_bg"),
+      // gpu-side specific
       max_weight = 3.0;
+let state_rate = searchParams.getNumber("wave_delay_ms", 60, 1),
+    weight_decay = searchParams.getNumber("color_decay_ms", 600, 1),
+    diffusion_rate = searchParams.getNumber("color_diffusion_ms", 10, 1);
 
-const params = new URLSearchParams([
-    ["gpu", `${gpu}`],
-    ["side_length", `${side_length}`],
-    ["brush_size", `${brush_size}`],
-    ["blend_value",`${blend_value}`],
-    ["wave_delay", `${wave_delay}`],
-    ["wave_decay", `${wave_decay}`],
-    ["decay_min_radius", `${decay_min_radius}`],
-    ["new_wave_delay", `${new_wave_delay}`],
-    ["new_wave_p", `${new_wave_p}`],
-    ["new_color_p", `${new_color_p}`],
-    ["new_color_compl_p", `${new_color_compl_p}`]
-]);
+function rate_from_ms(wave_delay_ms:number, convergence_fraction = 0.95) {
+    const t_seconds = wave_delay_ms * 0.001;
+    return -Math.log(1 - convergence_fraction) / t_seconds;
+}
+
+function ms_from_rate(rate:number, convergence_fraction = 0.95) {
+    return (-Math.log(1 - convergence_fraction) / rate) * 1000;
+}
+
+function not_saturated(target_ms:number, threshold = 1.0) {
+    return (renderer.delta_time*1000 / target_ms) < threshold;
+}
 
 {
+let params:URLSearchParams;
+if (gpu) {
+    params = new URLSearchParams([
+        ["gpu", `${gpu}`],
+        ["side_length", `${side_length}`],
+        ["brush_size", `${brush_size}`],
+        ["wave_delay_ms", `${state_rate}`],
+        ["color_decay_ms", `${weight_decay}`],
+        ["color_diffusion_ms", `${diffusion_rate}`]
+    ]);
+}
+else {
+    params = new URLSearchParams([
+        ["gpu", `${gpu}`],
+        ["side_length", `${side_length}`],
+        ["brush_size", `${brush_size}`],
+        ["blend_value",`${blend_value}`],
+        ["wave_delay", `${wave_delay}`],
+        ["wave_decay", `${wave_decay}`],
+        ["decay_min_radius", `${decay_min_radius}`],
+        ["new_wave_delay", `${new_wave_delay}`],
+        ["new_wave_p", `${new_wave_p}`],
+        ["new_color_p", `${new_color_p}`],
+        ["new_color_compl_p", `${new_color_compl_p}`]
+    ]);
+}
     const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
 
     if (window.location.search !== updated_search_params)

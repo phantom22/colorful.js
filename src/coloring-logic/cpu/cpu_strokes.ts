@@ -1,39 +1,48 @@
-    /** last hovered vertex id, used to prevent the same vertex from being
-     * processed multiple times */
-let hovered_id = undefined as undefined|number,
+// let wave_queue = new Set() as Set<number>,
+//     queued_strokes = [] as {stroke:Set<number>, color_data:color_data}[],
+//     stroke_count = -1;
+
+const stroke = {
     /** this set is used to both apply and remove the highlight color effect. */
-    wave_queue = new Set() as Set<number>,
+    flat_queue: new Set() as Set<number>,
     /** this array encodes the individual queued strokes with their respective
      * color. */
-    queued_strokes = [] as {stroke:Set<number>, color_data:color_data}[],
-    /** this value is set to true whenever the left mouse button is lifted. */
-    broke_stroke = false,
+    queue: [] as {stroke:Set<number>, color_data:color_data}[],
     /** default value set to -1, since this variable gets incremented by one
      * each time a new queued stroke is done (this also applied to the first
      * one). */
-    stroke_count = -1;
+    count: -1,
+    /** this value is used to  */
+    wave_id: 0,
+    choosen_palette: [] as color_data[],
+    /** index of the color used from the current choosen palette of colors. */
+    palette_color: 0,
+    /** gpu = 0: value used to filter out all the queued waves when filling or
+     * clearing the entire grid. */
+    queued_wave_count: 0,
+    /** gpu = 0: each wave_id lower or equal to this value will be discarded. */
+    prevent_waves_last_id: 0
+};
 
+let process_stroke: (hovered:number) => void,
+    remove_highlights: () => void,
+    process_queued_strokes: () => void;
+
+if (gpu !== 1) {
 function cpu_process_stroke(hovered:number) {
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
-            if (!wave_queue.has(hovered)) {
-                wave_queue.add(hovered);
+    if (hovered !== 0 && hovered !== mouse.last_hovered_id) {
+        if (keyboard.shift_down) {
+            const brush = grid.adj_graph[hovered].brush;
 
-                if (broke_stroke) {
-                    queued_strokes[++stroke_count] = {
-                        stroke: new Set(),
-                        color_data: choosen_palette[palette_color]
-                    };
+            const newly_hovered = brush.difference(stroke.flat_queue);
+            if (newly_hovered.size === 0)
+                return;
 
-                    if (choosen_palette.length > 1)
-                        palette_color = (palette_color+1) % choosen_palette.length;
-                
-                    broke_stroke = false;
-                }
+            for (const id of newly_hovered) {
+                stroke.queue[stroke.count].stroke.add(id);
+                stroke.flat_queue.add(id);
 
-                queued_strokes[stroke_count].stroke.add(hovered);
-
-                const offset = hovered*4;
+                const offset = id*4;
                 grid.texture[offset] =
                     Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
                 grid.texture[offset+1] =
@@ -42,78 +51,66 @@ function cpu_process_stroke(hovered:number) {
                     Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
             }
 
-            for (const adj of grid.adj_graph[hovered].next) {
-                const id = adj.id,
-                    offset = id*4;
-                if (wave_queue.has(id))
-                    continue;
-
-                queued_strokes[stroke_count].stroke.add(id);
-                wave_queue.add(id);
-
-                grid.texture[offset] =
-                    Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                grid.texture[offset+1] =
-                    Math.min(Math.floor(grid.texture[offset+1] + 255) * 0.5, 255);
-                grid.texture[offset+2] =
-                    Math.min(Math.floor(grid.texture[offset+2] + 255) * 0.5, 255);
-            }
-
-            texture_is_dirty = true;
+            renderer.texture_is_dirty = true;
         }
-        else if (ctrl_down) {
-            cpu_fill_grid(choosen_palette[palette_color]);
+        else if (keyboard.ctrl_down) {
+            fill_grid(stroke.choosen_palette[stroke.palette_color]);
         }
         else {
             const brush = new Set(grid.adj_graph[hovered].brush);
-            cpu_wave_start(brush);
+            wave_start(brush);
         }
-        hovered_id = hovered;
+        mouse.last_hovered_id = hovered;
     }
 }
 
 function cpu_remove_highlights() {
-    for (const id of wave_queue) {
+    for (const id of stroke.flat_queue) {
         const offset = id*4;
         grid.texture[offset] = Math.max(2*grid.texture[offset] - 255, 0);
         grid.texture[offset+1] = Math.max(2*grid.texture[offset+1] - 255, 0);
         grid.texture[offset+2] = Math.max(2*grid.texture[offset+2] - 255, 0);
         grid.texture[offset+3] = Math.max(2*grid.texture[offset+3] - 255, 0);
     }
-    texture_is_dirty = true;
-    wave_queue.clear();
+    renderer.texture_is_dirty = true;
+    stroke.flat_queue.clear();
 }
 
 function cpu_process_queued_strokes() {
-    if (wave_queue.size === 0)
+    if (stroke.flat_queue.size === 0)
         return;
 
     cpu_remove_highlights();
     
-    for (let i=0; i<queued_strokes.length; ++i) {
-        const q = queued_strokes[i];
+    const mod = 3,
+          s = new Set() as Set<number>;
+    for (let i=0; i<stroke.queue.length; ++i) {
+        const q = stroke.queue[i];
 
-        let s = new Set() as Set<number>,
-            mod = 3,
-            m: undefined|number;
+        const first = q.stroke.entries().next();
+        if (first.done === true)
+            continue;
+
+        const m = first.value[0] % mod;
         
         for (const id of q.stroke) {
-            if (m === undefined) {
-                m = id % mod;
-            }
-
             s.add(id);
             if (id % mod === m) {
-                cpu_wave_start(s, q.color_data);
-                s = new Set();
+                wave_start(s, q.color_data);
+                s.clear();
             }
         }
         if (s.size > 0) {
-            cpu_wave_start(s, q.color_data);
+            wave_start(s, q.color_data);
             s.clear();
         }
     }
 
-    queued_strokes = [];
-    stroke_count = -1;
+    stroke.queue = [];
+    stroke.count = -1;
+}
+
+process_stroke = cpu_process_stroke;
+remove_highlights = cpu_remove_highlights;
+process_queued_strokes = cpu_process_queued_strokes;
 }

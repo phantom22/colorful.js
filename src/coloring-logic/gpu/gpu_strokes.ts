@@ -1,91 +1,87 @@
+if (gpu === 1) {
 function gpu_process_stroke(hovered:number) {
-    if (hovered !== 0 && hovered !== hovered_id) {
-        if (shift_down) {
-            const brush = grid.adj_graph[hovered].brush;
+    if (hovered === 0 || hovered === mouse.last_hovered_id)
+        return;
 
-            // @ts-ignore
-            const newly_hovered = brush.difference(wave_queue);
-            if (newly_hovered.size === 0)
-                return;
+    if (keyboard.shift_down) {
+        const brush = grid.adj_graph[hovered].brush;
 
-            /* change stroke color only if there were at least one new valid
-             * non hovered vertex. */
-            if (broke_stroke) {
-                queued_strokes[++stroke_count] = {
-                    stroke: new Set(),
-                    color_data: choosen_palette[palette_color]
-                };
+        const newly_hovered = brush.difference(stroke.flat_queue);
+        if (newly_hovered.size === 0)
+            return;
 
-                if (choosen_palette.length > 1)
-                    palette_color = (palette_color+1) % choosen_palette.length;
-            
-                broke_stroke = false;
-            }
+        const current_color_packed = stroke.queue[stroke.count].color_data.packed;
 
-            for (const id of newly_hovered) {
-                queued_strokes[stroke_count].stroke.add(id);
-                wave_queue.add(id);
-            }
+        const v = new Uint8Array([1,1,1]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
+        for (const id of newly_hovered) {
+            stroke.queue[stroke.count].stroke.add(id);
+            stroke.flat_queue.add(id);
 
-            const v = new Uint8Array([1,1,1]);
-            gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
-            for (const id of newly_hovered) {
-                const byte_offset = id*3-1;
-                gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
-            }
+            const byte_offset = id*3-1;
+            gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+            grid.hover_texture_u32view[id] = current_color_packed;
         }
-        else if (ctrl_down) {
-            gpu_fill_grid(choosen_palette[palette_color]);
-        }
-        else {
-            const brush = new Set(grid.adj_graph[hovered].brush);
-            gpu_wave_start(brush);
-        }
-        hovered_id = hovered;
+
+        renderer.hover_texture_is_dirty = true;
     }
+    else if (keyboard.ctrl_down) {
+        fill_grid(stroke.choosen_palette[stroke.palette_color]);
+    }
+    else {
+        const brush = new Set(grid.adj_graph[hovered].brush);
+        wave_start(brush);
+    }
+
+    mouse.last_hovered_id = hovered;
 }
 
 function gpu_remove_highlights() {  
     const v = new Uint8Array([0,0,0]);
     gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
-    for (const id of wave_queue) {
+    for (const id of stroke.flat_queue) {
         const byte_offset = id*3-1;
         gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    wave_queue.clear();
+    stroke.flat_queue.clear();
 }
 
 function gpu_process_queued_strokes() {
-    if (wave_queue.size === 0)
+    if (stroke.flat_queue.size === 0)
         return;
 
     gpu_remove_highlights();
     
-    for (let i=0; i<queued_strokes.length; ++i) {
-        const q = queued_strokes[i];
+    const mod = 3,
+          s = new Set() as Set<number>;
+    for (let i=0; i<stroke.queue.length; ++i) {
+        const q = stroke.queue[i];
 
-        let s = new Set() as Set<number>,
-            mod = 3,
-            m: undefined|number;
-        
+        const first = q.stroke.entries().next();
+        if (first.done === true)
+            continue;
+
+        const m = first.value[0] % mod;
+
         for (const id of q.stroke) {
-            if (m === undefined) {
-                m = id % mod;
-            }
-
             s.add(id);
             if (id % mod === m) {
-                gpu_wave_start(s, q.color_data);
-                s = new Set();
+                wave_start(s, q.color_data);
+                s.clear();
             }
         }
         if (s.size > 0) {
-            gpu_wave_start(s, q.color_data);
+            wave_start(s, q.color_data);
             s.clear();
         }
     }
 
-    queued_strokes = [];
-    stroke_count = -1;
+    stroke.queue = [];
+    stroke.count = -1;
+}
+
+process_stroke = gpu_process_stroke;
+remove_highlights = gpu_remove_highlights;
+process_queued_strokes = gpu_process_queued_strokes;
 }

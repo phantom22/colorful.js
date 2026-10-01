@@ -1,35 +1,40 @@
     /** this value is used to  */
-let wave_id = 0,
-    /** */
-    choosen_palette = [] as color_data[],
-    /** index of the color used from the current choosen palette of colors. */
-    palette_color = 0,
-    /** value used to filter out all the queued waves when filling or clearing
-     * the entire grid. */
-    queued_wave_count = 0,
-    /** each wave_id lower or equal to this value will be discarded. */
-    prevent_waves_last_id = 0;
+// let wave_id = 0,
+//     /** */
+//     choosen_palette = [] as color_data[],
+//     /** index of the color used from the current choosen palette of colors. */
+//     palette_color = 0,
+//     /** value used to filter out all the queued waves when filling or clearing
+//      * the entire grid. */
+//     queued_wave_count = 0,
+//     /** each wave_id lower or equal to this value will be discarded. */
+//     prevent_waves_last_id = 0;
 
+let wave_start: (ids:number|Set<number>, color_data?:color_data,_wave_id?:number) => void,
+    fill_grid: (color?:color_data) => void,
+    inward_wave: () => void;
+
+if (gpu !== 1) {
 function cpu_wave_start(
     ids:number|Set<number>, color_data?:color_data,
     _wave_id?:number
 ) {
-    --queued_wave_count;
-    queued_wave_count = Math.max(queued_wave_count, 0);
+    --stroke.queued_wave_count;
+    stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
 
     const _state = _wave_id === undefined 
-            ? ++wave_id
+            ? ++stroke.wave_id
             : _wave_id;
 
-    if (_state <= prevent_waves_last_id)
+    if (_state <= stroke.prevent_waves_last_id)
         return;
 
     let color: Uint8Array, fcolor: Float32Array, packed:number;
     if (color_data === undefined) {
-        const data = choosen_palette[palette_color];
+        const data = stroke.choosen_palette[stroke.palette_color];
         color = data.color;
-        if (choosen_palette.length > 1)
-            palette_color = (palette_color+1) % choosen_palette.length;
+        if (stroke.choosen_palette.length > 1)
+            stroke.palette_color = (stroke.palette_color+1) % stroke.choosen_palette.length;
 
         fcolor = data.fcolor;
         packed = data.packed;
@@ -43,7 +48,7 @@ function cpu_wave_start(
     let next: Set<adj_node>;
     if (typeof ids === "number") {
         grid.adj_graph[ids].state = _state;
-        if (wave_queue.has(ids)) {
+        if (stroke.flat_queue.has(ids)) {
             const offset = ids*4;
             grid.texture[offset] = Math.floor((color[0] + 255) * 0.5);
             grid.texture[offset+1] = Math.floor((color[1] + 255) * 0.5);
@@ -70,17 +75,17 @@ function cpu_wave_start(
         }
     }
 
-    texture_is_dirty = true;
+    renderer.texture_is_dirty = true;
     cpu_wave_propagate(next, _state, {color,fcolor,packed}, 0);
 }
 
 function cpu_wave_propagate(
     ids:Set<adj_node>, state:number, color_data:color_data, depth:number
 ) {
-    --queued_wave_count;
-    queued_wave_count = Math.max(queued_wave_count, 0);
+    --stroke.queued_wave_count;
+    stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
 
-    if (state <= prevent_waves_last_id)
+    if (state <= stroke.prevent_waves_last_id)
         return;
 
     const collected = new Set() as Set<adj_node>,
@@ -102,7 +107,7 @@ function cpu_wave_propagate(
 
         const node_id = node.id,
               offset = node_id*4,
-              is_hovered = wave_queue.has(node_id);
+              is_hovered = stroke.flat_queue.has(node_id);
         node.state = state;
         
         let avg_r = 0, avg_g = 0, avg_b = 0;
@@ -110,7 +115,7 @@ function cpu_wave_propagate(
             const adj_id = adj_node.id,
                   adj_offset = adj_id*4;
 
-            if (wave_queue.has(adj_id)) {
+            if (stroke.flat_queue.has(adj_id)) {
                 /** remove applied white highlight color from adjacent nodes 
                  * before adding the true color to the total sum */
                 avg_r +=
@@ -188,12 +193,12 @@ function cpu_wave_propagate(
         }
     }
 
-    texture_is_dirty = true;
+    renderer.texture_is_dirty = true;
 
     for (const new_start of new_wave) {
         const new_id = new_start.id,
               new_offset = new_id*4,
-              is_hovered = wave_queue.has(new_id);
+              is_hovered = stroke.flat_queue.has(new_id);
         
         let new_color: Uint8Array | undefined;//, new_color_packed: number;
         let new_color_data: color_data | undefined;
@@ -230,16 +235,16 @@ function cpu_wave_propagate(
         if (new_color !== undefined)
             new_color_data = get_color_data(new_color);
 
-        ++queued_wave_count;
+        ++stroke.queued_wave_count;
         setTimeout(cpu_wave_start, new_wave_delay, 
-            new_id, new_color_data, ++wave_id
+            new_id, new_color_data, ++stroke.wave_id
         );
     }
 
     if (collected.size === 0)
         return;
 
-    ++queued_wave_count;
+    ++stroke.queued_wave_count;
     setTimeout(
         cpu_wave_propagate, wave_delay,
         collected, state, color_data, depth+1
@@ -269,10 +274,16 @@ function cpu_fill_grid(color?:color_data) {
     grid.texture_u32view.fill(clear_color);
     grid.texture_u32view[0] = 0;
 
-    if (queued_wave_count > 0) {
-        prevent_waves_last_id = wave_id + queued_wave_count;
-        wave_id = prevent_waves_last_id + 1;
+    if (stroke.queued_wave_count > 0) {
+        stroke.prevent_waves_last_id = stroke.wave_id + stroke.queued_wave_count;
+        stroke.wave_id = stroke.prevent_waves_last_id + 1;
     }
 
-    texture_is_dirty = true;
+    renderer.texture_is_dirty = true;
+}
+
+wave_start = cpu_wave_start;
+inward_wave = cpu_inward_wave;
+fill_grid = cpu_fill_grid;
+
 }

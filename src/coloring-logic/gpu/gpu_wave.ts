@@ -1,13 +1,11 @@
+if (gpu === 1) {
 function gpu_wave_start(
     ids:number|Set<number>, color_data?:color_data,
     _wave_id?:number
 ) {
     const _state = _wave_id === undefined 
-            ? ++wave_id
+            ? ++stroke.wave_id
             : _wave_id;
-
-    if (_state <= prevent_waves_last_id)
-        return;
 
     const brush = typeof ids === "number" ?
         new Set(grid.adj_graph[ids].brush) :
@@ -15,13 +13,15 @@ function gpu_wave_start(
 
     const fcolor = color_data !== undefined
         ? color_data.fcolor
-        : choosen_palette[palette_color].fcolor;
-    if (color_data === undefined && choosen_palette.length > 1)
-        palette_color = (palette_color+1) % choosen_palette.length;
+        : stroke.choosen_palette[stroke.palette_color].fcolor;
+    if (color_data === undefined && stroke.choosen_palette.length > 1) {
+        stroke.palette_color = (stroke.palette_color+1) % stroke.choosen_palette.length;
+    }
     const [r,g,b] = fcolor;
 
-    const state_weights = new Float32Array([++wave_id, max_weight, 0.0, 0.0]);
     const wcolor_dist = new Float32Array([r, g, b, 0.0]);
+    const state_weights = new Float32Array([++stroke.wave_id, max_weight, 0.0, 0.0]);
+    
 
     const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
     const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
@@ -74,7 +74,12 @@ function gpu_fill_grid(color?:color_data) {
         grid.wcolor_dist[offset+3] = 0;
     }
     
-    wave_id = 0;
-    texture_is_dirty = true;
-    state_is_dirty = true;
+    stroke.wave_id = 0;
+    renderer.texture_is_dirty = true;
+    renderer.state_is_dirty = true;
+}
+
+wave_start = gpu_wave_start;
+inward_wave = gpu_inward_wave;
+fill_grid = gpu_fill_grid;
 }

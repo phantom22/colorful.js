@@ -1,94 +1,109 @@
+const mouse = {
+    /** current frame's sampled mouse x position relative to the canvas. */
+    x: -1,
+    /** current frame's sampled mouse y position relative to the canvas. */
+    y: -1,
     /** value set to true whenever the mouse's left button is pressed. */
-let mouse1_down = false,
+    m1_down: false,
     /** value set to true only when mouse1_down is not true and the mouse's
-     * wheel button is pressed. */
-    mouse3_down = false,
+      * wheel button is pressed. */
+    m3_down: false,
+    /** both values used for moving the camera when pressing mouse3. */
+    prev_clientX: -1,
+    prev_clientY: -1,
     /** value used to prevent checking multiple times, on the same frame, which
      * the mouse position and its related events. */
-    last_mouse_sample_frame = -1,
-    /** both values used for moving the camera when pressing mouse3. */
-    prev_clientX: number,
-    prev_clientY: number,
-    /** current frame's sampled mouse x position relative to the canvas. */
-    mouse_x: number,
-    /** current frame's sampled mouse y position relative to the canvas. */
-    mouse_y: number;
+    last_sample_frame: -1,
+    wheel_already_processed: false,
+    wheel_zoom_factor: 8,
+    trackpad_zoom_factor: 2,
+    /** last hovered vertex id, used to prevent the same vertex from being
+     * processed multiple times */
+    last_hovered_id: -1
+};
 
 /** event called on canvas.onmouseleave */
 function c_mouseleave() { 
-    // mouse1_down = false;
-    // mouse3_down = false;
-    // shift_down = false;
-    // ctrl_down = false;
-    hovered_id = undefined;
-    // cpu_process_queued_strokes();
+    mouse.last_hovered_id = -1;
 }
 
 /** event called on canvas.onmousedown */
 function c_mousedown(e:MouseEvent) {
-    if (e.button === 2 || last_mouse_sample_frame === frame)
+    const frame = renderer.frame;
+    if (e.button === 2 || mouse.last_sample_frame === frame)
         return;
 
     if (e.button === 0) {
-        mouse1_down = true;
-        mouse3_down = false;
-        if (!shift_down)
-            palette_color = 0;
+        mouse.m1_down = true;
+        mouse.m3_down = false;
+
+        if (keyboard.shift_down) {
+            /* change stroke color only if there were at least one new valid
+            * non hovered vertex. */
+            stroke.queue[++stroke.count] = {
+                stroke: new Set(),
+                color_data: stroke.choosen_palette[stroke.palette_color]
+            };
+
+            if (stroke.choosen_palette.length > 1) {
+                stroke.palette_color = (stroke.palette_color+1) % stroke.choosen_palette.length;
+            }
+        }
     }
-    else if (!mouse1_down && e.button === 1) {
-        prev_clientX = e.clientX;
-        prev_clientY = e.clientY;
-        mouse3_down = true;
-        last_mouse_sample_frame = frame;
+    else if (!mouse.m1_down && e.button === 1) {
+        mouse.prev_clientX = e.clientX;
+        mouse.prev_clientY = e.clientY;
+        mouse.m3_down = true;
+        mouse.last_sample_frame = frame;
         return;
     }
     else {
         return;
     }
 
-    if (force_render_mask)
+    if (renderer.force_render_mask)
         return;
 
-    mouse_x =
+    mouse.x =
         Math.floor((e.clientX - canvas_rect.left) * width / canvas_rect.width);
-    mouse_y =
+    mouse.y =
         Math.floor((canvas_rect.bottom - e.clientY) * height / canvas_rect.height);
 
-    request_sample = true;
-    last_mouse_sample_frame = frame;
+    renderer.request_mouse_sample = true;
+    mouse.last_sample_frame = frame;
 }
 
 /** event called on window.onmousemove */
 function w_mousemove(e:MouseEvent) {
-    if ((!mouse1_down && !mouse3_down) || force_render_mask
-        || last_mouse_sample_frame === frame)
+    if ((!mouse.m1_down && !mouse.m3_down) || renderer.force_render_mask
+        || mouse.last_sample_frame === renderer.frame)
         return; 
 
     const clientX = e.clientX,
           clientY = e.clientY;
-    mouse_x =
+    mouse.x =
         Math.floor((clientX - canvas_rect.left) * width / canvas_rect.width);
-    mouse_y =
+    mouse.y =
         Math.floor((canvas_rect.bottom - clientY) * height / canvas_rect.height);
 
-    if (mouse3_down) {
-        camera_x -= (clientX - prev_clientX) * units_per_pixel_x;
-        camera_y += (clientY - prev_clientY) * units_per_pixel_y;
+    if (mouse.m3_down) {
+        camera.x -= (clientX - mouse.prev_clientX) * camera.units_per_pixel_x;
+        camera.y += (clientY - mouse.prev_clientY) * camera.units_per_pixel_y;
 
-        camera_x =
-            Math.max(Math.min(camera_x, camera_coord_max), camera_coord_min);
-        camera_y =
-            Math.max(Math.min(camera_y, camera_coord_max), camera_coord_min);
+        camera.x =
+            Math.max(Math.min(camera.x, camera.max_coord), camera.min_coord);
+        camera.y =
+            Math.max(Math.min(camera.y, camera.max_coord), camera.min_coord);
 
-        prev_clientX = clientX;
-        prev_clientY = clientY;
+        mouse.prev_clientX = clientX;
+        mouse.prev_clientY = clientY;
         
-        update_view_proj_mat = true;
-        force_render_mask = true;
+        renderer.update_view_proj_mat = true;
+        renderer.force_render_mask = true;
     }
     else {
-        request_sample = true;
-        last_mouse_sample_frame = frame;
+        renderer.request_mouse_sample = true;
+        mouse.last_sample_frame = renderer.frame;
     }
 }
 
@@ -102,22 +117,16 @@ function w_mouseup(e:MouseEvent) {
     if (e.button === 1) {
         // @ts-ignore
         prev_clientX = prev_clientY = undefined;
-        mouse3_down = false;
+        mouse.m3_down = false;
     }
 
     if (e.button !== 0)
         return;
 
-    broke_stroke = shift_down ? true : false;
-    mouse1_down = false;
-    hovered_id = undefined;
+    mouse.m1_down = false;
+    mouse.last_hovered_id = -1;
     mouse_down_on_color = false;
 }
-
-let wheel_already_processed = false,
-    /** camera_scale max delta per second. */
-    wheel_zoom_factor = 8,
-    trackpad_zoom_factor = 2;
 
 function event_triggered_by_trackpad(e:WheelEvent) {
     if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
@@ -139,20 +148,20 @@ function w_wheel(e:WheelEvent) {
         return;
     }
 
-    if (wheel_already_processed)
+    if (mouse.wheel_already_processed)
         return;
-    wheel_already_processed = true;
+    mouse.wheel_already_processed = true;
 
     const factor = event_triggered_by_trackpad(e)
-        ? trackpad_zoom_factor * delta_time
-        : wheel_zoom_factor * delta_time;
-    camera_scale += e.deltaY < 0 ? factor : -factor;
+        ? mouse.trackpad_zoom_factor * renderer.delta_time
+        : mouse.wheel_zoom_factor * renderer.delta_time;
+    camera.scale += e.deltaY < 0 ? factor : -factor;
 
-    camera_scale =
-        Math.min(Math.max(camera_scale, camera_scale_min), camera_scale_max);
-    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;        
-    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    camera.scale =
+        Math.min(Math.max(camera.scale, camera.min_scale), camera.max_scale);
+    camera.units_per_pixel_x = 2 * camera.scale / canvas_rect.width;        
+    camera.units_per_pixel_y = 2 * camera.scale / canvas_rect.height;
 
-    update_view_proj_mat = true;
-    force_render_mask = true;
+    renderer.update_view_proj_mat = true;
+    renderer.force_render_mask = true;
 }

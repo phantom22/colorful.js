@@ -35,7 +35,7 @@ function dom_update_color_picker() {
         el.classList.add("picked");
         el.textContent = "1";
         picked_colors_els.add(el);
-        choosen_palette = [palette_color_data[0]];
+        stroke.choosen_palette = [palette_color_data[0]];
     }
 }
 
@@ -70,9 +70,9 @@ function color_mouseenter(e:MouseEvent) {
         picked_colors_els.delete(bttn);
 
         const els_array = [...picked_colors_els],
-              ind = choosen_palette.indexOf(data);
+              ind = stroke.choosen_palette.indexOf(data);
 
-        choosen_palette.splice(ind, 1);
+        stroke.choosen_palette.splice(ind, 1);
         for (let i=ind; i<els_array.length; ++i)
             els_array[i].textContent = (i+1).toString();
     }
@@ -80,7 +80,7 @@ function color_mouseenter(e:MouseEvent) {
         bttn.classList.add("picked");
         picked_colors_els.add(bttn);
         bttn.textContent = picked_colors_els.size.toString();
-        choosen_palette.push(data);
+        stroke.choosen_palette.push(data);
     }
 }
 
@@ -89,7 +89,7 @@ function color_mouseup(e:MouseEvent) {
           color = palette_color_data[color_button_to_pallete_id.get(bttn) as number];
 
     if (!e.shiftKey) {
-        palette_color = 0;
+        stroke.palette_color = 0;
         for (const el of picked_colors_els) {
             el.classList.remove("picked");
             el.textContent = "";
@@ -99,7 +99,7 @@ function color_mouseup(e:MouseEvent) {
         bttn.classList.add("picked");
         bttn.textContent = "1";
         picked_colors_els.add(bttn);
-        choosen_palette = [color];
+        stroke.choosen_palette = [color];
         return;
     }
 }

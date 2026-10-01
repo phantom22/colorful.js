@@ -1,16 +1,14 @@
 let gl: WebGL2RenderingContext,
     /** grid shader program. */
-    p: ReturnType<typeof compile_and_use_shader_program>,
+    p: shader_program,
     /** grid vertex mask shader program. */
-    mask_p: ReturnType<typeof compile_and_use_shader_program>,
-    state_p: ReturnType<typeof compile_and_use_shader_program>,
+    mask_p: shader_program,
+    state_p: shader_program,
     grid: ColorfulGrid,
     mask_texture:WebGLTexture,
     mask_fbo:WebGLFramebuffer,
     state_fbo0:WebGLFramebuffer,
     state_fbo1:WebGLFramebuffer,
-    /** inner window aspect ratio. */
-    ar:number,
     /** camera (orthographic) projection matrix. */
     view_proj_mat:Float32Array,
     /** window.innerWidth */
@@ -20,6 +18,7 @@ let gl: WebGL2RenderingContext,
     /** grid vertex array object. */
     vao:WebGLVertexArrayObject,
     color_texture:WebGLTexture,
+    hover_texture:WebGLTexture,
     /** mask grid vertex array object. */
     mask_vao:WebGLVertexArrayObject,
     /** state grid vertex array object. */
@@ -47,28 +46,23 @@ let canvas_el: HTMLCanvasElement,
     /** esc button DOM element (#esc-button). */
     esc_button_el: HTMLElement,
     /** updated in update_viewport */
-    canvas_rect: DOMRect,
+    canvas_rect: DOMRect;
+
+const camera = {
+    x: 0,
+    y: 0,
+    scale: 1,
+    /** inner window aspect ratio. */
+    ar: 0,
+    min_coord: -0.5,
+    max_coord: 0.5,
+    min_scale: 0.0005,
+    max_scale: 2,
     /** used for mouse movement scaling to properly move the camera,
      * recalculated both in update_viewport and in w_wheel */
-    units_per_pixel_x: number,
-    units_per_pixel_y: number;
-
-let camera_x = 0,
-    camera_y = 0,
-
-    camera_coord_min = -0.5,
-    camera_coord_max = 0.5,
-
-    camera_scale_min = 0.0005,
-    camera_scale = 1,
-    camera_scale_max = 2;
-
-let process_stroke: (hovered:number) => void,
-    remove_highlights: () => void,
-    process_queued_strokes: () => void,
-    wave_start: (ids:number|Set<number>, color_data?:color_data,_wave_id?:number) => void,
-    fill_grid: (color?:color_data) => void,
-    inward_wave: () => void;
+    units_per_pixel_x: 0,
+    units_per_pixel_y: 0
+}
 
 /** event called by window.onload */
 function init() {
@@ -101,36 +95,35 @@ function init() {
     //////////////////////////////////
 
     canvas_rect = canvas_el.getBoundingClientRect();
-    units_per_pixel_x = 2 * camera_scale / canvas_rect.width;        
-    units_per_pixel_y = 2 * camera_scale / canvas_rect.height;
+    camera.units_per_pixel_x = 2 * camera.scale / canvas_rect.width;        
+    camera.units_per_pixel_y = 2 * camera.scale / canvas_rect.height;
     
     width = window.innerWidth;
     height = window.innerHeight;
     
-    ar = width / height;
+    camera.ar = width / height;
     view_proj_mat =
-        create_view_projection_matrix(camera_x, camera_y, camera_scale, ar);
+        create_view_projection_matrix(camera.x, camera.y, camera.scale, camera.ar);
 
     canvas_el.width = width;
     canvas_el.height = height;
 
     if (gpu) {
-        p = compile_and_use_shader_program(gl, "gpu-vert", "gpu-frag", [
-            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
-            new uniform("u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
-            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 1),
-            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 2),
-            new uniform("u_blend_value", GL_FLOAT, UPDATE, () => blend_value),
-            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
-            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
-            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
-            new uniform("u_state_ramp_width", GL_FLOAT, NO_UPDATE, () => 20.0)
+        p = new shader_program("main", gpu_vert, gpu_frag, [
+            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
+            new uniform("u_texture", GL_TEXTURE, U_INIT, 0),
+            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 1),
+            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 2),
+            new uniform("u_hcolor", GL_TEXTURE, U_INIT, 3),
+            // new uniform("u_blend_value", GL_FLOAT, U_INIT, blend_value),
+            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
+            // new uniform("u_decayt_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
         ]);
     }
     else {
-        p = compile_and_use_shader_program(gl, "cpu-vert", "cpu-frag", [
-            new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
-            new uniform("!u_texture", GL_TEXTURE, NO_UPDATE, () => 0),
+        p = new shader_program("main", cpu_vert, cpu_frag, [
+            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
+            new uniform("!u_texture", GL_TEXTURE, U_INIT, 0),
         ]);
     }
 
@@ -156,13 +149,14 @@ function init() {
     }
 
     color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
-   
+    hover_texture = create_RGBA_texture(grid.texture_size, grid.hover_texture);
+
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
 
-    mask_p = compile_and_use_shader_program(gl, "mask-vert", "mask-frag", [
-        new uniform("!u_view_proj", GL_MAT4x4, NO_UPDATE, () => view_proj_mat),
+    mask_p = new shader_program("mask", mask_vert, mask_frag, [
+        new uniform("!u_view_proj", GL_MAT4x4, 0, () => view_proj_mat),
     ]);
     
     mask_vao = create_vertex_array();
@@ -179,13 +173,15 @@ function init() {
     //////////////////////////////////
 
     if (gpu) {
-        state_p = compile_and_use_shader_program(gl, "state-vert", "state-frag", [
-            new uniform("u_state_weights", GL_TEXTURE, NO_UPDATE, () => 0),
-            new uniform("u_wcolor_dist", GL_TEXTURE, NO_UPDATE, () => 1),
-            new uniform("u_delta_time", GL_FLOAT, UPDATE, () => delta_time),
-            new uniform("u_max_weight", GL_FLOAT, UPDATE, () => max_weight),
-            new uniform("u_wave_decay", GL_FLOAT, UPDATE, () => wave_decay),
-            new uniform("u_decay_min_radius", GL_FLOAT, UPDATE, () => decay_min_radius),
+        state_p = new shader_program("state", state_vert, state_frag, [
+            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 0),
+            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 1),
+            new uniform("u_delta_time", GL_FLOAT, U_UPDATE | U_INIT, () => renderer.delta_time),
+            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
+            // new uniform("u_decay_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
+            new uniform("u_state_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(state_rate), (v:number) => not_saturated(ms_from_rate(v))),
+            new uniform("u_weight_decay", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(weight_decay), (v:number) => not_saturated(ms_from_rate(v))),
+            new uniform("u_diffusion_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(diffusion_rate), (v:number) => not_saturated(ms_from_rate(v))),
         ]);
 
         state_vao = create_vertex_array();
@@ -204,23 +200,6 @@ function init() {
         state_fbo1 = create_frame_buffer2(state_weights_1, wcolor_dist_1);
 
         state_read_index = 0;
-    }
-
-    if (gpu) {
-        process_stroke = gpu_process_stroke;
-        remove_highlights = gpu_remove_highlights;
-        process_queued_strokes = gpu_process_queued_strokes;
-        wave_start = gpu_wave_start;
-        fill_grid = gpu_fill_grid;
-        inward_wave = gpu_inward_wave;
-    }
-    else {
-        process_stroke = cpu_process_stroke;
-        remove_highlights = cpu_remove_highlights;
-        process_queued_strokes = cpu_process_queued_strokes;
-        wave_start = cpu_wave_start;
-        fill_grid = cpu_fill_grid;
-        inward_wave = cpu_inward_wave;
     }
 
     //////////////////////////////////

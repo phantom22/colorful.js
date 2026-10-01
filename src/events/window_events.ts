@@ -1,18 +1,18 @@
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
-    mouse1_down = false;
-    mouse3_down = false;
-    shift_down = false;
-    ctrl_down = false;
-    hovered_id = undefined;
+    mouse.m1_down = false;
+    mouse.m3_down = false;
+    keyboard.shift_down = false;
+    keyboard.ctrl_down = false;
+    mouse.last_hovered_id = -1;
 
     remove_highlights();
-    queued_strokes = [];
-    stroke_count = -1;
+    stroke.queue = [];
+    stroke.count = -1;
 }
 
 function d_visibilitychange() {
-    window_hidden = document.hidden;
+    renderer.window_hidden = document.hidden;
 }
 
 

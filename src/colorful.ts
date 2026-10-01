@@ -56,6 +56,8 @@ interface ColorfulGrid {
     /** flat Uint8 array which defines the lut texture used to color each vertex
      *  by using its triangle id. */
     texture: Uint8Array;
+    hover_texture: Uint8Array;
+    hover_texture_u32view: Uint32Array;
     /** Uint32 view of the lut texture. */
     texture_u32view: Uint32Array;
     /** number of pixels of the square lut texture. */
@@ -351,9 +353,14 @@ class ColorfulGrid {
         const tex_length = texture_size * texture_size * 4;
 
         this.texture = new Uint8Array(tex_length);
-        const u32view = new Uint32Array(this.texture.buffer);
-        u32view.fill(pack_uint8(color));
-        this.texture_u32view = u32view;
+        const t_u32view = new Uint32Array(this.texture.buffer);
+        t_u32view.fill(pack_uint8(color));
+        this.texture_u32view = t_u32view;
+
+        this.hover_texture = new Uint8Array(tex_length);
+        const ht_u32view = new Uint32Array(this.hover_texture.buffer);
+        ht_u32view.fill(0);
+        this.hover_texture_u32view = ht_u32view;
 
         if (gpu) {
             this.state_weights = new Float32Array(tex_length);

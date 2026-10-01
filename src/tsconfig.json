@@ -11,6 +11,8 @@
         "helpers/color_helpers.ts",
         "palette.ts",
         "helpers/webgl_helpers.ts",
+        "helpers/shaders.ts",
+        "helpers/shader_program.ts",
         "colorful.ts",
         "events/update_viewport.ts",
         "coloring-logic/cpu/cpu_wave.ts",
