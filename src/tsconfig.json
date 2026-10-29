@@ -1,29 +1,26 @@
 {
     "compilerOptions": {
         "target": "esnext",
-        "outFile":"../js/index.js",
-        "ignoreDeprecations": "6.0"
+        "outDir":"../js/"
     },
     "files": [
-        "search_params.ts",
-        "dom/menu_DOM.ts",
-        "dom/color_picker_DOM.ts",
+        "config.ts",
         "helpers/color_helpers.ts",
         "palette.ts",
         "helpers/webgl_helpers.ts",
-        "helpers/shaders.ts",
-        "helpers/shader_program.ts",
-        "colorful.ts",
+        "shaders/shader_program.ts",
+        "shaders/sim_shaders.ts",
         "events/update_viewport.ts",
-        "coloring-logic/cpu/cpu_wave.ts",
-        "coloring-logic/cpu/cpu_strokes.ts",
-        "coloring-logic/gpu/gpu_wave.ts",
-        "coloring-logic/gpu/gpu_strokes.ts",
+        "splat.ts",
         "draw.ts",
-        "init.ts",
         "events/keyboard_events.ts",
         "events/mouse_events.ts",
         "events/window_events.ts",
+        "glsl_lint.ts",
+        "ui.ts",
+        "init_shaders.ts",
+        "init_textures.ts",
+        "init_ui.ts",
         "main.ts"
     ]
 }

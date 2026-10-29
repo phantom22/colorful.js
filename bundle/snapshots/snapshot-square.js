@@ -44,49 +44,40 @@ const searchParams = new (class {
         return this.url.searchParams.get(p) || fallback;
     }
 });
-const gpu = Math.floor(searchParams.getNumber("gpu", 1, 0, 1)), side_length = searchParams.getNumber("side_length", gpu ? 64 : 32, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", gpu ? 5 : 1, 0)), blend_value = searchParams.getNumber("blend_value", gpu ? 0.6 : 0.008, 0, 1), decay_min_radius = searchParams.getNumber("decay_min_radius", -2), wave_decay = searchParams.getNumber("wave_decay", gpu ? 0.999 : 0.9, 0, 1), grid_bg = searchParams.getUint8Color("grid_bg"), wave_delay = searchParams.getNumber("wave_delay", 30, 1), 
-// cpu-side specific
-new_wave_delay = searchParams.getNumber("new_wave_delay", 500, 1), new_wave_p = searchParams.getNumber("new_wave_p", 0.0002, 0, 1), new_color_p = searchParams.getNumber("new_color_p", 0.1, 0, 1), new_color_compl_p = searchParams.getNumber("new_color_compl_p", 0.5, 0, 1), 
-// gpu-side specific
-max_weight = 3.0;
-let state_rate = searchParams.getNumber("wave_delay_ms", 60, 1), weight_decay = searchParams.getNumber("color_decay_ms", 600, 1), diffusion_rate = searchParams.getNumber("color_diffusion_ms", 10, 1);
+const side_length = searchParams.getNumber("side_length", 64, 1), brush_size = Math.floor(searchParams.getNumber("brush_size", 5, 0)), grid_bg = searchParams.getUint8Color("grid_bg");
+const fluid = {
+    gain: searchParams.getNumber("gain", 5.0, 0.1, 30.0),
+    drag: searchParams.getNumber("drag", 0.03, 0.01, 6.0),
+    phi_decay: searchParams.getNumber("phi_decay", 55.0, 2.0, 55.0),
+    strength: searchParams.getNumber("strength", 3000.0, 0.5),
+    jacobi_iterations: Math.floor(searchParams.getNumber("jacobi_iterations", 4, 0, 60)),
+    //fade_rate: searchParams.getNumber("fade_rate", 0.0, 0.0, 0.5),
+    phi_diffusion: searchParams.getNumber("phi_diffusion", 60.0, 1.0),
+    dye_diffusion: searchParams.getNumber("dye_diffusion", 50.0, 1.0),
+    inject_rate: 25.0,
+    inject_duration: 90.0,
+    inject_max: 0.5,
+    inject_spread: 15.0,
+    pause_jacobi_while_draggin: false,
+    just_drag: false
+};
 function rate_from_ms(wave_delay_ms, convergence_fraction = 0.95) {
     const t_seconds = wave_delay_ms * 0.001;
     return -Math.log(1 - convergence_fraction) / t_seconds;
 }
-function ms_from_rate(rate, convergence_fraction = 0.95) {
-    return (-Math.log(1 - convergence_fraction) / rate) * 1000;
-}
-function not_saturated(target_ms, threshold = 1.0) {
-    return (renderer.delta_time * 1000 / target_ms) < threshold;
-}
 {
-    let params;
-    if (gpu) {
-        params = new URLSearchParams([
-            ["gpu", `${gpu}`],
-            ["side_length", `${side_length}`],
-            ["brush_size", `${brush_size}`],
-            ["wave_delay_ms", `${state_rate}`],
-            ["color_decay_ms", `${weight_decay}`],
-            ["color_diffusion_ms", `${diffusion_rate}`]
-        ]);
-    }
-    else {
-        params = new URLSearchParams([
-            ["gpu", `${gpu}`],
-            ["side_length", `${side_length}`],
-            ["brush_size", `${brush_size}`],
-            ["blend_value", `${blend_value}`],
-            ["wave_delay", `${wave_delay}`],
-            ["wave_decay", `${wave_decay}`],
-            ["decay_min_radius", `${decay_min_radius}`],
-            ["new_wave_delay", `${new_wave_delay}`],
-            ["new_wave_p", `${new_wave_p}`],
-            ["new_color_p", `${new_color_p}`],
-            ["new_color_compl_p", `${new_color_compl_p}`]
-        ]);
-    }
+    let params = new URLSearchParams([
+        ["side_length", `${side_length}`],
+        ["brush_size", `${brush_size}`],
+        ["gain", `${fluid.gain}`],
+        ["drag", `${fluid.drag}`],
+        ["phi_decay", `${fluid.phi_decay}`],
+        ["phi_diffusion", `${fluid.phi_diffusion}`],
+        ["dye_diffusion", `${fluid.dye_diffusion}`],
+        ["strength", `${fluid.strength}`],
+        ["jacobi_iterations", `${fluid.jacobi_iterations}`],
+        //["fade_rate", `${fluid.fade_rate}`]
+    ]);
     const updated_search_params = `?${params.toString()}&grid_bg=[${grid_bg}]`;
     if (window.location.search !== updated_search_params)
         window.history.replaceState({}, '', updated_search_params);
@@ -357,6 +348,16 @@ function create_RGBA32F_texture(size, data) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return o;
 }
+function create_R32F_texture(size, data) {
+    const o = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, o);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, size, size, 0, gl.RED, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return o;
+}
 function create_RGBA_texture(size, data) {
     const o = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, o);
@@ -403,57 +404,47 @@ function float_to_gpu(loc, x) {
 function mat4x4_to_gpu(loc, x) {
     gl.uniformMatrix4fv(loc, false, x);
 }
-const gpu_vert = `
+function fill_RGBAF32(arr, _with) {
+    arr[0] = _with[0];
+    arr[1] = _with[1];
+    arr[2] = _with[2];
+    arr[3] = _with[3];
+    let filled = 4;
+    while (filled < arr.length) {
+        const chunk = Math.min(filled, arr.length - filled);
+        arr.copyWithin(filled, 0, chunk);
+        filled += chunk;
+    }
+}
+const main_vert = `
 #version 300 es
 layout(location = 0) in vec2 pos;
-layout(location = 1) in uint id;
-layout(location = 2) in vec2 uv;
-layout(location = 3) in vec2 adj_uv1;
-layout(location = 4) in vec2 adj_uv2;
-layout(location = 5) in vec2 adj_uv3;
-layout(location = 6) in uint hovered;
+layout(location = 1) in vec2 uv;
+layout(location = 2) in uint hovered;
 
 uniform mat4 u_view_proj;
 
-flat out uint v_id;
 out vec2 v_uv;
-out vec2 v_adj_uv1;
-out vec2 v_adj_uv2;
-out vec2 v_adj_uv3;
 flat out uint v_hovered;
 out vec2 v_local_pos;
 
 void main() {
     v_local_pos = pos;
-    v_id = id;
     v_uv = uv;
-    v_adj_uv1 = adj_uv1;
-    v_adj_uv2 = adj_uv2;
-    v_adj_uv3 = adj_uv3;
     v_hovered = hovered;
     gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
 }`;
-const gpu_frag = `
+const main_esagonal_frag = `
 #version 300 es
 precision highp float;
 precision highp sampler2D;
 
-flat in uint v_id;
 in vec2 v_uv;
-in vec2 v_adj_uv1;
-in vec2 v_adj_uv2;
-in vec2 v_adj_uv3;
 flat in uint v_hovered;
 in vec2 v_local_pos;
 
-uniform sampler2D u_texture;
-uniform sampler2D u_state_weights;
-uniform sampler2D u_wcolor_dist;
+uniform sampler2D u_dye;
 uniform sampler2D u_hcolor;
-
-uniform float u_blend_value;
-uniform float u_wave_decay;
-uniform float u_decay_min_radius;
 
 out vec4 o_color;
 
@@ -465,18 +456,7 @@ void main() {
         return;
     }
 
-    vec3 original_color = texture(u_texture, v_uv).rgb;
-    float state = texture(u_state_weights, v_uv).r;
-
-    vec4 wcolor_dist = texture(u_wcolor_dist, v_uv);
-    vec3 wave_color = wcolor_dist.rgb;
-    
-    // float distance = wcolor_dist.a;
-    // float decay_factor = u_blend_value * pow(u_wave_decay, max(distance - u_decay_min_radius - 1.0, 0.0));
-    // decay_factor = clamp(decay_factor, 0.0, 1.0);
-
-    float factor = smoothstep(0.0, 0.15, state);
-    o_color = vec4(mix(original_color, wave_color, factor), 1.0);
+    o_color = vec4(texture(u_dye, v_uv).rgb, 1.0);
 
     if (v_hovered == 1u) {
         vec3 hcolor = texture(u_hcolor, v_uv).rgb;
@@ -492,64 +472,57 @@ void main() {
         o_color = vec4(tinted, 1.0);
     }
 }`;
-const cpu_vert = `
-#version 300 es
-layout(location = 0) in vec2 pos;
-layout(location = 1) in uint id;
-layout(location = 2) in vec2 uv;
-
-uniform mat4 u_view_proj;
-
-flat out uint v_id;
-out vec2 v_uv;
-out vec2 v_local_pos;
-
-void main() {
-    v_local_pos = pos;
-    v_id = id;
-    v_uv = uv;
-    gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
-}`;
-const cpu_frag = `
+const main_square_frag = `
 #version 300 es
 precision highp float;
 precision highp sampler2D;
 
-flat in uint v_id;
 in vec2 v_uv;
+flat in uint v_hovered;
 in vec2 v_local_pos;
 
-uniform sampler2D u_texture;
+uniform sampler2D u_dye;
+uniform sampler2D u_hcolor;
 
 out vec4 o_color;
 
 void main() {
     vec2 p = abs(v_local_pos);
-    float max_dist = max(p.x * 0.8660254 + p.y * 0.5, p.y);
-
-    if (max_dist > 0.86235) {
+    float max_dist = max(p.x, p.y);
+    if (max_dist > 0.497) { // adjust the threshold (0.5) to change the square size
         o_color = vec4(1.0, 1.0, 1.0, 1.0);
+        return;
     }
-    else {  
-        o_color = texture(u_texture, v_uv);
+
+    o_color = vec4(texture(u_dye, v_uv).rgb, 1.0);
+
+    if (v_hovered == 1u) {
+        vec3 hcolor = texture(u_hcolor, v_uv).rgb;
+
+        // tint toward the stroke colour
+        vec3 tinted = mix(o_color.rgb, hcolor, 0.6);
+
+        // then keep your contrast rule, based on the tinted result
+        float lum = dot(tinted, vec3(0.299, 0.587, 0.114));
+        tinted = lum > 0.5 ? tinted * 0.6
+                        : mix(tinted, vec3(1.0), 0.35);
+
+        o_color = vec4(tinted, 1.0);
     }
 }`;
 const state_vert = `
 #version 300 es
-layout(location = 0) in uint id;
-layout(location = 1) in vec2 uv;
-layout(location = 2) in vec2 adj_uv1;
-layout(location = 3) in vec2 adj_uv2;
-layout(location = 4) in vec2 adj_uv3;
+layout(location = 0) in vec2 uv;
+layout(location = 1) in vec2 adj_uv1;
+layout(location = 2) in vec2 adj_uv2;
+layout(location = 3) in vec2 adj_uv3;
 
-flat out uint v_id;
 out vec2 v_uv;
 out vec2 v_adj_uv1;
 out vec2 v_adj_uv2;
 out vec2 v_adj_uv3;
 
 void main() {
-    v_id = id;
     v_uv = uv;
     v_adj_uv1 = adj_uv1;
     v_adj_uv2 = adj_uv2;
@@ -557,118 +530,6 @@ void main() {
 
     gl_Position = vec4(v_uv * 2.0 - 1.0, 0.0, 1.0);
     gl_PointSize = 1.0;
-}`;
-const state_frag = `
-#version 300 es
-precision highp float;
-precision highp sampler2D;
-
-flat in uint v_id;
-in vec2 v_uv;
-in vec2 v_adj_uv1;
-in vec2 v_adj_uv2;
-in vec2 v_adj_uv3;
-
-uniform sampler2D u_state_weights;
-uniform sampler2D u_wcolor_dist;
-
-const float MAX_WEIGHT = ${max_weight.toFixed(1)};
-
-uniform highp float u_delta_time;
-uniform highp float u_state_rate;
-uniform highp float u_weight_decay;
-uniform highp float u_diffusion_rate;
-
-layout(location = 0) out highp vec4 o_state_weights;
-layout(location = 1) out highp vec4 o_wcolor_dist;
-
-void main() {
-    bool has_third = v_adj_uv3.x > -1.0;
-
-    float this_state  = texture(u_state_weights, v_uv).r;
-    float this_weight = texture(u_state_weights, v_uv).g;
-
-    float s1 = texture(u_state_weights, v_adj_uv1).r;
-    float s2 = texture(u_state_weights, v_adj_uv2).r;
-    float s3 = has_third ? texture(u_state_weights, v_adj_uv3).r : 0.0;
-
-    float nw1 = texture(u_state_weights, v_adj_uv1).g;
-    float nw2 = texture(u_state_weights, v_adj_uv2).g;
-    float nw3 = has_third ? texture(u_state_weights, v_adj_uv3).g : 0.0;
-
-    float a1 = max(s1 - this_state, 0.0);
-    float a2 = max(s2 - this_state, 0.0);
-    float a3 = has_third ? max(s3 - this_state, 0.0) : 0.0;
-    float total = a1 + a2 + a3;
-
-    float w1, w2, w3;
-    if (total > 0.0) {
-        w1 = a1 / total; w2 = a2 / total; w3 = a3 / total;
-    } else {
-        float n = has_third ? 3.0 : 2.0;
-        w1 = 1.0 / n; w2 = 1.0 / n; w3 = has_third ? 1.0 / n : 0.0;
-    }
-
-    float from_state = max(this_state, max(s1, s2));
-    if (has_third) from_state = max(from_state, s3);
-    float new_state = from_state - (from_state - this_state) * exp(-u_state_rate * u_delta_time);
-
-    vec4 self_wd = texture(u_wcolor_dist, v_uv);
-    vec4 wd1 = texture(u_wcolor_dist, v_adj_uv1);
-    vec4 wd2 = texture(u_wcolor_dist, v_adj_uv2);
-    vec4 wd3 = has_third ? texture(u_wcolor_dist, v_adj_uv3) : vec4(0.0);
-
-    float decayed_weight = this_weight * exp(-u_weight_decay * u_delta_time);
-
-    vec3 propagated_color;
-    float new_weight;
-    float new_distance;
-    if (total > 0.0) {
-        // contribution = state advantage * how much real colour the neighbor holds
-        float c1 = a1 * nw1;
-        float c2 = a2 * nw2;
-        float c3 = a3 * nw3;
-        float ct = c1 + c2 + c3;
-
-        if (ct > 1e-9) {
-            vec3 incoming_color = (c1 * wd1.rgb + c2 * wd2.rgb + c3 * wd3.rgb) / ct;
-            float incoming_weight = total * u_delta_time;
-            float blend_total = decayed_weight + incoming_weight;
-            propagated_color = (self_wd.rgb * decayed_weight + incoming_color * incoming_weight) / blend_total;
-            new_weight = min(blend_total, MAX_WEIGHT);
-        } else {
-            // ahead neighbors carry no real colour: don't pull anything in
-            propagated_color = self_wd.rgb;
-            new_weight = decayed_weight;
-        }
-
-        // ignore float-noise "advantage"
-        const float EPS = 1e-6;
-        float d = 1e9;
-        if (a1 > EPS) d = min(d, wd1.a);
-        if (a2 > EPS) d = min(d, wd2.a);
-        if (has_third && a3 > EPS) d = min(d, wd3.a);
-        new_distance = (d < 1e8) ? d + 1.0 : self_wd.a;
-    } else {
-        propagated_color = self_wd.rgb;
-        new_distance = self_wd.a;
-        new_weight = this_weight;
-    }
-
-    // unconditional diffusion pass — always runs, driven by neighbor weight
-    // (not state advantage), so it actively mixes at the frontier where
-    // advantage is near zero, but doesn't dilute low-weight/fresh neighbors
-    float diffuse_total = nw1 + nw2 + nw3;
-    vec3 diffuse_target = diffuse_total > 0.0
-        ? (nw1 * wd1.rgb + nw2 * wd2.rgb + nw3 * wd3.rgb) / diffuse_total
-        : propagated_color;
-
-    //float diffusion_amount = clamp(u_diffusion_rate * u_delta_time, 0.0, 1.0);
-    float diffusion_amount = 1.0 - exp(-u_diffusion_rate * u_delta_time);
-    vec3 new_wcolor = mix(propagated_color, diffuse_target, diffusion_amount);
-
-    o_wcolor_dist   = vec4(new_wcolor, new_distance);
-    o_state_weights = vec4(new_state, new_weight, 0.0, 0.0);
 }`;
 const mask_vert = `
 #version 300 es
@@ -695,6 +556,145 @@ out uint o_color;
 void main() {
     o_color = v_id;
 }`;
+const sym_force_and_damping = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+
+uniform sampler2D u_flux;
+uniform float u_delta_time, u_gain, u_drag, u_phi_decay, u_phi_diffusion;
+layout(location = 0) out vec4 o_flux;
+
+void main() {
+    bool h3 = v_adj_uv3.x > -1.0;
+    vec4 f  = texture(u_flux, v_uv);
+    float phi  = f.a;
+    float phi1 = texture(u_flux, v_adj_uv1).a;
+    float phi2 = texture(u_flux, v_adj_uv2).a;
+    float phi3 = h3 ? texture(u_flux, v_adj_uv3).a : 0.0;
+
+    vec3 nf = f.rgb + u_delta_time * u_gain *
+              vec3(phi - phi1, phi - phi2, h3 ? phi - phi3 : 0.0);
+    nf *= exp(-u_drag * u_delta_time);
+
+    // diffuse φ toward the neighbor average (stable: blend factor < 1)
+    float avg = (phi1 + phi2 + phi3) / (h3 ? 3.0 : 2.0);
+    float nphi = mix(phi, avg, 1.0 - exp(-u_phi_diffusion * u_delta_time));
+    nphi *= exp(-u_phi_decay * u_delta_time);
+
+    o_flux = vec4(nf, nphi);
+}`;
+const sym_pressure_jacobi = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+
+uniform sampler2D u_flux, u_pressure;
+layout(location = 0) out vec4 o_pressure;
+
+void main() {
+    bool h3 = v_adj_uv3.x > -1.0;
+    vec4 f = texture(u_flux, v_uv);
+    float div = f.r + f.g + (h3 ? f.b : 0.0);
+    float p1 = texture(u_pressure, v_adj_uv1).r;
+    float p2 = texture(u_pressure, v_adj_uv2).r;
+    float p3 = h3 ? texture(u_pressure, v_adj_uv3).r : 0.0;
+    o_pressure = vec4((p1 + p2 + p3 + div) / (h3 ? 3.0 : 2.0), 0.0, 0.0, 1.0);
+}`;
+const sym_gradient_subtract = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+
+uniform sampler2D u_flux, u_pressure;
+layout(location = 0) out vec4 o_flux;
+
+void main() {
+    bool h3 = v_adj_uv3.x > -1.0;
+    vec4 f = texture(u_flux, v_uv);
+    float p  = texture(u_pressure, v_uv).r;
+    float p1 = texture(u_pressure, v_adj_uv1).r;
+    float p2 = texture(u_pressure, v_adj_uv2).r;
+    float p3 = h3 ? texture(u_pressure, v_adj_uv3).r : 0.0;
+    o_flux = vec4(f.r - (p - p1), f.g - (p - p2), h3 ? f.b - (p - p3) : 0.0, f.a);
+}
+`;
+const sym_dye_advection = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+
+in vec2 v_uv;
+in vec2 v_adj_uv1;
+in vec2 v_adj_uv2;
+in vec2 v_adj_uv3;
+
+uniform sampler2D u_flux, u_dye, u_inject;
+uniform float u_delta_time, u_dye_diffusion, u_inject_rate, u_inject_duration,
+        u_inject_spread, u_inject_max;
+
+layout(location = 0) out vec4 o_dye;
+layout(location = 1) out vec4 o_inject;
+
+void main() {
+    bool h3 = v_adj_uv3.x > -1.0;
+    vec4 f = texture(u_flux, v_uv);
+    vec3 c  = texture(u_dye, v_uv).rgb;
+    vec3 c1 = texture(u_dye, v_adj_uv1).rgb;
+    vec3 c2 = texture(u_dye, v_adj_uv2).rgb;
+    vec3 c3 = h3 ? texture(u_dye, v_adj_uv3).rgb : c;
+
+    vec3 k = u_delta_time * vec3(max(-f.r, 0.0), max(-f.g, 0.0), h3 ? max(-f.b, 0.0) : 0.0);
+    float s = k.x + k.y + k.z;
+    if (s > 1.0) k /= s;          // CFL clamp: keeps this a convex combination
+
+    vec3 nc = c + k.x * (c1 - c) + k.y * (c2 - c) + k.z * (c3 - c);
+    vec3 avg = (c1 + c2 + (h3 ? c3 : vec3(0.0))) / (h3 ? 3.0 : 2.0);
+    float a = 1.0 - exp(-u_dye_diffusion * u_delta_time);
+    nc = mix(nc, avg, a);
+
+    vec4 inj = texture(u_inject, v_uv);
+    vec4 i1  = texture(u_inject, v_adj_uv1);
+    vec4 i2  = texture(u_inject, v_adj_uv2);
+    vec4 i3  = h3 ? texture(u_inject, v_adj_uv3) : vec4(0.0);
+
+    // 1. spread the source: alpha-weighted color, averaged alpha
+    float aw = inj.a + i1.a + i2.a + i3.a;
+    vec3 scol = aw > 1e-6
+        ? (inj.rgb * inj.a + i1.rgb * i1.a + i2.rgb * i2.a + i3.rgb * i3.a) / aw
+        : inj.rgb;
+    float aavg = (i1.a + i2.a + i3.a) / (h3 ? 3.0 : 2.0);
+    float sp   = 1.0 - exp(-u_inject_spread * u_delta_time);
+    float na   = mix(inj.a, aavg, sp);
+    vec3  ncol = mix(inj.rgb, scol, sp);
+
+    // 2. let the source color drift toward the local dye (frame-rate independent)
+    ncol = mix(ncol, nc, 1.0 - exp(-2.0 * u_delta_time));
+
+    // 3. eased, capped pull: weak at the edges of the source, never fully overrides
+    float pull = u_inject_max * smoothstep(0.0, 1.0, na)
+            * (1.0 - exp(-u_inject_rate * u_delta_time));
+    nc = mix(nc, ncol, pull);
+
+    o_inject = vec4(ncol, max(na - u_delta_time / u_inject_duration, 0.0));
+    o_dye = vec4(nc, 1.0);
+}
+`;
 const NO_DEFAULT = undefined;
 const U_UPDATE = 1, U_INIT = 2;
 const GL_INT = 4, GL_FLOAT = 5, GL_MAT4x4 = 6, GL_TEXTURE = 7;
@@ -869,15 +869,13 @@ class shader_program {
 class adj_node {
     constructor(id) {
         this.id = id;
-        this.state = 0;
         this.next = new Set();
-        this.next_ids = new Set();
     }
 }
-class ColorfulGrid {
-    constructor(side_length, gpu, color = new Uint8Array([255, 255, 255, 255]), brush_size = 0) {
+class EsagonalGrid {
+    constructor(side_length, color = new Uint8Array([255, 255, 255, 255]), brush_size = 0) {
         if (!Number.isInteger(side_length) || side_length < 1)
-            throw `ColorfulGrid: side_length must be an integer greater than 1`;
+            throw `EsagonalGrid: side_length must be an integer greater than 1`;
         this.side_length = side_length;
         const num_triangles = 6 * side_length ** 2;
         this.triangle_count = num_triangles;
@@ -956,13 +954,14 @@ class ColorfulGrid {
                     this.mesh[v + 4] = v3[0];
                     this.mesh[v + 5] = v3[1];
                     const t1 = ++triangle_id;
-                    if (s === 0 && p === 0)
-                        this.adj_map[t1] =
-                            [t1 + 1, t1 + triangle_count - 1, t1 + next_layer_adj];
-                    else
-                        this.adj_map[t1] = [t1 - 1, t1 + 1, t1 + next_layer_adj];
-                    if (last_layer)
-                        this.adj_map[t1].splice(2, 1);
+                    const first_pair = s === 0 && p === 0;
+                    this.adj_map[t1] = last_layer ?
+                        (first_pair ?
+                            [t1 + 1, t1 + triangle_count - 1] :
+                            [t1 - 1, t1 + 1]) :
+                        (first_pair ?
+                            [t1 + 1, t1 + triangle_count - 1, t1 + next_layer_adj] :
+                            [t1 - 1, t1 + 1, t1 + next_layer_adj]);
                     this.mesh[v + 6] = v1[0];
                     this.mesh[v + 7] = v1[1];
                     this.mesh[v + 8] = v5[0];
@@ -984,18 +983,21 @@ class ColorfulGrid {
                 this.mesh[v + 4] = v3[0];
                 this.mesh[v + 5] = v3[1];
                 const t = ++triangle_id;
-                if (s === 0) {
-                    if (d === 0)
-                        this.adj_map[t] = [t + 1, t + triangle_count - 1];
-                    else
-                        this.adj_map[t] = [t - 1, t + 1];
-                }
-                else if (s !== 5)
-                    this.adj_map[t] = [t - 1, t + 1];
-                else
-                    this.adj_map[t] = [t - triangle_count + 1, t - 1];
-                if (!last_layer)
-                    this.adj_map[t][2] = t + next_layer_adj;
+                this.adj_map[t] = last_layer ?
+                    (s === 0 ?
+                        (d === 0 ?
+                            [t + 1, t + triangle_count - 1] :
+                            [t - 1, t + 1]) :
+                        (s !== 5 ?
+                            [t - 1, t + 1] :
+                            [t - triangle_count + 1, t - 1])) :
+                    (s === 0 ?
+                        (d === 0 ?
+                            [t + 1, t + triangle_count - 1, t + next_layer_adj] :
+                            [t - 1, t + 1, t + next_layer_adj]) :
+                        (s !== 5 ?
+                            [t - 1, t + 1, t + next_layer_adj] :
+                            [t - triangle_count + 1, t - 1, t + next_layer_adj]));
                 v = v + 6;
             }
             /** when last (upper left) side is done, the last access point is
@@ -1008,17 +1010,13 @@ class ColorfulGrid {
         const nt6 = num_triangles * 6, nt3 = num_triangles * 3, nt2 = num_triangles * 2;
         this.ids = new Uint32Array(nt3);
         this.uvs = new Float32Array(nt6);
-        this.cell_ids = new Uint32Array(num_triangles);
         this.cell_uvs = new Float32Array(nt2);
         this.hovered = new Uint8Array(nt3);
-        this.hovered.fill(0);
+        //this.hovered.fill(0);
         for (let i = 0; i < num_triangles; ++i) {
             const id = i + 1, base_i = i * 3, base_u = i * 6, base_uc = i * 2, col = id % texture_size, row = Math.floor(id / texture_size), u = (col + 0.5) / texture_size, v = (row + 0.5) / texture_size;
-            if (gpu) {
-                this.cell_ids[i] = id;
-                this.cell_uvs[base_uc] = u;
-                this.cell_uvs[base_uc + 1] = v;
-            }
+            this.cell_uvs[base_uc] = u;
+            this.cell_uvs[base_uc + 1] = v;
             this.ids[base_i] = id;
             this.ids[base_i + 1] = id;
             this.ids[base_i + 2] = id;
@@ -1029,73 +1027,38 @@ class ColorfulGrid {
             this.uvs[base_u + 4] = u;
             this.uvs[base_u + 5] = v;
         }
-        if (gpu) {
-            this.adj_uvs_1 = new Float32Array(nt6);
-            this.cell_adj_uvs_1 = new Float32Array(nt2);
-            this.adj_uvs_2 = new Float32Array(nt6);
-            this.cell_adj_uvs_2 = new Float32Array(nt2);
-            this.adj_uvs_3 = new Float32Array(nt6);
-            this.cell_adj_uvs_3 = new Float32Array(nt2);
-        }
-        for (let i = 0; gpu && i < num_triangles; ++i) {
+        this.cell_adj_uvs_1 = new Float32Array(nt2);
+        this.cell_adj_uvs_2 = new Float32Array(nt2);
+        this.cell_adj_uvs_3 = new Float32Array(nt2);
+        for (let i = 0; i < num_triangles; ++i) {
             const id = i + 1, base_i = i * 6, base_ic = i * 2, base_1 = (this.adj_map[id][0] - 1) * 6, base_2 = (this.adj_map[id][1] - 1) * 6, base_3 = this.adj_map[id][2] === undefined ?
                 -1 :
                 (this.adj_map[id][2] - 1) * 6;
             const u1 = this.uvs[base_1], v1 = this.uvs[base_1 + 1];
             this.cell_adj_uvs_1[base_ic] = u1;
             this.cell_adj_uvs_1[base_ic + 1] = v1;
-            this.adj_uvs_1[base_i] = u1;
-            this.adj_uvs_1[base_i + 1] = v1;
-            this.adj_uvs_1[base_i + 2] = u1;
-            this.adj_uvs_1[base_i + 3] = v1;
-            this.adj_uvs_1[base_i + 4] = u1;
-            this.adj_uvs_1[base_i + 5] = v1;
             const u2 = this.uvs[base_2], v2 = this.uvs[base_2 + 1];
             this.cell_adj_uvs_2[base_ic] = u2;
             this.cell_adj_uvs_2[base_ic + 1] = v2;
-            this.adj_uvs_2[base_i] = u2;
-            this.adj_uvs_2[base_i + 1] = v2;
-            this.adj_uvs_2[base_i + 2] = u2;
-            this.adj_uvs_2[base_i + 3] = v2;
-            this.adj_uvs_2[base_i + 4] = u2;
-            this.adj_uvs_2[base_i + 5] = v2;
-            if (base_3 === -1) {
-                this.cell_adj_uvs_3[base_ic] = -1;
-                this.cell_adj_uvs_3[base_ic + 1] = -1;
-                this.adj_uvs_3[base_i] = -1;
-                this.adj_uvs_3[base_i + 1] = -1;
-                this.adj_uvs_3[base_i + 2] = -1;
-                this.adj_uvs_3[base_i + 3] = -1;
-                this.adj_uvs_3[base_i + 4] = -1;
-                this.adj_uvs_3[base_i + 5] = -1;
-            }
-            else {
-                const u3 = this.uvs[base_3], v3 = this.uvs[base_3 + 1];
-                this.cell_adj_uvs_3[base_ic] = u3;
-                this.cell_adj_uvs_3[base_ic + 1] = v3;
-                this.adj_uvs_3[base_i] = u3;
-                this.adj_uvs_3[base_i + 1] = v3;
-                this.adj_uvs_3[base_i + 2] = u3;
-                this.adj_uvs_3[base_i + 3] = v3;
-                this.adj_uvs_3[base_i + 4] = u3;
-                this.adj_uvs_3[base_i + 5] = v3;
-            }
+            const u3 = base_3 === -1 ? -1.0 : this.uvs[base_3], v3 = base_3 === -1 ? -1.0 : this.uvs[base_3 + 1];
+            this.cell_adj_uvs_3[base_ic] = u3;
+            this.cell_adj_uvs_3[base_ic + 1] = v3;
         }
-        const tex_length = texture_size * texture_size * 4;
-        this.texture = new Uint8Array(tex_length);
-        const t_u32view = new Uint32Array(this.texture.buffer);
-        t_u32view.fill(pack_uint8(color));
-        this.texture_u32view = t_u32view;
-        this.hover_texture = new Uint8Array(tex_length);
+        const r_size = texture_size ** 2, rgba_size = r_size * 4;
+        this.dye = new Float32Array(rgba_size);
+        fill_RGBAF32(this.dye, new Float32Array([
+            color[0] / 255, color[1] / 255, color[2] / 255, 1.0
+        ]));
+        this.hover_texture = new Uint8Array(rgba_size);
         const ht_u32view = new Uint32Array(this.hover_texture.buffer);
         ht_u32view.fill(0);
         this.hover_texture_u32view = ht_u32view;
-        if (gpu) {
-            this.state_weights = new Float32Array(tex_length);
-            this.state_weights.fill(0.0);
-            this.wcolor_dist = new Float32Array(tex_length);
-            this.wcolor_dist.fill(0.0);
-        }
+        this.flux = new Float32Array(rgba_size);
+        this.flux.fill(0.0);
+        this.pressure = new Float32Array(r_size);
+        this.pressure.fill(0.0);
+        this.inject = new Float32Array(rgba_size);
+        this.inject.fill(0.0);
         this.adj_graph = Array(num_triangles + 1);
         for (let id = 1; id < this.adj_map.length; ++id) {
             const node = new adj_node(id);
@@ -1107,19 +1070,15 @@ class ColorfulGrid {
                     break;
                 const next_node = this.adj_graph[nid];
                 node.next.add(next_node);
-                node.next_ids.add(nid);
                 next_node.next.add(node);
-                next_node.next_ids.add(id);
             }
             if (brush_size === 0) {
                 node.brush = new Set([id]);
-                node.brushn = new Set([node]);
                 continue;
             }
-            const brush = new Set(adj_ids), brushn = new Set(node.next);
+            const brush = new Set(adj_ids);
             let frontier = new Set(brush);
             brush.add(id);
-            brushn.add(node);
             for (let i = 1; i < brush_size; ++i) {
                 const new_frontier = new Set();
                 for (const frontier_id of frontier) {
@@ -1133,14 +1092,168 @@ class ColorfulGrid {
                             continue;
                         new_frontier.add(next_id);
                         brush.add(next_id);
-                        brushn.add(this.adj_graph[next_id]);
                     }
                 }
                 frontier = new_frontier;
             }
             node.brush = brush;
-            node.brushn = brushn;
         }
+    }
+}
+class SquareGrid {
+    constructor(side_length, color = new Uint8Array([255, 255, 255, 255]), brush_size = 0) {
+        if (!Number.isInteger(side_length) || side_length < 1)
+            throw `RectGrid: side_length must be an integer greater than 1`;
+        const num_triangles = 2 * side_length ** 2;
+        this.triangle_count = num_triangles;
+        this.vertex_count = num_triangles * 3;
+        this.adj_map = Array(num_triangles + 1);
+        this.adj_graph = Array(num_triangles + 1);
+        this.mesh = new Float32Array(num_triangles * 6);
+        const L = side_length + 1;
+        const points = Array(L);
+        let uvs_x = new Map(), uvs_y = new Map();
+        const write_uv = (id, tgt, off, count = 1) => {
+            let u, v;
+            if (id === undefined)
+                u = v = -1.0;
+            else if (uvs_x.has(id)) {
+                u = uvs_x.get(id);
+                v = uvs_y.get(id);
+            }
+            else {
+                u = ((id % ts) + 0.5) / ts;
+                v = (Math.floor(id / ts) + 0.5) / ts;
+                uvs_x.set(id, u);
+                uvs_y.set(id, v);
+            }
+            for (let i = 0; i < count; ++i, off += 2) {
+                tgt[off] = u;
+                tgt[off + 1] = v;
+            }
+        };
+        const ts = Math.ceil(Math.sqrt(this.vertex_count));
+        {
+            const delta = 1 / side_length;
+            for (let x = 0; x < L; ++x) {
+                const n = x * delta;
+                points[x] = -0.5 + n;
+            }
+        }
+        const nt6 = num_triangles * 6, nt3 = num_triangles * 3, nt2 = num_triangles * 2;
+        this.ids = new Uint32Array(nt3);
+        this.uvs = new Float32Array(nt6);
+        this.cell_uvs = new Float32Array(nt2);
+        this.hovered = new Uint8Array(nt3);
+        this.cell_adj_uvs_1 = new Float32Array(nt2);
+        this.cell_adj_uvs_2 = new Float32Array(nt2);
+        this.cell_adj_uvs_3 = new Float32Array(nt2);
+        let v = 0;
+        const adj_delta = 2 * side_length - 1;
+        this.adj_graph = Array.from({ length: this.triangle_count }, (_, i) => i === 0 ? undefined : new adj_node(i));
+        for (let x = 0; x < side_length; ++x) {
+            for (let y = 1; y < side_length + 1; ++y) {
+                const id1 = v / 6 + 1, id2 = id1 + 1, offset3 = (id1 - 1) * 3, offset2 = (id1 - 1) * 2;
+                const x1 = points[x], x2 = points[x + 1], y1 = points[y], y2 = points[y - 1];
+                this.mesh[v] = x1;
+                this.mesh[v + 1] = y1;
+                this.mesh[v + 2] = x2;
+                this.mesh[v + 3] = y2;
+                this.mesh[v + 4] = x1;
+                this.mesh[v + 5] = y2;
+                this.mesh[v + 6] = x1;
+                this.mesh[v + 7] = y1;
+                this.mesh[v + 8] = x2;
+                this.mesh[v + 9] = y1;
+                this.mesh[v + 10] = x2;
+                this.mesh[v + 11] = y2;
+                write_uv(id1, this.uvs, v, 3);
+                write_uv(id2, this.uvs, v + 6, 3);
+                write_uv(id1, this.cell_uvs, offset2);
+                write_uv(id2, this.cell_uvs, offset2 + 2);
+                this.ids[offset3] = this.ids[offset3 + 1] = this.ids[offset3 + 2] = id1;
+                this.ids[offset3 + 3] = this.ids[offset3 + 4] = this.ids[offset3 + 5] = id2;
+                const has_left = x > 0, has_right = x < side_length - 1, has_below = y > 1, has_above = y < side_length;
+                const m1 = [];
+                if (has_left)
+                    m1.push(id1 - adj_delta);
+                if (has_below)
+                    m1.push(id1 - 1);
+                m1.push(id2);
+                const m2 = [id1];
+                if (has_above)
+                    m2.push(id2 + 1);
+                if (has_right)
+                    m2.push(id2 + adj_delta);
+                this.adj_map[id1] = m1;
+                this.adj_map[id2] = m2;
+                write_uv(m1[0], this.cell_adj_uvs_1, offset2);
+                write_uv(m1[1], this.cell_adj_uvs_2, offset2);
+                write_uv(m1[2], this.cell_adj_uvs_3, offset2);
+                write_uv(m2[0], this.cell_adj_uvs_1, offset2 + 2);
+                write_uv(m2[1], this.cell_adj_uvs_2, offset2 + 2);
+                write_uv(m2[2], this.cell_adj_uvs_3, offset2 + 2);
+                this.adj_graph[id1] = new adj_node(id1);
+                this.adj_graph[id2] = new adj_node(id2);
+                for (const id of this.adj_map[id1]) {
+                    this.adj_graph[id1].next.add(this.adj_graph[id]);
+                    this.adj_graph[id].next.add(this.adj_graph[id1]);
+                }
+                for (const id of this.adj_map[id2]) {
+                    this.adj_graph[id2].next.add(this.adj_graph[id]);
+                    this.adj_graph[id].next.add(this.adj_graph[id2]);
+                }
+                v = v + 12;
+            }
+        }
+        this.texture_size = ts;
+        const r_size = ts ** 2, rgba_size = r_size * 4;
+        this.hover_texture = new Uint8Array(rgba_size);
+        const ht_u32view = new Uint32Array(this.hover_texture.buffer);
+        ht_u32view.fill(0);
+        this.hover_texture_u32view = ht_u32view;
+        this.flux = new Float32Array(rgba_size);
+        this.flux.fill(0.0);
+        this.pressure = new Float32Array(r_size);
+        this.pressure.fill(0.0);
+        this.inject = new Float32Array(rgba_size);
+        this.inject.fill(0.0);
+        this.dye = new Float32Array(rgba_size);
+        fill_RGBAF32(this.dye, new Float32Array([
+            color[0] / 255, color[1] / 255, color[2] / 255, 1.0
+        ]));
+    }
+    get_brush(id) {
+        const node = this.adj_graph[id];
+        if (node.brush !== undefined)
+            return new Set(node.brush);
+        if (brush_size === 0) {
+            node.brush = new Set([id]);
+        }
+        else {
+            const brush = new Set(this.adj_map[id]);
+            let frontier = new Set(brush);
+            brush.add(id);
+            for (let i = 1; i < brush_size; ++i) {
+                const new_frontier = new Set();
+                for (const frontier_id of frontier) {
+                    const next = this.adj_map[frontier_id];
+                    if (next === undefined) {
+                        console.warn(frontier_id);
+                        continue;
+                    }
+                    for (const next_id of next) {
+                        if (brush.has(next_id))
+                            continue;
+                        new_frontier.add(next_id);
+                        brush.add(next_id);
+                    }
+                }
+                frontier = new_frontier;
+            }
+            node.brush = brush;
+        }
+        return new Set(node.brush);
     }
 }
 /** event called on window.onresize */
@@ -1164,240 +1277,74 @@ function update_viewport() {
         mouse.last_hovered_id = -1;
     }
 }
-/** this value is used to  */
-// let wave_id = 0,
-//     /** */
-//     choosen_palette = [] as color_data[],
-//     /** index of the color used from the current choosen palette of colors. */
-//     palette_color = 0,
-//     /** value used to filter out all the queued waves when filling or clearing
-//      * the entire grid. */
-//     queued_wave_count = 0,
-//     /** each wave_id lower or equal to this value will be discarded. */
-//     prevent_waves_last_id = 0;
-let wave_start, fill_grid, inward_wave;
-if (gpu !== 1) {
-    function cpu_wave_start(ids, color_data, _wave_id) {
-        --stroke.queued_wave_count;
-        stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
-        const _state = _wave_id === undefined
-            ? ++stroke.wave_id
-            : _wave_id;
-        if (_state <= stroke.prevent_waves_last_id)
-            return;
-        let color, fcolor, packed;
-        if (color_data === undefined) {
-            const data = stroke.choosen_palette[stroke.palette_color];
-            color = data.color;
-            if (stroke.choosen_palette.length > 1)
-                stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
-            fcolor = data.fcolor;
-            packed = data.packed;
-        }
-        else {
-            color = color_data.color;
-            fcolor = color_data.fcolor;
-            packed = color_data.packed;
-        }
-        let next;
-        if (typeof ids === "number") {
-            grid.adj_graph[ids].state = _state;
-            if (stroke.flat_queue.has(ids)) {
-                const offset = ids * 4;
-                grid.texture[offset] = Math.floor((color[0] + 255) * 0.5);
-                grid.texture[offset + 1] = Math.floor((color[1] + 255) * 0.5);
-                grid.texture[offset + 2] = Math.floor((color[2] + 255) * 0.5);
-                grid.texture[offset + 3] = 255;
-            }
-            else
-                grid.texture_u32view[ids] = packed;
-            next = new Set(grid.adj_graph[ids].next);
-        }
-        else {
-            next = new Set();
-            for (const id of ids) {
-                const node = grid.adj_graph[id];
-                node.state = _state;
-                grid.texture_u32view[id] = packed;
-                for (const nnext of node.next) {
-                    if (next.has(nnext))
-                        continue;
-                    next.add(nnext);
-                }
-            }
-        }
-        renderer.texture_is_dirty = true;
-        cpu_wave_propagate(next, _state, { color, fcolor, packed }, 0);
+function wave_start(ids, color_data) {
+    const brush = typeof ids === "number" ?
+        new Set(grid.adj_graph[ids].brush) :
+        new Set(ids);
+    const inj_v = color_data !== undefined
+        ? color_data.fcolor
+        : stroke.choosen_palette[stroke.palette_color].fcolor;
+    if (color_data === undefined && stroke.choosen_palette.length > 1) {
+        stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
     }
-    function cpu_wave_propagate(ids, state, color_data, depth) {
-        --stroke.queued_wave_count;
-        stroke.queued_wave_count = Math.max(stroke.queued_wave_count, 0);
-        if (state <= stroke.prevent_waves_last_id)
-            return;
-        const collected = new Set(), new_wave = new Set();
-        let factor = blend_value;
-        if (wave_decay < 1)
-            factor *= wave_decay ** Math.max(depth - decay_min_radius - 1, 0);
-        const { color, packed } = color_data;
-        for (const node of ids) {
-            if (node.state === state) {
-                ids.delete(node);
-                continue;
-            }
-            if (Math.random() <= new_wave_p)
-                new_wave.add(node);
-            const node_id = node.id, offset = node_id * 4, is_hovered = stroke.flat_queue.has(node_id);
-            node.state = state;
-            let avg_r = 0, avg_g = 0, avg_b = 0;
-            for (const adj_node of node.next) {
-                const adj_id = adj_node.id, adj_offset = adj_id * 4;
-                if (stroke.flat_queue.has(adj_id)) {
-                    /** remove applied white highlight color from adjacent nodes
-                     * before adding the true color to the total sum */
-                    avg_r +=
-                        Math.max(Math.floor(2 * grid.texture[adj_offset] - 255), 0);
-                    avg_g +=
-                        Math.max(Math.floor(2 * grid.texture[adj_offset + 1] - 255), 0);
-                    avg_b +=
-                        Math.max(Math.floor(2 * grid.texture[adj_offset + 2] - 255), 0);
-                }
-                else {
-                    avg_r += grid.texture[adj_offset];
-                    avg_g += grid.texture[adj_offset + 1];
-                    avg_b += grid.texture[adj_offset + 2];
-                }
-                if (ids.has(adj_node) || adj_node.state >= state)
-                    continue;
-                collected.add(adj_node);
-            }
-            const inv_adj_count = 1 / node.next.size;
-            avg_r *= inv_adj_count;
-            avg_g *= inv_adj_count;
-            avg_b *= inv_adj_count;
-            if (factor >= 1) {
-                if (is_hovered) {
-                    grid.texture[offset] =
-                        Math.max(Math.floor((avg_r + 255) * 0.5), 0);
-                    grid.texture[offset + 1] =
-                        Math.max(Math.floor((avg_g + 255) * 0.5), 0);
-                    grid.texture[offset + 2] =
-                        Math.max(Math.floor((avg_b + 255) * 0.5), 0);
-                    grid.texture[offset + 3] = 255;
-                }
-                else
-                    grid.texture_u32view[node_id] = packed;
-            }
-            else if (factor > 0) {
-                const p_in = 1 - factor, p = factor;
-                if (is_hovered) {
-                    grid.texture[offset] =
-                        Math.max(Math.floor((Math.floor(avg_r * p_in + color[0] * p) + 255) * 0.5), 0);
-                    grid.texture[offset + 1] =
-                        Math.max(Math.floor((Math.floor(avg_g * p_in + color[1] * p) + 255) * 0.5), 0);
-                    grid.texture[offset + 2] =
-                        Math.max(Math.floor((Math.floor(avg_b * p_in + color[2] * p) + 255) * 0.5), 0);
-                    grid.texture[offset + 3] = 255;
-                }
-                else {
-                    grid.texture[offset] = Math.floor(avg_r * p_in + color[0] * p);
-                    grid.texture[offset + 1] = Math.floor(avg_g * p_in + color[1] * p);
-                    grid.texture[offset + 2] = Math.floor(avg_b * p_in + color[2] * p);
-                    grid.texture[offset + 3] = 255;
-                }
-            }
-            else {
-                if (is_hovered) {
-                    grid.texture[offset] =
-                        Math.max(Math.floor((avg_r + 255) * 0.5), 0);
-                    grid.texture[offset + 1] =
-                        Math.max(Math.floor((avg_g + 255) * 0.5), 0);
-                    grid.texture[offset + 2] =
-                        Math.max(Math.floor((avg_b + 255) * 0.5), 0);
-                    grid.texture[offset + 3] = 255;
-                }
-                else {
-                    grid.texture[offset] = Math.floor(avg_r);
-                    grid.texture[offset + 1] = Math.floor(avg_g);
-                    grid.texture[offset + 2] = Math.floor(avg_b);
-                    grid.texture[offset + 3] = 255;
-                }
-            }
-        }
-        renderer.texture_is_dirty = true;
-        for (const new_start of new_wave) {
-            const new_id = new_start.id, new_offset = new_id * 4, is_hovered = stroke.flat_queue.has(new_id);
-            let new_color; //, new_color_packed: number;
-            let new_color_data;
-            if (Math.random() <= new_color_p) {
-                if (Math.random() <= new_color_compl_p)
-                    new_color = new Uint8Array([
-                        255 - color[0],
-                        255 - color[1],
-                        255 - color[2],
-                        255
-                    ]);
-                else
-                    new_color = undefined;
-            }
-            else {
-                if (is_hovered) {
-                    new_color = new Uint8Array([
-                        Math.max(2 * grid.texture[new_offset] - 255, 0),
-                        Math.max(2 * grid.texture[new_offset + 1] - 255, 0),
-                        Math.max(2 * grid.texture[new_offset + 2] - 255, 0),
-                        255
-                    ]);
-                }
-                else {
-                    new_color = new Uint8Array([
-                        grid.texture[new_offset],
-                        grid.texture[new_offset + 1],
-                        grid.texture[new_offset + 2],
-                        255
-                    ]);
-                }
-            }
-            if (new_color !== undefined)
-                new_color_data = get_color_data(new_color);
-            ++stroke.queued_wave_count;
-            setTimeout(cpu_wave_start, new_wave_delay, new_id, new_color_data, ++stroke.wave_id);
-        }
-        if (collected.size === 0)
-            return;
-        ++stroke.queued_wave_count;
-        setTimeout(cpu_wave_propagate, wave_delay, collected, state, color_data, depth + 1);
+    const flux_v = new Float32Array([0.0, 0.0, 0.0, fluid.strength]);
+    let _col = Array(brush.size), _row = Array(brush.size), i = -1;
+    gl.bindTexture(gl.TEXTURE_2D, inject_tex[0]);
+    for (const id of brush) {
+        const col = id % grid.texture_size, row = Math.floor(id / grid.texture_size);
+        _col[++i] = col;
+        _row[i] = row;
+        if (fluid.just_drag)
+            continue;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, inj_v);
     }
-    function cpu_inward_wave() {
-        const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
-        const s = new Set();
-        for (let i = from; i < to; ++i) {
-            if (i % mod === m) {
-                s.add(i);
-                cpu_wave_start(s);
-                s.clear();
-            }
+    if (!fluid.just_drag) {
+        i = -1;
+        gl.bindTexture(gl.TEXTURE_2D, inject_tex[1]);
+        for (const id of brush) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, _col[++i], _row[i], 1, 1, gl.RGBA, gl.FLOAT, inj_v);
         }
-        cpu_wave_start(s);
     }
-    function cpu_fill_grid(color) {
-        const clear_color = color === undefined ?
-            pack_uint8(grid_bg) :
-            color.packed;
-        grid.texture_u32view.fill(clear_color);
-        grid.texture_u32view[0] = 0;
-        if (stroke.queued_wave_count > 0) {
-            stroke.prevent_waves_last_id = stroke.wave_id + stroke.queued_wave_count;
-            stroke.wave_id = stroke.prevent_waves_last_id + 1;
-        }
-        renderer.texture_is_dirty = true;
+    i = -1;
+    gl.bindTexture(gl.TEXTURE_2D, flux_tex[0]);
+    for (const id of brush) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, _col[++i], _row[i], 1, 1, gl.RGBA, gl.FLOAT, flux_v);
     }
-    wave_start = cpu_wave_start;
-    inward_wave = cpu_inward_wave;
-    fill_grid = cpu_fill_grid;
 }
-// let wave_queue = new Set() as Set<number>,
-//     queued_strokes = [] as {stroke:Set<number>, color_data:color_data}[],
-//     stroke_count = -1;
+function inward_wave() {
+    const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
+    const s = new Set();
+    for (let i = from; i < to; ++i) {
+        if (i % mod === m) {
+            s.add(i);
+            wave_start(s);
+            s.clear();
+        }
+    }
+    wave_start(s);
+}
+function fill_grid(color) {
+    const clear_color = color === undefined ?
+        get_color_data(grid_bg) :
+        color;
+    const n = grid.texture_size, flat_n = n * n;
+    fill_RGBAF32(grid.dye, clear_color.fcolor);
+    //grid.pressure.fill(0.0);
+    grid.inject.fill(0.0);
+    grid.flux.fill(0.0);
+    gl.bindTexture(gl.TEXTURE_2D, inject_tex[0]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.FLOAT, grid.inject);
+    gl.bindTexture(gl.TEXTURE_2D, inject_tex[1]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.FLOAT, grid.inject);
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[0]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.FLOAT, grid.dye);
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[1]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.FLOAT, grid.dye);
+    gl.bindTexture(gl.TEXTURE_2D, flux_tex[0]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.FLOAT, grid.flux);
+    gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RED, gl.FLOAT, grid.pressure);
+}
 const stroke = {
     /** this set is used to both apply and remove the highlight color effect. */
     flat_queue: new Set(),
@@ -1408,220 +1355,74 @@ const stroke = {
      * each time a new queued stroke is done (this also applied to the first
      * one). */
     count: -1,
-    /** this value is used to  */
-    wave_id: 0,
     choosen_palette: [],
     /** index of the color used from the current choosen palette of colors. */
     palette_color: 0,
-    /** gpu = 0: value used to filter out all the queued waves when filling or
-     * clearing the entire grid. */
-    queued_wave_count: 0,
-    /** gpu = 0: each wave_id lower or equal to this value will be discarded. */
-    prevent_waves_last_id: 0
 };
-let process_stroke, remove_highlights, process_queued_strokes;
-if (gpu !== 1) {
-    function cpu_process_stroke(hovered) {
-        if (hovered !== 0 && hovered !== mouse.last_hovered_id) {
-            if (keyboard.shift_down) {
-                const brush = grid.adj_graph[hovered].brush;
-                const newly_hovered = brush.difference(stroke.flat_queue);
-                if (newly_hovered.size === 0)
-                    return;
-                for (const id of newly_hovered) {
-                    stroke.queue[stroke.count].stroke.add(id);
-                    stroke.flat_queue.add(id);
-                    const offset = id * 4;
-                    grid.texture[offset] =
-                        Math.min(Math.floor(grid.texture[offset] + 255) * 0.5, 255);
-                    grid.texture[offset + 1] =
-                        Math.min(Math.floor(grid.texture[offset + 1] + 255) * 0.5, 255);
-                    grid.texture[offset + 2] =
-                        Math.min(Math.floor(grid.texture[offset + 2] + 255) * 0.5, 255);
-                }
-                renderer.texture_is_dirty = true;
-            }
-            else if (keyboard.ctrl_down) {
-                fill_grid(stroke.choosen_palette[stroke.palette_color]);
-            }
-            else {
-                const brush = new Set(grid.adj_graph[hovered].brush);
-                wave_start(brush);
-            }
-            mouse.last_hovered_id = hovered;
-        }
-    }
-    function cpu_remove_highlights() {
-        for (const id of stroke.flat_queue) {
-            const offset = id * 4;
-            grid.texture[offset] = Math.max(2 * grid.texture[offset] - 255, 0);
-            grid.texture[offset + 1] = Math.max(2 * grid.texture[offset + 1] - 255, 0);
-            grid.texture[offset + 2] = Math.max(2 * grid.texture[offset + 2] - 255, 0);
-            grid.texture[offset + 3] = Math.max(2 * grid.texture[offset + 3] - 255, 0);
-        }
-        renderer.texture_is_dirty = true;
-        stroke.flat_queue.clear();
-    }
-    function cpu_process_queued_strokes() {
-        if (stroke.flat_queue.size === 0)
+function process_stroke(hovered) {
+    if (hovered === 0 || hovered === mouse.last_hovered_id)
+        return;
+    if (keyboard.shift_down) {
+        const brush = grid.get_brush(hovered);
+        // @ts-ignore
+        const newly_hovered = brush.difference(stroke.flat_queue);
+        if (newly_hovered.size === 0)
             return;
-        cpu_remove_highlights();
-        const mod = 3, s = new Set();
-        for (let i = 0; i < stroke.queue.length; ++i) {
-            const q = stroke.queue[i];
-            const first = q.stroke.entries().next();
-            if (first.done === true)
-                continue;
-            const m = first.value[0] % mod;
-            for (const id of q.stroke) {
-                s.add(id);
-                if (id % mod === m) {
-                    wave_start(s, q.color_data);
-                    s.clear();
-                }
-            }
-            if (s.size > 0) {
-                wave_start(s, q.color_data);
-                s.clear();
-            }
-        }
-        stroke.queue = [];
-        stroke.count = -1;
-    }
-    process_stroke = cpu_process_stroke;
-    remove_highlights = cpu_remove_highlights;
-    process_queued_strokes = cpu_process_queued_strokes;
-}
-if (gpu === 1) {
-    function gpu_wave_start(ids, color_data, _wave_id) {
-        const _state = _wave_id === undefined
-            ? ++stroke.wave_id
-            : _wave_id;
-        const brush = typeof ids === "number" ?
-            new Set(grid.adj_graph[ids].brush) :
-            new Set(ids);
-        const fcolor = color_data !== undefined
-            ? color_data.fcolor
-            : stroke.choosen_palette[stroke.palette_color].fcolor;
-        if (color_data === undefined && stroke.choosen_palette.length > 1) {
-            stroke.palette_color = (stroke.palette_color + 1) % stroke.choosen_palette.length;
-        }
-        const [r, g, b] = fcolor;
-        const wcolor_dist = new Float32Array([r, g, b, 0.0]);
-        const state_weights = new Float32Array([++stroke.wave_id, max_weight, 0.0, 0.0]);
-        const target_tex0 = state_read_index === 0 ? state_weights_0 : state_weights_1;
-        const target_tex1 = state_read_index === 0 ? wcolor_dist_0 : wcolor_dist_1;
-        for (const id of brush) {
-            const col = id % grid.texture_size, row = Math.floor(id / grid.texture_size);
-            gl.bindTexture(gl.TEXTURE_2D, target_tex0);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, state_weights);
-            gl.bindTexture(gl.TEXTURE_2D, target_tex1);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, 1, 1, gl.RGBA, gl.FLOAT, wcolor_dist);
-        }
-    }
-    function gpu_inward_wave() {
-        const from = 6 * (side_length - 2) ** 2 + 1, to = 6 * side_length ** 2, mod = 5, m = from % mod;
-        const s = new Set();
-        for (let i = from; i < to; ++i) {
-            if (i % mod === m) {
-                s.add(i);
-                gpu_wave_start(s);
-                s.clear();
-            }
-        }
-        gpu_wave_start(s);
-    }
-    function gpu_fill_grid(color) {
-        const clear_color = color === undefined ?
-            get_color_data(grid_bg) :
-            color;
-        grid.texture_u32view.fill(clear_color.packed);
-        grid.state_weights.fill(0.0);
-        // start from 1, because there is no vertex id equal to zero
-        for (let i = 1; i < grid.adj_graph.length; ++i) {
-            const offset = i * 4;
-            grid.wcolor_dist[offset] = 0;
-            grid.wcolor_dist[offset + 1] = 0;
-            grid.wcolor_dist[offset + 2] = 0;
-            grid.wcolor_dist[offset + 3] = 0;
-        }
-        stroke.wave_id = 0;
-        renderer.texture_is_dirty = true;
-        renderer.state_is_dirty = true;
-    }
-    wave_start = gpu_wave_start;
-    inward_wave = gpu_inward_wave;
-    fill_grid = gpu_fill_grid;
-}
-if (gpu === 1) {
-    function gpu_process_stroke(hovered) {
-        if (hovered === 0 || hovered === mouse.last_hovered_id)
-            return;
-        if (keyboard.shift_down) {
-            const brush = grid.adj_graph[hovered].brush;
-            const newly_hovered = brush.difference(stroke.flat_queue);
-            if (newly_hovered.size === 0)
-                return;
-            const current_color_packed = stroke.queue[stroke.count].color_data.packed;
-            const v = new Uint8Array([1, 1, 1]);
-            gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
-            for (const id of newly_hovered) {
-                stroke.queue[stroke.count].stroke.add(id);
-                stroke.flat_queue.add(id);
-                const byte_offset = id * 3 - 1;
-                gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
-                grid.hover_texture_u32view[id] = current_color_packed;
-            }
-            renderer.hover_texture_is_dirty = true;
-        }
-        else if (keyboard.ctrl_down) {
-            fill_grid(stroke.choosen_palette[stroke.palette_color]);
-        }
-        else {
-            const brush = new Set(grid.adj_graph[hovered].brush);
-            wave_start(brush);
-        }
-        mouse.last_hovered_id = hovered;
-    }
-    function gpu_remove_highlights() {
-        const v = new Uint8Array([0, 0, 0]);
+        const current_color_packed = stroke.queue[stroke.count].color_data.packed;
+        const v = new Uint8Array([1, 1, 1]);
         gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
-        for (const id of stroke.flat_queue) {
+        for (const id of newly_hovered) {
+            stroke.queue[stroke.count].stroke.add(id);
+            stroke.flat_queue.add(id);
             const byte_offset = id * 3 - 1;
             gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+            grid.hover_texture_u32view[id] = current_color_packed;
         }
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        stroke.flat_queue.clear();
+        renderer.hover_texture_is_dirty = true;
     }
-    function gpu_process_queued_strokes() {
-        if (stroke.flat_queue.size === 0)
-            return;
-        gpu_remove_highlights();
-        const mod = 3, s = new Set();
-        for (let i = 0; i < stroke.queue.length; ++i) {
-            const q = stroke.queue[i];
-            const first = q.stroke.entries().next();
-            if (first.done === true)
-                continue;
-            const m = first.value[0] % mod;
-            for (const id of q.stroke) {
-                s.add(id);
-                if (id % mod === m) {
-                    wave_start(s, q.color_data);
-                    s.clear();
-                }
-            }
-            if (s.size > 0) {
+    else if (keyboard.ctrl_down) {
+        fill_grid(stroke.choosen_palette[stroke.palette_color]);
+    }
+    else {
+        wave_start(grid.get_brush(hovered));
+    }
+    mouse.last_hovered_id = hovered;
+}
+function remove_highlights() {
+    const v = new Uint8Array([0, 0, 0]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, hovered_buffer);
+    for (const id of stroke.flat_queue) {
+        const byte_offset = id * 3 - 1;
+        gl.bufferSubData(gl.ARRAY_BUFFER, byte_offset, v);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    stroke.flat_queue.clear();
+}
+function process_queued_strokes() {
+    if (stroke.flat_queue.size === 0)
+        return;
+    remove_highlights();
+    const mod = 3, s = new Set();
+    for (let i = 0; i < stroke.queue.length; ++i) {
+        const q = stroke.queue[i];
+        const first = q.stroke.entries().next();
+        if (first.done === true)
+            continue;
+        const m = first.value[0] % mod;
+        for (const id of q.stroke) {
+            s.add(id);
+            if (id % mod === m) {
                 wave_start(s, q.color_data);
                 s.clear();
             }
         }
-        stroke.queue = [];
-        stroke.count = -1;
+        if (s.size > 0) {
+            wave_start(s, q.color_data);
+            s.clear();
+        }
     }
-    process_stroke = gpu_process_stroke;
-    remove_highlights = gpu_remove_highlights;
-    process_queued_strokes = gpu_process_queued_strokes;
+    stroke.queue = [];
+    stroke.count = -1;
 }
 const renderer = {
     /** buffer used to read from the vertex mask texture. */
@@ -1630,11 +1431,7 @@ const renderer = {
     /** this is set to true on window.onresize; forces to recalculate the vertex
      * mask texture during the draw pass. */
     force_render_mask: true,
-    /** this is set to true any time that grid.texture or grid.texture_u32view
-     * get modified; forces to update the shader data. */
-    texture_is_dirty: false,
     hover_texture_is_dirty: false,
-    state_is_dirty: false,
     /** when true, considering both mouse and keyboard state, an action is
      * performed (i.e. a verte is clicked or hovered, the grid is filled or
      * cleared); can be set to true only once per frame. */
@@ -1647,9 +1444,11 @@ const renderer = {
     /** used to calculate delta_time. */
     prev_timestamp: 0,
     delta_time: 0,
-    window_hidden: false
+    window_hidden: false,
+    dt_getter: () => renderer.delta_time
 };
 function draw(timestamp) {
+    const n = grid.texture_size, triangle_count = grid.triangle_count;
     renderer.delta_time = (timestamp - renderer.prev_timestamp) * 0.001;
     renderer.prev_timestamp = timestamp;
     if (renderer.window_hidden) {
@@ -1657,6 +1456,7 @@ function draw(timestamp) {
         return;
     }
     ++renderer.frame;
+    esc_button_el.textContent = `${(1 / renderer.delta_time).toFixed(1)} fps`;
     mouse.wheel_already_processed = false;
     if (renderer.update_view_proj_mat)
         view_proj_mat =
@@ -1664,30 +1464,6 @@ function draw(timestamp) {
     if (renderer.request_color_clear) {
         fill_grid();
         renderer.request_color_clear = false;
-    }
-    let source_state_weights, source_wcolor_dist, target_state_weights, target_wcolor_dist, target_fbo;
-    if (gpu) {
-        if (state_read_index === 0) {
-            source_state_weights = state_weights_0;
-            source_wcolor_dist = wcolor_dist_0;
-            target_fbo = state_fbo1;
-            target_state_weights = state_weights_1;
-            target_wcolor_dist = wcolor_dist_1;
-        }
-        else {
-            source_state_weights = state_weights_1;
-            source_wcolor_dist = wcolor_dist_1;
-            target_fbo = state_fbo0;
-            target_state_weights = state_weights_0;
-            target_wcolor_dist = wcolor_dist_0;
-        }
-        if (renderer.state_is_dirty) {
-            gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.state_weights);
-            gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.FLOAT, grid.wcolor_dist);
-            renderer.state_is_dirty = false;
-        }
     }
     // poll previous mouse inputs
     for (let i = 0; i < pbo_count; i++) {
@@ -1715,8 +1491,8 @@ function draw(timestamp) {
             gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
             renderer.force_render_mask = false;
         }
-        if (renderer.request_mouse_sample &&
-            gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+        if (renderer.request_mouse_sample) { //&&
+            //gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
             gl.readBuffer(gl.COLOR_ATTACHMENT0);
             // orphan the buffer before writing to prevent webgl warnings
             gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[pbo_write_index]);
@@ -1735,28 +1511,54 @@ function draw(timestamp) {
     //////////////////////////////////
     //       STATE PROPAGATION      //
     //////////////////////////////////
-    if (gpu) {
-        state_p.use_program();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
-        gl.viewport(0, 0, grid.texture_size, grid.texture_size);
+    const no_iterations = fluid.jacobi_iterations === 0;
+    gl.viewport(0, 0, n, n);
+    //gl.disable(gl.BLEND);
+    gl.bindVertexArray(sym_vao);
+    // first step
+    force_and_damping_p.use_program();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, flux_tex[no_iterations ? flux_read : 0]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, flux_fbo[no_iterations ? 1 - flux_read : 1]);
+    gl.drawArrays(gl.POINTS, 0, triangle_count);
+    flux_read = 1 - flux_read;
+    // second step
+    if (!no_iterations) {
+        pressure_jacobi_p.use_program();
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, color_texture);
-        if (renderer.texture_is_dirty) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
-            renderer.texture_is_dirty = false;
+        gl.bindTexture(gl.TEXTURE_2D, flux_tex[1]);
+        for (let i = 0; i < fluid.jacobi_iterations; ++i) {
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, pressure_fbo[1 - pressure_read]);
+            gl.drawArrays(gl.POINTS, 0, triangle_count);
+            pressure_read = 1 - pressure_read;
         }
+        // third step
+        gradient_subtract_p.use_program();
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
+        gl.bindTexture(gl.TEXTURE_2D, flux_tex[1]);
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
-        gl.bindVertexArray(state_vao);
-        gl.disable(gl.BLEND);
-        gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, flux_fbo[0]);
+        gl.drawArrays(gl.POINTS, 0, triangle_count);
     }
+    // fourth step
+    dye_advection_p.use_program();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, flux_tex[no_iterations ? flux_read : 0]);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[dye_read]);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, inject_tex[dye_read]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1 - dye_read]);
+    gl.drawArrays(gl.POINTS, 0, triangle_count);
+    dye_read = 1 - dye_read;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     //////////////////////////////////
     //         MAIN SHADER          //
     //////////////////////////////////
+    gl.bindVertexArray(vao);
     p.use_program();
     if (renderer.update_view_proj_mat) {
         p.uniforms["u_view_proj"].update_value();
@@ -1764,37 +1566,23 @@ function draw(timestamp) {
     }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    if (renderer.texture_is_dirty) {
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.texture);
-        renderer.texture_is_dirty = false;
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[dye_read]);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, hover_texture);
+    if (renderer.hover_texture_is_dirty) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, n, gl.RGBA, gl.UNSIGNED_BYTE, grid.hover_texture);
+        renderer.hover_texture_is_dirty = false;
     }
-    if (gpu) {
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, target_state_weights);
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, target_wcolor_dist);
-        gl.activeTexture(gl.TEXTURE3);
-        if (renderer.hover_texture_is_dirty) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.texture_size, grid.texture_size, gl.RGBA, gl.UNSIGNED_BYTE, grid.hover_texture);
-            renderer.hover_texture_is_dirty = false;
-        }
-        gl.bindTexture(gl.TEXTURE_2D, hover_texture);
-        gl.enable(gl.BLEND);
-    }
-    gl.bindVertexArray(vao);
+    gl.bindTexture(gl.TEXTURE_2D, hover_texture);
+    gl.enable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-    if (gpu)
-        state_read_index = 1 - state_read_index;
     requestAnimationFrame(draw);
 }
 let gl, 
 /** grid shader program. */
 p, 
 /** grid vertex mask shader program. */
-mask_p, state_p, grid, mask_texture, mask_fbo, state_fbo0, state_fbo1, 
-/** inner window aspect ratio. */
-//ar:number,
+mask_p, force_and_damping_p, pressure_jacobi_p, gradient_subtract_p, dye_advection_p, grid, mask_texture, mask_fbo, state_fbo0, state_fbo1, 
 /** camera (orthographic) projection matrix. */
 view_proj_mat, 
 /** window.innerWidth */
@@ -1802,11 +1590,11 @@ width,
 /** window.innerHeight */
 height, 
 /** grid vertex array object. */
-vao, color_texture, hover_texture, 
+vao, hover_texture, 
 /** mask grid vertex array object. */
 mask_vao, 
-/** state grid vertex array object. */
-state_vao, state_weights_0, wcolor_dist_0, state_weights_1, wcolor_dist_1, state_read_index, hovered_buffer, 
+/** fluid symulation */
+sym_vao, flux_tex, flux_fbo, pressure_tex, pressure_fbo, dye_tex, dye_fbo, inject_tex, flux_read, pressure_read, dye_read, hovered_buffer, 
 /** grid.vertex_count */
 vertex_count, 
 /** used to asynchronously read from gpu without cpu stalls. */
@@ -1821,26 +1609,18 @@ menu_el,
 esc_button_el, 
 /** updated in update_viewport */
 canvas_rect;
-/** used for mouse movement scaling to properly move the camera,
- * recalculated both in update_viewport and in w_wheel */
-//units_per_pixel_x: number,
-//units_per_pixel_y: number;
-// let camera_x = 0,
-//     camera_y = 0,
-//     camera_coord_min = -0.5,
-//     camera_coord_max = 0.5,
-//     camera_scale_min = 0.0005,
-//     camera_scale = 1,
-//     camera_scale_max = 2;
 const camera = {
     x: 0,
     y: 0,
-    scale: 1,
+    scale: 0.6,
+    /** inner window aspect ratio. */
     ar: 0,
     min_coord: -0.5,
     max_coord: 0.5,
     min_scale: 0.0005,
     max_scale: 2,
+    /** used for mouse movement scaling to properly move the camera,
+     * recalculated both in update_viewport and in w_wheel */
     units_per_pixel_x: 0,
     units_per_pixel_y: 0
 };
@@ -1860,9 +1640,11 @@ function init() {
         throw "Colorful.js: couldn't find '#esc-button' element.";
     esc_button_el.onclick = dom_toggle_menu;
     gl = canvas_el.getContext("webgl2");
-    const ext = gl.getExtension("EXT_color_buffer_float");
-    if (!ext)
+    const ext1 = gl.getExtension("EXT_color_buffer_float"), ext2 = gl.getExtension("EXT_float_blend");
+    if (!ext1)
         throw "EXT_color_buffer_float is not supported on this hardware";
+    else if (!ext2)
+        throw "EXT_float_blean is not supported on this hardware";
     dom_update_color_picker();
     //////////////////////////////////
     //         MAIN SHADER          //
@@ -1877,80 +1659,92 @@ function init() {
         create_view_projection_matrix(camera.x, camera.y, camera.scale, camera.ar);
     canvas_el.width = width;
     canvas_el.height = height;
-    if (gpu) {
-        p = new shader_program("main", gpu_vert, gpu_frag, [
-            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
-            new uniform("u_texture", GL_TEXTURE, U_INIT, 0),
-            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 1),
-            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 2),
-            new uniform("u_hcolor", GL_TEXTURE, U_INIT, 3),
-            // new uniform("u_blend_value", GL_FLOAT, U_INIT, blend_value),
-            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
-            // new uniform("u_decayt_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
-        ]);
-    }
-    else {
-        p = new shader_program("main", cpu_vert, cpu_frag, [
-            new uniform("!u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
-            new uniform("!u_texture", GL_TEXTURE, U_INIT, 0),
-        ]);
-    }
+    p = new shader_program("main", main_vert, main_square_frag, [
+        new uniform("u_view_proj", GL_MAT4x4, U_INIT, () => view_proj_mat),
+        new uniform("u_dye", GL_TEXTURE, U_INIT, 0),
+        new uniform("u_hcolor", GL_TEXTURE, U_INIT, 1)
+    ]);
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    grid = new ColorfulGrid(side_length, gpu, grid_bg, brush_size);
+    grid = new SquareGrid(side_length, grid_bg, brush_size);
+    const texture_size = grid.texture_size;
     vertex_count = grid.vertex_count;
     //////////////////////////////////
     //       MAIN SHADER            //
     //////////////////////////////////
     vao = create_vertex_array();
-    const pos_buffer = create_buffer_vec2(grid.mesh, 0), id_buffer = create_buffer_uint32(grid.ids, 1);
-    create_buffer_vec2(grid.uvs, 2); // uv_buffer
-    if (gpu) {
-        create_buffer_vec2(grid.adj_uvs_1, 3); // adj1_buffer
-        create_buffer_vec2(grid.adj_uvs_2, 4); // adj2_buffer
-        create_buffer_vec2(grid.adj_uvs_3, 5); // adj3_buffer
-        hovered_buffer = create_dyn_buffer_uint8(grid.hovered, 6);
-    }
-    color_texture = create_RGBA_texture(grid.texture_size, grid.texture);
-    hover_texture = create_RGBA_texture(grid.texture_size, grid.hover_texture);
+    const pos_buffer = create_buffer_vec2(grid.mesh, 0);
+    create_buffer_vec2(grid.uvs, 1);
+    hovered_buffer = create_dyn_buffer_uint8(grid.hovered, 2);
+    hover_texture = create_RGBA_texture(texture_size, grid.hover_texture);
     //////////////////////////////////
     //       MASK SHADER            //
     //////////////////////////////////
     mask_p = new shader_program("mask", mask_vert, mask_frag, [
-        new uniform("!u_view_proj", GL_MAT4x4, 0, () => view_proj_mat),
+        new uniform("u_view_proj", GL_MAT4x4, 0, () => view_proj_mat),
     ]);
     mask_vao = create_vertex_array();
     bind_vec2_attr(pos_buffer, 0);
-    bind_uint32_attr(id_buffer, 1);
+    create_buffer_uint32(grid.ids, 1);
     mask_texture = create_R32UI_texture(width, height);
     mask_fbo = create_frame_buffer(mask_texture);
     //////////////////////////////////
-    //       STATE SHADER           //
+    //   FORCE AND DAMPING SHADER   //
     //////////////////////////////////
-    if (gpu) {
-        state_p = new shader_program("state", state_vert, state_frag, [
-            new uniform("u_state_weights", GL_TEXTURE, U_INIT, 0),
-            new uniform("u_wcolor_dist", GL_TEXTURE, U_INIT, 1),
-            new uniform("u_delta_time", GL_FLOAT, U_UPDATE | U_INIT, () => renderer.delta_time),
-            // new uniform("u_wave_decay", GL_FLOAT, U_INIT, wave_decay),
-            // new uniform("u_decay_min_radius", GL_FLOAT, U_INIT, decay_min_radius),
-            new uniform("u_state_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(state_rate), (v) => not_saturated(ms_from_rate(v))),
-            new uniform("u_weight_decay", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(weight_decay), (v) => not_saturated(ms_from_rate(v))),
-            new uniform("u_diffusion_rate", GL_FLOAT, U_UPDATE | U_INIT, () => rate_from_ms(diffusion_rate), (v) => not_saturated(ms_from_rate(v))),
-        ]);
-        state_vao = create_vertex_array();
-        create_buffer_uint32(grid.cell_ids, 0);
-        create_buffer_vec2(grid.cell_uvs, 1);
-        create_buffer_vec2(grid.cell_adj_uvs_1, 2);
-        create_buffer_vec2(grid.cell_adj_uvs_2, 3);
-        create_buffer_vec2(grid.cell_adj_uvs_3, 4);
-        state_weights_0 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        wcolor_dist_0 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo0 = create_frame_buffer2(state_weights_0, wcolor_dist_0);
-        state_weights_1 = create_RGBA32F_texture(grid.texture_size, grid.state_weights);
-        wcolor_dist_1 = create_RGBA32F_texture(grid.texture_size, grid.wcolor_dist);
-        state_fbo1 = create_frame_buffer2(state_weights_1, wcolor_dist_1);
-        state_read_index = 0;
-    }
+    force_and_damping_p = new shader_program("force_and_damping", state_vert, sym_force_and_damping, [
+        new uniform("u_flux", GL_TEXTURE, U_INIT, 0),
+        new uniform("u_delta_time", GL_FLOAT, U_UPDATE | U_INIT, renderer.dt_getter),
+        new uniform("u_gain", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.gain),
+        new uniform("u_drag", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.drag),
+        new uniform("u_phi_decay", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.phi_decay),
+        new uniform("u_phi_diffusion", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.phi_diffusion)
+    ]);
+    sym_vao = create_vertex_array();
+    create_buffer_vec2(grid.cell_uvs, 0),
+        create_buffer_vec2(grid.cell_adj_uvs_1, 1),
+        create_buffer_vec2(grid.cell_adj_uvs_2, 2),
+        create_buffer_vec2(grid.cell_adj_uvs_3, 3);
+    //////////////////////////////////
+    //     PRESSURE JACOBI SHADER   //
+    //////////////////////////////////
+    pressure_jacobi_p = new shader_program("pressure_jacobi", state_vert, sym_pressure_jacobi, [
+        new uniform("u_flux", GL_TEXTURE, U_INIT, 0),
+        new uniform("u_pressure", GL_TEXTURE, U_INIT, 1)
+    ]);
+    //////////////////////////////////
+    //   GRADIENT SUBTRACT SHADER   //
+    //////////////////////////////////
+    gradient_subtract_p = new shader_program("gradient_subtract", state_vert, sym_gradient_subtract, [
+        new uniform("u_flux", GL_TEXTURE, U_INIT, 0),
+        new uniform("u_pressure", GL_TEXTURE, U_INIT, 1)
+    ]);
+    //////////////////////////////////
+    //     DYE ADVECTION SHADER     //
+    //////////////////////////////////
+    dye_advection_p = new shader_program("dye_advection", state_vert, sym_dye_advection, [
+        new uniform("u_flux", GL_TEXTURE, U_INIT, 0),
+        new uniform("u_dye", GL_TEXTURE, U_INIT, 1),
+        new uniform("u_inject", GL_TEXTURE, U_INIT, 2),
+        new uniform("u_delta_time", GL_FLOAT, U_UPDATE | U_INIT, renderer.dt_getter),
+        new uniform("u_dye_diffusion", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.dye_diffusion),
+        new uniform("u_inject_rate", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.inject_rate),
+        new uniform("u_inject_duration", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.inject_duration),
+        new uniform("u_inject_spread", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.inject_spread),
+        new uniform("u_inject_max", GL_FLOAT, U_UPDATE | U_INIT, () => fluid.inject_max),
+    ]);
+    //////////////////////////////////
+    //       SYM TEXTURE SETUP      //
+    //////////////////////////////////
+    const flux_0 = create_RGBA32F_texture(texture_size, grid.flux), flux_1 = create_RGBA32F_texture(texture_size, null), press_0 = create_R32F_texture(texture_size, grid.pressure), press_1 = create_R32F_texture(texture_size, null), dye_0 = create_RGBA32F_texture(texture_size, grid.dye), dye_1 = create_RGBA32F_texture(texture_size, null), inject_0 = create_RGBA32F_texture(texture_size, grid.inject), inject_1 = create_RGBA32F_texture(texture_size, null), flux_fbo_0 = create_frame_buffer(flux_0), flux_fbo_1 = create_frame_buffer(flux_1), press_fbo_0 = create_frame_buffer(press_0), press_fbo_1 = create_frame_buffer(press_1), dye_fbo_0 = create_frame_buffer2(dye_0, inject_0), dye_fbo_1 = create_frame_buffer2(dye_1, inject_1);
+    flux_tex = [flux_0, flux_1];
+    flux_fbo = [flux_fbo_0, flux_fbo_1];
+    pressure_tex = [press_0, press_1];
+    pressure_fbo = [press_fbo_0, press_fbo_1];
+    dye_tex = [dye_0, dye_1];
+    inject_tex = [inject_0, inject_1];
+    dye_fbo = [dye_fbo_0, dye_fbo_1];
+    flux_read = 0;
+    pressure_read = 0;
+    dye_read = 0;
     //////////////////////////////////
     //       MASK SHADER PBOS       //
     //////////////////////////////////
@@ -2028,6 +1822,7 @@ const mouse = {
      * processed multiple times */
     last_hovered_id: -1
 };
+let prev_jacobi;
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
     mouse.last_hovered_id = -1;
@@ -2040,6 +1835,9 @@ function c_mousedown(e) {
     if (e.button === 0) {
         mouse.m1_down = true;
         mouse.m3_down = false;
+        prev_jacobi = fluid.jacobi_iterations;
+        if (fluid.pause_jacobi_while_draggin)
+            fluid.jacobi_iterations = 0;
         if (keyboard.shift_down) {
             /* change stroke color only if there were at least one new valid
             * non hovered vertex. */
@@ -2111,6 +1909,7 @@ function w_mouseup(e) {
     }
     if (e.button !== 0)
         return;
+    fluid.jacobi_iterations = prev_jacobi;
     mouse.m1_down = false;
     mouse.last_hovered_id = -1;
     mouse_down_on_color = false;

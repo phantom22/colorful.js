@@ -1,24 +1,18 @@
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
     mouse.m1_down = false;
-    mouse.m3_down = false;
-    keyboard.shift_down = false;
-    keyboard.ctrl_down = false;
-    mouse.last_hovered_id = -1;
-
-    remove_highlights();
-    stroke.queue = [];
-    stroke.count = -1;
+    mouse.m2_down = false;
+    keyboard.shift_down = keyboard.ctrl_down = keyboard.alt_down = false;
+    splat.next_is_start = obstacle_splat.next_is_start = true;
 }
 
 function d_visibilitychange() {
     renderer.window_hidden = document.hidden;
+    state_cleanup();
 }
 
-
-window.onresize = update_viewport;
 window.onblur = state_cleanup;
 document.onvisibilitychange = d_visibilitychange;
-// window.onmouseleave = state_cleanup;
 window.addEventListener("wheel", w_wheel, {passive:false});
-window.onload = init;
+addEventListener("blur", state_cleanup);
+window.onload = main;

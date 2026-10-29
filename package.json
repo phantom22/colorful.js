@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "build": "npx tsc --project src && node bundler.js && terser bundle/index.js --compress passes=3,unsafe=true,unsafe_math=true,pure_getters=true,toplevel=true,drop_console=true --mangle toplevel=true --module -o bundle/index.min.js"
+  }
+}

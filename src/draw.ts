@@ -1,28 +1,18 @@
 const renderer = {
-    /** buffer used to read from the vertex mask texture. */
-    id_mask_data: new Uint32Array(1),
-    update_view_proj_mat: false,
-    /** this is set to true on window.onresize; forces to recalculate the vertex 
-     * mask texture during the draw pass. */
-    force_render_mask: true,
-    /** this is set to true any time that grid.texture or grid.texture_u32view 
-     * get modified; forces to update the shader data. */
-    texture_is_dirty: false,
-    hover_texture_is_dirty: false,
-    state_is_dirty: false,
-    /** when true, considering both mouse and keyboard state, an action is
-     * performed (i.e. a verte is clicked or hovered, the grid is filled or
-     * cleared); can be set to true only once per frame. */
-    request_mouse_sample: false,
     /** when true, the grid vertex color lut table will get cleared with grid_bg
      * color (initial grid color). */
-    request_color_clear: false,
+    request_color_clear: { noise:false, pending:false },
     /** current frame id. */
     frame: 0,
     /** used to calculate delta_time. */
     prev_timestamp: 0,
     delta_time: 0,
-    window_hidden: false
+    fixed_delta_time: 1 / 60,
+    window_hidden: false,
+    dt_getter: () => renderer.delta_time,
+    fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
+    checkboard_fill: false,
+    time_scale: 1.0
 }
 
 function draw(timestamp:number) {
@@ -32,199 +22,299 @@ function draw(timestamp:number) {
         requestAnimationFrame(draw);
         return;
     }
-    ++renderer.frame;
+    
+    if (++renderer.frame % 6 === 0)
+        ui_inspector.refresh();
 
-    mouse.wheel_already_processed = false;
+    ui_status.fps(renderer.delta_time);
 
-    if (renderer.update_view_proj_mat)
-        view_proj_mat =
-            create_view_projection_matrix(camera.x, camera.y, camera.scale, camera.ar);
+    gl.enable(gl.BLEND);
 
-    if (renderer.request_color_clear) {
-        fill_grid();
-        renderer.request_color_clear = false;
+    gl.viewport(0, 0, N1, N2);
+    gl.enable(gl.BLEND);
+    gl.bindVertexArray(vao);
+    if (renderer.request_color_clear.pending) {
+        fill_grid(fluid.bg, renderer.request_color_clear.noise);
+        renderer.request_color_clear.pending = false;
+        renderer.request_color_clear.noise = false;
     }
 
-    let source_state_weights: WebGLTexture, source_wcolor_dist: WebGLTexture,
-        target_state_weights: WebGLTexture, target_wcolor_dist: WebGLTexture,
-        target_fbo: WebGLBuffer;
-    if (gpu) {
-        if (state_read_index === 0) {
-            source_state_weights = state_weights_0;
-            source_wcolor_dist = wcolor_dist_0;
-            target_fbo = state_fbo1;
-            target_state_weights = state_weights_1;
-            target_wcolor_dist = wcolor_dist_1;
-        }
-        else {
-            source_state_weights = state_weights_1;
-            source_wcolor_dist = wcolor_dist_1;
-            target_fbo = state_fbo0;
-            target_state_weights = state_weights_0;
-            target_wcolor_dist = wcolor_dist_0;
-        }
+    run_obstacle_splats();
 
-        if (renderer.state_is_dirty) {
-            gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.FLOAT, grid.state_weights);
-
-            gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.FLOAT, grid.wcolor_dist);
-
-            renderer.state_is_dirty = false;
-        }
-    }
-
-    // poll previous mouse inputs
-    for (let i = 0; i < pbo_count; i++) {
-        const sync = syncs[i];
-        if (sync) {
-            const status = gl.clientWaitSync(sync, 0, 0),
-                  pixel_data = renderer.id_mask_data;
-            if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
-                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[i]);
-                gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixel_data);
-
-                process_stroke(pixel_data[0]);
-
-                gl.deleteSync(sync);
-                syncs[i] = null;
-            }
-        }
-    }
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-
-    if (renderer.force_render_mask || renderer.request_mouse_sample) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, mask_fbo);
-
-        if (renderer.force_render_mask) {
-            mask_p.use_program();
-            gl.bindVertexArray(mask_vao);
-
-            gl.viewport(0, 0, width, height);
-            gl.clearBufferuiv(gl.COLOR, 0, new Uint32Array([0, 0, 0, 0]));
-
-            mask_p.uniforms["u_view_proj"].update_value();
-            
-            gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
-
-            renderer.force_render_mask = false;
-        }
-
-        if (renderer.request_mouse_sample &&
-            gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
-            gl.readBuffer(gl.COLOR_ATTACHMENT0);
-
-            // orphan the buffer before writing to prevent webgl warnings
-            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[pbo_write_index]);
-            gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
-            gl.readPixels(
-                mouse.x, mouse.y, 1, 1,
-                gl.RED_INTEGER, gl.UNSIGNED_INT, 0
-            );
-
-            if (syncs[pbo_write_index])
-                gl.deleteSync(syncs[pbo_write_index]);
-            syncs[pbo_write_index] =
-                gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-
-            pbo_write_index = (pbo_write_index + 1) % pbo_count;
-
-            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-            renderer.request_mouse_sample = false;
-        }
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    }
+    gl.disable(gl.BLEND);
+    if (mouse.m1_down &&
+        (mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE))
+        set_dye_splat(mouse.uv_pos, false);
+    run_splats();
 
     //////////////////////////////////
-    //       STATE PROPAGATION      //
+    //          FLUID SIM           //
     //////////////////////////////////
 
-    if (gpu) {
-        state_p.use_program();
+    gl.viewport(0, 0, N1, N2);
 
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target_fbo);
-        gl.viewport(0, 0, grid.texture_size, grid.texture_size);
-        
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, color_texture);
-        if (renderer.texture_is_dirty) {
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-            );
-            renderer.texture_is_dirty = false;
-        }
+    if (force.is_active) {
+        forcefield_p.use_program();
 
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, source_state_weights);
+        gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
 
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, source_wcolor_dist);
+        gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
 
-        gl.bindVertexArray(state_vao);
-        gl.disable(gl.BLEND)
-        gl.drawArrays(gl.POINTS, 0, grid.triangle_count);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        velocity_read = 1 - velocity_read;
     }
+
+    // 1. advect velocity by itself
+    velocity_advect_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    velocity_read = 1 - velocity_read;
+
+    // 2.1. vorticity confinement
+    curl_p.use_program();
+    
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, curl_fbo);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 2.2. blur curls
+    blur_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, curl_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, curl_smooth_fbo);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 2.3. calculate velocity from curls
+    vorticity_confinement_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, curl_smooth_tex);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    velocity_read = 1 - velocity_read;
+
+    // 3. project
+    divergence_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, divergence_fbo);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 4. decay the pressure warm start
+    rescale_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, pressure_fbo[1-pressure_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    pressure_read = 1 - pressure_read;
+
+    // 5. pressure jacobi iterations
+    pressure_jacobi_p.use_program();
+    
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, divergence_tex);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    for (let i=0; i<fluid.jacobi_iterations; ++i) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, pressure_fbo[1-pressure_read]);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        pressure_read = 1 - pressure_read;
+    }
+
+    // 6. gradient subtract
+    gradient_subtract_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    velocity_read = 1 - velocity_read;
+
+    // if (force.is_active && force.pure_vector_field) {
+    //     forcefield_p.use_program();
+
+    //     gl.activeTexture(gl.TEXTURE0);
+    //     gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    //     gl.activeTexture(gl.TEXTURE1);
+    //     gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    //     gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
+    //     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    //     velocity_read = 1 - velocity_read;
+    // }
+
+    // 7. advect dye
+    gl.viewport(0, 0, M1, M2);
+
+    if (renderer.checkboard_fill) {        
+        checkboard_fill_p.use_program();
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1-dye_read]);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        dye_read = 1 - dye_read;
+        renderer.checkboard_fill = false;
+    }
+
+    dye_advect_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[dye_read]);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1-dye_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    dye_read = 1 - dye_read;
+
+    // 8. two vorticity-driven diffusion passes
+    diffusion_pass_p.use_program();
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, dye_tex[dye_read]);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, curl_smooth_tex);
+
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
+
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1-dye_read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
     //////////////////////////////////
     //         MAIN SHADER          //
     //////////////////////////////////
 
-    p.use_program();
-    if (renderer.update_view_proj_mat) {
-        p.uniforms["u_view_proj"].update_value();
-        renderer.update_view_proj_mat = false;
-    }
+    quad_p.use_program();
 
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-
+    gl.enable(gl.BLEND);
+    
+    let display_tex: WebGLTexture, kind: fluid_display_kind_t,
+        blur: fluid_diplay_blur_t|undefined,
+        ref: number|undefined, thresh: number|undefined, k: number|undefined,
+        palette = fluid.display_palette;
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, color_texture);
-    if (renderer.texture_is_dirty) {
-        gl.texSubImage2D(
-            gl.TEXTURE_2D, 0,
-            0, 0,
-            grid.texture_size, grid.texture_size,
-            gl.RGBA, gl.UNSIGNED_BYTE, grid.texture
-        );
-        renderer.texture_is_dirty = false;
+    switch (fluid.display_mode) {
+        case DISPLAY_DYE:
+            display_tex = dye_tex[dye_read];
+            kind = KIND_DYE;
+            break;
+        case DISPLAY_VELOCITY:
+            display_tex = velocity_tex[velocity_read];
+            kind = KIND_VECTOR;
+            blur = BLUR_CROSS;
+            ref = fluid.display.velocity.ref;
+            thresh = fluid.display.velocity.thresh;
+            k = fluid.display.velocity.k;
+            break;
+        case DISPLAY_CURL:
+            display_tex = curl_tex;
+            kind = KIND_SCALAR;
+            blur = BLUR_3x3_BINOMIAL;
+            ref = fluid.display.curl.ref;
+            thresh = fluid.display.curl.thresh;
+            k = fluid.display.curl.k;
+            break;
+        case DISPLAY_PRESSURE:
+            display_tex = pressure_tex[pressure_read];
+            kind = KIND_SCALAR;
+            blur = BLUR_CROSS;
+            ref = fluid.display.pressure.ref;
+            thresh = fluid.display.pressure.thresh;
+            k = fluid.display.pressure.k;
+            break;
+        case DISPLAY_DIVERGENCE:
+            display_tex = divergence_tex;
+            kind = KIND_SCALAR;
+            blur = BLUR_CROSS;
+            ref = fluid.display.divergence.ref;
+            thresh = fluid.display.divergence.thresh;
+            k = fluid.display.divergence.k;
+            palette = PALETTE_DIVERGING;
+            break;
     }
+    gl.bindTexture(gl.TEXTURE_2D, display_tex);
 
-    if (gpu) {
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, target_state_weights);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
 
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, target_wcolor_dist);
+    quad_p.uniforms["source_kind"].set(kind);
+    quad_p.uniforms["blur_type"].set(blur);
+    quad_p.uniforms["reference_value"].set(ref);
+    quad_p.uniforms["value_rescale_threshold"].set(thresh);
+    quad_p.uniforms["rescale_factor"].set(k);
+    quad_p.uniforms["palette_type"].set(palette);
 
-        gl.activeTexture(gl.TEXTURE3);
-        if (renderer.hover_texture_is_dirty) {
-            gl.texSubImage2D(
-                gl.TEXTURE_2D, 0,
-                0, 0,
-                grid.texture_size, grid.texture_size,
-                gl.RGBA, gl.UNSIGNED_BYTE, grid.hover_texture
-            );
-            renderer.hover_texture_is_dirty = false;
-        }
-        gl.bindTexture(gl.TEXTURE_2D, hover_texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-        gl.enable(gl.BLEND);
-    }
+    ///////////////
+    // if (renderer.frame % 60 === 0) {
+    //     const v = -Math.log(0.02);
+    //     print_dye_stats([v,v,v]);
+    // }
 
-    gl.bindVertexArray(vao);
-    gl.drawArrays(gl.TRIANGLES, 0, vertex_count);
 
-    if (gpu)
-        state_read_index = 1 - state_read_index;
     requestAnimationFrame(draw);
 }
