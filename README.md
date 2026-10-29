@@ -41,6 +41,8 @@ Hover any label for an explanation and a guide to useful value ranges.
 | Wheel / trackpad   | Zoom the force field                            |
 | `Q` `W` `E` `R`    | Dye + force, dye, force, wall brushes           |
 | `1` - `5`          | Dye, velocity, pressure, curl, divergence views |
+| `Escape`           | Toggle ui                                       |
+| `I`                | Toggle inspector                                |
 | `F`                | Toggle the force field                          |
 | `TAB`              | Toggle open borders                             |
 | `T`                | Open the force field editor                     |
