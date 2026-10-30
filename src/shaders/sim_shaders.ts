@@ -272,6 +272,7 @@ uniform float window_width;
 uniform float force_strength;
 uniform float dt;
 uniform float relax;
+uniform float time;
 
 ${user || FORCE_FIELD_DEFAULT}
 

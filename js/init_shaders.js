@@ -18,7 +18,8 @@ function recompile_forcefield(get_velocity) {
             new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength),
             new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
             new uniform("replace", GL_FLOAT, U_UPDATE, () => mouse.m2_down ? 1.0 : 0.0),
-            new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0)
+            new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0),
+            new uniform("time", GL_FLOAT, U_UPDATE, () => renderer.time)
         ]);
         const { program, vertex, fragment } = shaders["forcefield"];
         gl.deleteShader(vertex);
@@ -102,7 +103,8 @@ function init_shaders() {
         new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
         new uniform("replace", GL_FLOAT, U_UPDATE, () => mouse.m2_down ? 1.0 : 0.0),
-        new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0)
+        new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0),
+        new uniform("time", GL_FLOAT, U_UPDATE, () => renderer.time)
     ]);
     velocity_advect_p = new shader_program("velocity_advect", quad_vert, sh_sim_velocity_advect, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),

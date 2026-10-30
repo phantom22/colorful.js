@@ -13,7 +13,8 @@ const renderer = {
     dt_getter: () => renderer.delta_time,
     fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
     checkboard_fill: false,
-    time_scale: 1.0
+    time_scale: 1.0,
+    time: 0
 };
 function draw(timestamp) {
     renderer.delta_time = (timestamp - renderer.prev_timestamp) * 0.001;
@@ -22,6 +23,7 @@ function draw(timestamp) {
         requestAnimationFrame(draw);
         return;
     }
+    renderer.time = timestamp * 0.001;
     if (++renderer.frame % 6 === 0)
         ui_inspector.refresh();
     ui_status.fps(renderer.delta_time);
