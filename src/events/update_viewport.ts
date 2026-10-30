@@ -2,7 +2,7 @@
 function update_viewport() {
     const r = canvas_el.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const w = Math.round(r.width), h = Math.round(r.height * dpr);
+    const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
     canvas_rect = r;
     // const w = window.innerWidth, h = window.innerHeight;
 
