@@ -1,7 +1,7 @@
 const renderer = {
     /** when true, the grid vertex color lut table will get cleared with grid_bg
      * color (initial grid color). */
-    request_color_clear: { noise:false, pending:false },
+    color_clear_request: { noise:false, pending:false, only_walls:false },
     /** current frame id. */
     frame: 0,
     /** used to calculate delta_time. */
@@ -13,7 +13,12 @@ const renderer = {
     fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
     checkboard_fill: false,
     time_scale: 1.0,
-    time: 0
+    time: 0,
+    request_color_clear(noise:boolean, only_walls:boolean) {
+        renderer.color_clear_request.pending = true;
+        renderer.color_clear_request.noise = noise;
+        renderer.color_clear_request.only_walls = only_walls;
+    }
 }
 
 function draw(timestamp:number) {
@@ -24,22 +29,24 @@ function draw(timestamp:number) {
         return;
     }
 
-    renderer.time = timestamp*0.001;
+    renderer.time += renderer.delta_time;
     
     if (++renderer.frame % 6 === 0)
         ui_inspector.refresh();
 
     ui_status.fps(renderer.delta_time);
+    ui_update_mouse_overlay();
 
     gl.enable(gl.BLEND);
 
     gl.viewport(0, 0, N1, N2);
     gl.enable(gl.BLEND);
     gl.bindVertexArray(vao);
-    if (renderer.request_color_clear.pending) {
-        fill_grid(fluid.bg, renderer.request_color_clear.noise);
-        renderer.request_color_clear.pending = false;
-        renderer.request_color_clear.noise = false;
+    if (renderer.color_clear_request.pending) {
+        fill_grid(fluid.bg, renderer.color_clear_request.only_walls, renderer.color_clear_request.noise);
+        renderer.color_clear_request.pending = false;
+        renderer.color_clear_request.noise = false;
+        renderer.color_clear_request.only_walls = false;
     }
 
     run_obstacle_splats();

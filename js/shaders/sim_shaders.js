@@ -267,12 +267,12 @@ uniform float dt;
 uniform float relax;
 uniform float time;
 
-${user || FORCE_FIELD_DEFAULT}
+${user || FORCE_FIELD_DEFAULT.src}
 
 void main() {
     if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
-    vec2 p = ((vec2(0.5) - v_uv) * window_width * 0.5) * vec2(ASPECT, 1.0) + center_worldpos;
-    
+    vec2 p = ((v_uv - vec2(0.5)) * window_width * 0.5) * vec2(ASPECT, 1.0) + center_worldpos;
+
     vec2 F = get_velocity(p) * force_strength;
     vec4 old = texture(tex_velocity, v_uv);
     float k = 1.0 - exp(-relax * dt);
@@ -338,30 +338,50 @@ out vec4 o;
 
 ${obst_glsl}
 
+float wall_fade(vec2 uv) {
+    vec2 e = min(uv, 1.0 - uv) / TEXEL;
+    float m = smoothstep(2.0, 6.0, min(e.x, e.y));
+    for (int i = 0; i < 8; ++i) {
+        float a = 0.78539816 * float(i);
+        vec2 d = vec2(cos(a), sin(a)) * TEXEL;
+        if (solid(uv + d * 3.0) > 0.5) m = 0.0;
+        else if (solid(uv + d * 5.0) > 0.5) m = min(m, 0.5);
+    }
+    return m;
+}
+
 uniform sampler2D tex_velocity;
 uniform sampler2D tex_curl;
 uniform float curl_strength;
 uniform float dt;
 uniform float max_force;
 uniform float max_velocity;
+uniform float drag;
+
 void main() {
     if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
+
     float L = texture(tex_curl, v_uv - vec2(TEXEL.x, 0.0)).x;
     float R = texture(tex_curl, v_uv + vec2(TEXEL.x, 0.0)).x;
     float B = texture(tex_curl, v_uv - vec2(0.0, TEXEL.y)).x;
     float T = texture(tex_curl, v_uv + vec2(0.0, TEXEL.y)).x;
-    float C = texture(tex_curl, v_uv).x;
+    float C = texture(tex_curl, v_uv).x;                    // <- this was missing
 
     vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
-    force /= length(force) + 1e-4;
-    force *= curl_strength * C;
+    force /= max(length(force), 0.05);
+    force *= curl_strength * C * wall_fade(v_uv);           // <- C restored
     force.y *= -1.0;
 
     float fm = length(force);
-    if (fm > max_force) force *= max_force / fm;     // cap the injected energy
+    if (fm > max_force) force *= max_force / fm;
 
     vec2 v = texture(tex_velocity, v_uv).xy + force * dt;
+
     float sp = length(v);
+    float s  = sp / max_velocity;                       // 0..1 normalized speed
+    v *= exp(-drag * s * s * dt);                       // quadratic: negligible when slow
+
+    sp = length(v);
     if (sp > max_velocity) v *= max_velocity / sp;
     o = vec4(edge_valve(v, v_uv), 0.0, 1.0);
 }`;

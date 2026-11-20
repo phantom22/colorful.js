@@ -14,7 +14,9 @@ const mouse = {
     last_processed_frame: -1,
     uv_pos: new Float32Array(2),
     prev_uv_pos: new Float32Array(2),
-    mode: MOUSE_MODE_DYE_FORCE
+    mode: MOUSE_MODE_DYE_FORCE,
+    over_canvas: false,
+    wall_anchor: new Float32Array(2), // where the next ctrl-line starts
 };
 let _mouse_never_processed = true;
 function process_client_pos(clientX, clientY) {
@@ -26,6 +28,7 @@ function process_client_pos(clientX, clientY) {
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
     splat.next_is_start = obstacle_splat.next_is_start = true;
+    mouse.over_canvas = false;
 }
 /** event called on canvas.onmousedown */
 function c_mousedown(e) {
@@ -37,6 +40,7 @@ function c_mousedown(e) {
         _mouse_never_processed = false;
     }
     if (e.button === 0) {
+        mouse.wall_anchor.set(mouse.uv_pos);
         mouse.m1_down = true;
         mouse.m2_down = false;
         dispatch_splat(mouse.uv_pos, true);
@@ -44,22 +48,25 @@ function c_mousedown(e) {
     else if (force.is_active && !mouse.m1_down && e.button === 2) {
         mouse.m2_down = true;
         mouse.prev_uv_pos.set(mouse.uv_pos);
+        canvas_el.style.cursor = "grabbing";
         return;
     }
 }
 /** event called on window.onmousemove */
 function w_mousemove(e) {
+    mouse.over_canvas = e.target.id === "screen";
     process_client_pos(e.clientX, e.clientY);
+    canvas_el.style.cursor = mouse.m2_down ? "grabbing" : "none";
     if (!mouse.m1_down && !mouse.m2_down)
         return;
     if (mouse.m2_down) {
         if (!force.is_active)
             return;
         const f = force.span * 0.5;
-        force.center[0] += (mouse.uv_pos[0] - mouse.prev_uv_pos[0]) * f * ASPECT_NUM;
-        force.center[1] += (mouse.uv_pos[1] - mouse.prev_uv_pos[1]) * f;
+        force.center[0] -= (mouse.uv_pos[0] - mouse.prev_uv_pos[0]) * f * ASPECT_NUM;
+        force.center[1] -= (mouse.uv_pos[1] - mouse.prev_uv_pos[1]) * f;
         mouse.prev_uv_pos.set(mouse.uv_pos);
-        renderer.request_color_clear = { pending: true, noise: false };
+        renderer.request_color_clear(false, false);
         ui_update_bounds();
         ui_field_center.refresh();
         return;
@@ -68,17 +75,23 @@ function w_mousemove(e) {
     if (mouse.last_processed_frame === frame)
         return;
     mouse.last_processed_frame = frame;
+    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
+        return;
     dispatch_splat(mouse.uv_pos, false);
+    mouse.wall_anchor.set(mouse.uv_pos);
 }
 /** event called on window.onmouseup */
 function w_mouseup(e) {
     if (e.button === 2) {
         e.preventDefault();
         mouse.m2_down = false;
+        canvas_el.style.cursor = "none";
         return;
     }
     if (e.button !== 0)
         return;
+    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
+        dispatch_splat(mouse.uv_pos, false);
     splat.next_is_start = obstacle_splat.next_is_start = true;
     mouse.m1_down = false;
 }
@@ -93,7 +106,7 @@ function w_wheel(e) {
     const dy = -e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1);
     force.span *= Math.exp(dy * 0.00025); // wheel down: larger span, more of the field visible
     force.span = Math.min(Math.max(force.span, 0.01), 200);
-    renderer.request_color_clear = { pending: true, noise: false };
+    renderer.request_color_clear(false, false);
     ui_field_span.refresh();
     ui_update_bounds();
 }

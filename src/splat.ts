@@ -120,19 +120,22 @@ function run_splats() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
-function fill_grid(color?:Float32Array, add_noise=false) {
+function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
+    const rgba16fv = new Float32Array([0.0,0.0,0.0,0.0]);
+    texture_fill(obstacles_fbo, rgba16fv);
+
+    if (only_walls) return;
+
     if (color === undefined) {
         color = new Float32Array(4);
         color_logarithm(color, stroke.choosen_palette[stroke.palette_color].fcolor);
     }
     texture_fill(dye_fbo[dye_read], color);
-
-    const rgba16fv = new Float32Array([0.0,0.0,0.0,0.0]);
+    
     texture_fill(pressure_fbo[pressure_read], rgba16fv);
     texture_fill(curl_fbo, rgba16fv);
     texture_fill(divergence_fbo, rgba16fv);
-    texture_fill(obstacles_fbo, rgba16fv);
-
+    
     if (add_noise) {
         curl_velocity_fill_p.use_program();
         curl_velocity_fill_p.uniforms["seed"].set(Math.random());

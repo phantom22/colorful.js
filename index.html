@@ -11,6 +11,10 @@
         <canvas id="screen"></canvas>
 
         <div id="hud" class="hidden">
+            <svg id="wall-overlay" aria-hidden="true">
+                <line id="wall-line"/>
+                <circle id="wall-ring"/>
+            </svg>
             <!-- top: view selector -->
             <div id="view-select">
             <button id="view-btn" aria-haspopup="listbox">
@@ -28,7 +32,14 @@
             <!-- right: inspector -->
             <aside id="inspector">
             <div id="insp-resize" title="Drag to resize"></div>
-            <header><span>INSPECTOR</span><button id="insp-toggle" title="Collapse">–</button></header>
+            <header><span>INSPECTOR</span>
+            <div class="hbtns">
+                <button id="insp-reset" title="Reset all to defaults">
+                <svg viewBox="0 0 24 24"><path d="M15.5 5.94A7 7 0 1 1 8.5 5.94"/><path d="M7.02 9.11L8.5 5.94L5.01 5.64"/></svg>
+                </button>
+                <button id="insp-toggle" title="Collapse">–</button>
+            </div>
+            </header>
             <div id="insp-body"></div>
             </aside>
 

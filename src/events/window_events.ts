@@ -1,9 +1,9 @@
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
-    mouse.m1_down = false;
-    mouse.m2_down = false;
+    mouse.m1_down = mouse.m2_down = false;
     keyboard.shift_down = keyboard.ctrl_down = keyboard.alt_down = false;
     splat.next_is_start = obstacle_splat.next_is_start = true;
+    canvas_el.style.cursor = "none";
 }
 
 function d_visibilitychange() {

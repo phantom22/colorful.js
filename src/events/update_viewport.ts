@@ -1,10 +1,10 @@
 /** event called on window.onresize */
 function update_viewport() {
     const r = canvas_el.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+    // const dpr = window.devicePixelRatio || 1;
+    // const w = r.width, h = r.height;
     canvas_rect = r;
-    // const w = window.innerWidth, h = window.innerHeight;
+    const w = window.innerWidth, h = window.innerHeight;
 
     if (w !== canvas_el.width || h !== canvas_el.height) {
         canvas_el.width = w;

@@ -10,6 +10,36 @@ const FORCE_ICON = '<path d="M13 5.5c-1.8-1-3.4 0-3.7 2L8 19c-.3 1.6-1.4 2.300-2
     '<path d="M5.500 11.500h7"/>' +
     '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>', BORDERS_ICON = '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
     '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
+const UNTITLED = "untitled script";
+const store = (() => {
+    const KEY = "fluid_ui_v1";
+    let data = {};
+    try {
+        data = JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {};
+    }
+    catch { }
+    let timer = 0;
+    const flush = () => { clearTimeout(timer); try {
+        localStorage.setItem(KEY, JSON.stringify(data));
+    }
+    catch { } };
+    const queue = () => { clearTimeout(timer); timer = window.setTimeout(flush, 250); };
+    addEventListener("pagehide", flush); // never lose the last edit on refresh/close
+    return {
+        get: (id) => data[id],
+        set: (id, v) => { data[id] = v; queue(); },
+        del: (id) => { delete data[id]; queue(); },
+    };
+})();
+function same(a, b) {
+    if (typeof a === "boolean" || typeof b === "boolean")
+        return Number(a) === Number(b);
+    if (typeof a === "number" && typeof b === "number")
+        return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
+    if (Array.isArray(a) && Array.isArray(b))
+        return a.length === b.length && a.every((x, i) => same(x, b[i]));
+    return a === b;
+}
 const val = (s) => (typeof s === "function" ? s() : s);
 /** resolves a lazy target and remembers each target's initial value (for reset). */
 function bind(obj, key, copy) {
@@ -70,10 +100,9 @@ class UI_TOOLTIP {
     /** attaches a rich tooltip to an element. */
     static attach(target, src, delay = 350) {
         this.ensure();
-        const html = render_tooltip(src);
         target.addEventListener("mouseenter", () => {
             clearTimeout(this.timer);
-            this.timer = window.setTimeout(() => this.show(target, html), delay);
+            this.timer = window.setTimeout(() => this.show(target, render_tooltip(typeof src === "function" ? src() : src)), delay);
         });
         const hide = () => { clearTimeout(this.timer); this.el.hidden = true; };
         target.addEventListener("mouseleave", hide);
@@ -97,8 +126,14 @@ class UI_TOOLTIP {
 class UI_ELEMENT {
     io;
     row = document.createElement("div");
+    pid = "";
+    track = true;
+    label;
     constructor(parent, label, title, io, row_class = "") {
         this.io = io;
+        const set = io.set;
+        this.label = label;
+        this.io = { ...io, set: (v) => { set(v); this.save(v); this.update_mod(); } };
         this.row.className = ("row " + row_class).trim();
         const l = document.createElement("label");
         l.textContent = label;
@@ -109,6 +144,13 @@ class UI_ELEMENT {
         this.row.appendChild(l);
         parent.appendChild(this.row);
     }
+    /** true when the current value differs from the original default. */
+    get modified() {
+        if (!this.track || this.is_frozen)
+            return false;
+        return !same(this.io.get(), this.io.def());
+    }
+    update_mod() { this.row.classList.toggle("mod", this.modified); }
     set_visible(visible) {
         this.row.hidden = !visible;
     }
@@ -118,16 +160,40 @@ class UI_ELEMENT {
     }
     refresh() {
         this.refresh_visibility();
+        this.update_mod();
         if (!this.row.hidden)
             this.refresh_value();
     }
     get is_frozen() { return this.io.frozen?.() !== undefined; }
-    reset() { this.apply(this.io.def()); }
     /** greys out and disables every input in the row. */
     lock(on) {
         this.row.classList.toggle("frozen", on);
         this.row.querySelectorAll("input,select")
             .forEach(i => { i.disabled = on; });
+    }
+    save(v) {
+        if (this.pid)
+            store.set(this.pid, Array.isArray(v) ? v.slice() : v);
+    }
+    /** persists the current value. Call it after changing the bound object from code. */
+    save_now() { this.save(this.io.get()); }
+    restore() {
+        if (!this.pid || this.is_frozen)
+            return;
+        const v = store.get(this.pid);
+        if (v === undefined)
+            return;
+        try {
+            this.apply(v);
+        }
+        catch {
+            store.del(this.pid);
+        }
+    }
+    reset() {
+        this.apply(this.io.def());
+        if (this.pid)
+            store.del(this.pid); // default, not persisted
     }
 }
 class UI_SLIDER extends UI_ELEMENT {
@@ -153,6 +219,7 @@ class UI_SLIDER extends UI_ELEMENT {
         this.row.addEventListener("dblclick", e => { if (e.target !== this.in_number)
             this.reset(); });
         this.refresh_value();
+        this.drag();
     }
     to_t(v) {
         const min = this.o.min(), max = this.o.max();
@@ -196,6 +263,128 @@ class UI_SLIDER extends UI_ELEMENT {
             this.in_number.value = v.toFixed(decimals);
         this.lock(forced !== undefined);
     }
+    drag() {
+        let active = false, moved = false, y0 = 0, v0 = 0;
+        const decimals = this.o.int ? 0
+            : Math.max(0, Math.ceil(-Math.log10(this.o.step ?? ((this.o.max() - this.o.min()) / 200 || 1))));
+        const base = () => this.o.step ?? (this.o.int ? 1 : this.o.step ?? 10 ** -decimals);
+        // keep the first click from focusing the box, so a drag doesn't start a text edit
+        this.in_number.addEventListener("mousedown", e => {
+            if (document.activeElement !== this.in_number)
+                e.preventDefault();
+        });
+        this.in_number.addEventListener("pointerdown", e => {
+            if (e.button !== 0 || this.is_frozen || document.activeElement === this.in_number)
+                return;
+            active = true;
+            moved = false;
+            y0 = e.clientY;
+            v0 = this.io.get();
+            this.in_number.setPointerCapture(e.pointerId);
+        });
+        this.in_number.addEventListener("pointermove", e => {
+            if (!active)
+                return;
+            if (!moved && Math.abs(e.clientY - y0) < 3)
+                return; // small dead zone, so clicks stay clicks
+            moved = true;
+            const k = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+            this.apply(v0 + (y0 - e.clientY) * base() * k);
+        });
+        const end = (e) => {
+            if (!active)
+                return;
+            active = false;
+            this.in_number.releasePointerCapture(e.pointerId);
+            if (!moved) {
+                this.in_number.focus();
+                this.in_number.select();
+            }
+        };
+        this.in_number.addEventListener("pointerup", end);
+        this.in_number.addEventListener("pointercancel", end);
+    }
+}
+class UI_FLOAT extends UI_ELEMENT {
+    o;
+    input = document.createElement("input");
+    decimals;
+    constructor(parent, label, key, io, o) {
+        super(parent, label, key, io, "float");
+        this.o = o;
+        this.decimals = o.int ? 0
+            : o.decimals ?? (o.step ? Math.max(0, Math.ceil(-Math.log10(o.step))) : 3);
+        this.input.type = "number";
+        this.input.step = String(o.step ?? 10 ** -this.decimals);
+        this.row.appendChild(this.input);
+        this.input.addEventListener("change", () => {
+            const v = parseFloat(this.input.value);
+            Number.isNaN(v) ? this.refresh_value() : this.apply(v);
+        });
+        this.row.addEventListener("dblclick", e => { if (e.target !== this.input)
+            this.reset(); });
+        this.refresh_value();
+        this.drag();
+    }
+    drag() {
+        let active = false, moved = false, y0 = 0, v0 = 0;
+        const base = () => this.o.speed ?? (this.o.int ? 1 : this.o.step ?? 10 ** -this.decimals);
+        // keep the first click from focusing the box, so a drag doesn't start a text edit
+        this.input.addEventListener("mousedown", e => {
+            if (document.activeElement !== this.input)
+                e.preventDefault();
+        });
+        this.input.addEventListener("pointerdown", e => {
+            if (e.button !== 0 || this.is_frozen || document.activeElement === this.input)
+                return;
+            active = true;
+            moved = false;
+            y0 = e.clientY;
+            v0 = this.io.get();
+            this.input.setPointerCapture(e.pointerId);
+        });
+        this.input.addEventListener("pointermove", e => {
+            if (!active)
+                return;
+            if (!moved && Math.abs(e.clientY - y0) < 3)
+                return; // small dead zone, so clicks stay clicks
+            moved = true;
+            const k = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+            this.apply(v0 + (y0 - e.clientY) * base() * k);
+        });
+        const end = (e) => {
+            if (!active)
+                return;
+            active = false;
+            this.input.releasePointerCapture(e.pointerId);
+            if (!moved) {
+                this.input.focus();
+                this.input.select();
+            }
+        };
+        this.input.addEventListener("pointerup", end);
+        this.input.addEventListener("pointercancel", end);
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const { min, max, step, int } = this.o;
+        if (int)
+            v = Math.round(v);
+        if (step)
+            v = Math.round(v / step) * step;
+        v = Math.min(max, Math.max(min, v));
+        this.io.set(v);
+        this.io.onChange?.(v);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        const v = forced ?? this.io.get();
+        if (document.activeElement !== this.input)
+            this.input.value = v.toFixed(this.decimals);
+        this.lock(forced !== undefined);
+    }
 }
 class UI_TOGGLE extends UI_ELEMENT {
     int;
@@ -206,6 +395,7 @@ class UI_TOGGLE extends UI_ELEMENT {
         this.input.type = "checkbox";
         this.row.appendChild(this.input);
         this.input.addEventListener("change", () => this.apply(this.input.checked));
+        this.input.addEventListener("pointerup", () => this.input.blur());
         this.refresh_value();
     }
     apply(v) {
@@ -480,6 +670,9 @@ function lint_glsl(src, required_fn) {
 class UI_GLSL extends UI_ELEMENT {
     o;
     win = document.createElement("div");
+    $title;
+    $lib;
+    saved = [];
     ta;
     hl;
     sq;
@@ -491,11 +684,18 @@ class UI_GLSL extends UI_ELEMENT {
     $btn;
     busy = false;
     btn_timer = 0;
+    $save;
+    query = "";
+    def_title = "";
+    save_timer = 0;
+    $unsaved;
+    title_prev = "";
     constructor(parent, label, key, io, o) {
         const t = io.tooltip;
         delete io.tooltip;
         super(parent, label, key, io, "glsl");
         this.o = o;
+        this.def_title = o.title();
         const b = document.createElement("button");
         b.className = "glsl-open";
         b.textContent = o.button;
@@ -504,6 +704,13 @@ class UI_GLSL extends UI_ELEMENT {
         if (t)
             UI_TOOLTIP.attach(b, t);
     }
+    draft() { return this.pid ? store.get(this.pid) : undefined; }
+    save_draft() {
+        if (this.pid && this.built)
+            store.set(this.pid, { label: this.$title.value, src: this.ta.value });
+    }
+    save() { } // the generic path would store the bare source
+    save_now() { }
     show() { this.lock(this.io.frozen?.() !== undefined); }
     apply(v) { if (this.is_frozen)
         return; this.io.set(v); this.io.onChange?.(v); }
@@ -513,15 +720,24 @@ class UI_GLSL extends UI_ELEMENT {
             return;
         if (!this.built)
             this.build();
+        this.load_saved();
+        const d = this.draft();
+        this.ta.value = d?.src ?? this.io.get();
+        this.$title.value = d?.label ?? this.o.title();
         this.win.hidden = false;
-        this.ta.value = this.io.get();
         this.errors = [];
         this.$err.textContent = "";
         this.render();
         this.ta.focus();
         this.set_btn("idle");
+        this.$lib.hidden = true;
+        this.update_unsaved();
     }
-    close() { this.win.hidden = true; document.activeElement?.blur(); }
+    close() {
+        this.save_draft();
+        this.win.hidden = true;
+        document.activeElement?.blur();
+    }
     /** compiles the editor text. On success the window closes. */
     submit() {
         if (this.busy)
@@ -545,23 +761,75 @@ class UI_GLSL extends UI_ELEMENT {
             }, wait);
         }, 0));
     }
-    run_compile() {
-        const src = this.ta.value;
+    load_saved() {
+        const key = this.o.library?.storage_key;
+        if (!key)
+            return;
+        try {
+            this.saved = JSON.parse(localStorage.getItem(key) ?? "[]");
+        }
+        catch {
+            this.saved = [];
+        }
+    }
+    is_stored() {
+        const label = this.$title.value.trim(), src = this.ta.value;
+        const same = (e) => e.label === label && e.src === src;
+        return this.saved.some(same) || (this.o.library?.defaults().some(same) ?? false);
+    }
+    update_unsaved() {
+        if (!this.built)
+            return;
+        this.$unsaved.hidden = !this.o.library || this.is_stored();
+    }
+    /** lint, compile and apply. Works without the editor DOM, so restore and reset can use it. */
+    try_commit(src, title, restoring) {
         const hard = lint_glsl(src, this.o.required_fn);
         if (hard.length)
             return { ok: false, errors: hard.map(h => ({ ...h, hard: true })) };
-        const log = this.o.compile(src);
+        const log = this.o.compile(src, restoring);
         if (log === null) {
             this.apply(src);
-            this.errors = [];
-            this.$err.textContent = "";
-            this.render();
+            this.o.set_title(title.trim() || this.o.title());
             return { ok: true };
         }
         const found = [];
         for (const m of log.matchAll(/(?:ERROR|WARNING):\s*\d+:(\d+):\s*([^\n]*)/g))
             found.push({ line: Math.max(1, +m[1] - this.o.line_offset), msg: m[2], hard: true });
         return { ok: false, errors: found.length ? found : [{ line: 1, msg: log.trim(), hard: true }] };
+    }
+    run_compile() {
+        const r = this.try_commit(this.ta.value, this.$title.value, false);
+        if (r.ok) {
+            if (this.pid)
+                store.set(this.pid + ".applied", { label: this.o.title(), src: this.ta.value });
+            this.errors = [];
+            this.$err.textContent = "";
+            this.render();
+        }
+        return r;
+    }
+    restore() {
+        const a = this.pid ? store.get(this.pid + ".applied") : undefined;
+        if (a && typeof a.src === "string")
+            this.try_commit(a.src, a.label || this.def_title, true);
+    }
+    reset() {
+        if (this.pid) {
+            store.del(this.pid);
+            store.del(this.pid + ".applied");
+        }
+        const src = this.io.def();
+        this.try_commit(src, this.def_title, true);
+        if (this.built) {
+            this.ta.value = src;
+            this.$title.value = this.def_title;
+            this.errors = [];
+            this.$err.textContent = "";
+            this.set_btn("idle");
+            this.render();
+            this.update_unsaved();
+        }
     }
     show_errors(errs) {
         this.errors = errs;
@@ -603,29 +871,44 @@ class UI_GLSL extends UI_ELEMENT {
         w.className = "glsl-win";
         w.hidden = true;
         w.innerHTML = `
-          <header>
-            <span class="title">${this.o.title}</span>
+        <header>
+            ${this.o.library ? '<button class="lib" title="Browse saved and default fields">▾</button>' : ""}
+            <input class="title" spellcheck="false" maxlength="60" title="Click to rename">
+            <span class="unsaved" hidden>(unsaved)</span>
             <button class="compile" data-state="idle" title="Ctrl+S">
-            <span class="spin"></span><span class="lbl">▶ Compile</span><kbd>Ctrl+S</kbd>
+                <span class="spin"></span><span class="lbl">▶ Compile</span><kbd>Ctrl+S</kbd>
             </button>
             <button class="x" title="Close (Esc)">×</button>
-          </header>
-          <div class="gbody">
+        </header>
+        <div class="lib-pop" hidden></div>
+        <div class="gbody">
             <pre class="gut" aria-hidden="true"></pre>
-            <div class="ed"><pre class="hl" aria-hidden="true"></pre><pre class="sqp" aria-hidden="true"></pre>
-              <textarea spellcheck="false" autocapitalize="off" autocomplete="off"></textarea></div>
-          </div>
-          <footer class="gerr"></footer>`;
+            <div class="ed">
+                <pre class="hl" aria-hidden="true"></pre>
+                <pre class="sqp" aria-hidden="true"></pre>
+                <textarea spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+                <button class="save-snip" title="Save current as a snippet">+ Save</button>
+            </div>
+        </div>
+        <footer class="gerr"></footer>`;
+        this.$title = w.querySelector(".title");
+        this.$lib = w.querySelector(".lib-pop");
         this.gut = w.querySelector(".gut");
         this.hl = w.querySelector(".hl");
         this.sq = w.querySelector(".sqp");
         this.ta = w.querySelector("textarea");
         this.$err = w.querySelector(".gerr");
         this.$btn = w.querySelector(".compile");
+        this.$save = w.querySelector(".save-snip");
+        if (!this.o.library)
+            this.$save.hidden = true;
+        this.$save.addEventListener("click", () => this.save_current());
         w.querySelector(".x").addEventListener("click", () => this.close());
         w.querySelector(".compile").addEventListener("click", () => this.submit());
         this.ta.addEventListener("scroll", () => this.sync());
         this.ta.addEventListener("input", () => {
+            this.save_draft();
+            this.update_unsaved();
             if (this.$btn.dataset.state === "fail" || this.$btn.dataset.state === "ok")
                 this.set_btn("idle");
             this.errors = []; // stale after an edit
@@ -647,19 +930,175 @@ class UI_GLSL extends UI_ELEMENT {
                 e.preventDefault();
                 this.submit();
             }
-            else if (e.key === "Escape")
-                this.close();
-            else if (e.key === "Tab") {
+            else if (e.key === "Escape") {
+                if (!this.$lib.hidden)
+                    this.$lib.hidden = true;
+                else
+                    this.close();
+            }
+            else if (e.key === "Tab" && e.target === this.ta) {
                 e.preventDefault();
                 this.ta.setRangeText("    ", this.ta.selectionStart, this.ta.selectionEnd, "end");
                 this.ta.dispatchEvent(new Event("input"));
             }
+        });
+        this.$unsaved = w.querySelector(".unsaved");
+        this.$title.addEventListener("focus", () => { this.title_prev = this.$title.value; });
+        this.$title.addEventListener("input", () => { this.save_draft(); this.update_unsaved(); });
+        this.$title.addEventListener("change", () => this.rename());
+        this.$title.addEventListener("keydown", e => {
+            if (e.key === "Enter")
+                this.$title.blur();
+            else if (e.key === "Escape") { // revert, don't close the window
+                this.$title.value = this.title_prev;
+                this.save_draft();
+                this.update_unsaved();
+                this.$title.blur();
+                e.stopPropagation();
+            }
+        });
+        w.querySelector(".lib")?.addEventListener("click", e => { e.stopPropagation(); this.toggle_lib(); });
+        w.addEventListener("click", e => {
+            if (!this.$lib.hidden && !this.$lib.contains(e.target))
+                this.$lib.hidden = true;
         });
         isolate(w);
         w.addEventListener("wheel", e => e.stopPropagation(), { passive: true });
         $("hud").appendChild(w);
     }
     refresh_value() { }
+    rename() {
+        this.$title.value = this.$title.value.trim() || UNTITLED;
+        this.save_draft();
+        this.update_unsaved();
+    }
+    $list;
+    toggle_lib() {
+        if (!this.$lib.hidden) {
+            this.$lib.hidden = true;
+            return;
+        }
+        const key = this.o.library.storage_key;
+        try {
+            this.load_saved();
+        }
+        catch {
+            this.saved = [];
+        }
+        this.query = "";
+        this.$lib.replaceChildren();
+        const search = document.createElement("input");
+        search.className = "lib-search";
+        search.type = "text";
+        search.placeholder = "Search…";
+        search.spellcheck = false;
+        search.addEventListener("input", () => { this.query = search.value; this.render_lib(); });
+        search.addEventListener("keydown", e => {
+            if (e.key === "Enter") { // load the first match
+                const first = this.$list.querySelector(".lib-item");
+                first?.click();
+            }
+        });
+        this.$list = document.createElement("div");
+        this.$lib.append(search, this.$list);
+        this.$lib.hidden = false;
+        this.render_lib();
+        search.focus();
+    }
+    render_lib() {
+        const list = this.$list;
+        list.replaceChildren();
+        const q = this.query.trim().toLowerCase();
+        const match = (e) => !q || e.label.toLowerCase().includes(q);
+        const group = (name, items, deletable) => {
+            const shown = items.filter(match);
+            if (!shown.length)
+                return;
+            const h = document.createElement("div");
+            h.className = "lib-h";
+            h.textContent = name;
+            list.appendChild(h);
+            for (const it of shown) {
+                const row = document.createElement("div");
+                row.className = "lib-item";
+                const s = document.createElement("span");
+                s.textContent = it.label;
+                row.appendChild(s);
+                row.addEventListener("click", () => this.pick(it));
+                if (deletable) {
+                    const x = document.createElement("button");
+                    x.textContent = "×";
+                    x.title = "Delete";
+                    x.addEventListener("click", e => {
+                        e.stopPropagation();
+                        this.saved.splice(this.saved.indexOf(it), 1); // index in the full list, not the filtered one
+                        this.persist();
+                        this.update_unsaved();
+                        this.render_lib();
+                    });
+                    row.appendChild(x);
+                }
+                list.appendChild(row);
+            }
+        };
+        group("Saved", this.saved, true);
+        group("Default", this.o.library.defaults(), false);
+        if (!list.firstChild) {
+            const none = document.createElement("div");
+            none.className = "lib-empty";
+            none.textContent = "No matches";
+            list.appendChild(none);
+        }
+    }
+    persist() {
+        try {
+            localStorage.setItem(this.o.library.storage_key, JSON.stringify(this.saved));
+        }
+        catch { }
+    }
+    pick(e) {
+        this.$lib.hidden = true;
+        this.ta.value = e.src;
+        this.$title.value = e.label;
+        this.save_draft();
+        this.update_unsaved();
+        this.errors = [];
+        this.$err.textContent = "";
+        this.set_btn("idle");
+        this.render();
+        this.submit();
+    }
+    flash_save(text) {
+        this.$save.textContent = text;
+        clearTimeout(this.save_timer);
+        this.save_timer = window.setTimeout(() => { this.$save.textContent = "+ Save"; }, 1200);
+    }
+    save_current() {
+        const label = this.$title.value.trim();
+        if (!label || label === UNTITLED) {
+            this.$title.focus();
+            this.$title.select();
+            return this.flash_save("Name it first");
+        }
+        else if (this.o.library?.defaults().some(d => d.label === label && d.src !== this.ta.value)) {
+            this.$title.focus();
+            this.$title.select();
+            return this.flash_save("Name taken");
+        }
+        this.load_saved();
+        const entry = { label, src: this.ta.value };
+        const i = this.saved.findIndex(s => s.label === label);
+        if (i >= 0)
+            this.saved[i] = entry;
+        else
+            this.saved.push(entry);
+        this.persist();
+        this.save_draft();
+        this.update_unsaved();
+        this.flash_save(i >= 0 ? "✓ Updated" : "✓ Saved");
+        if (!this.$lib.hidden)
+            this.render_lib();
+    }
 }
 class UI_SECTION {
     name;
@@ -667,16 +1106,29 @@ class UI_SECTION {
     body = document.createElement("div");
     elements = [];
     visible;
+    mod_labels = [];
+    badge = document.createElement("span");
     constructor(name, visible, open = true) {
         this.name = name;
         const h3 = document.createElement("h3");
         h3.textContent = name;
         h3.addEventListener("click", () => this.open(!this.is_open));
+        this.badge.className = "mods";
+        this.badge.hidden = true;
+        h3.appendChild(this.badge);
+        UI_TOOLTIP.attach(this.badge, () => this.mod_tip());
         this.body.className = "body";
         this.el.dataset.id = name;
         this.el.append(h3, this.body);
         this.open(open);
         this.visible = visible;
+    }
+    mod_tip() {
+        const n = this.mod_labels.length;
+        return `$Modified$ ` +
+            `{[${n}] ${n === 1 ? "setting differs" : "settings differ"} from the default in this section.} ` +
+            `{${this.mod_labels.join("\n")}} ` +
+            `{Double-click a row to reset it.}`;
     }
     get is_open() { return this.el.classList.contains("open"); }
     open(v = true) { this.el.classList.toggle("open", v); }
@@ -697,8 +1149,12 @@ class UI_SECTION {
         this.refresh_visibility();
         if (!this.el.hidden)
             this.elements.forEach(e => e.refresh());
+        const mods = this.elements.filter(e => e.modified);
+        this.mod_labels = mods.map(e => e.label);
+        this.badge.hidden = mods.length === 0;
+        this.badge.textContent = `● ${mods.length}`;
+        return mods.length;
     }
-    push(e) { this.elements.push(e); return e; }
     slider(d) {
         const b = bind(d.obj, d.key, x => x);
         return this.push(new UI_SLIDER(this.body, d.label, String(d.key), {
@@ -706,7 +1162,7 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, { min: () => val(d.min), max: () => val(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false }));
+        }, { min: () => val(d.min), max: () => val(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false }), d);
     }
     toggle(d) {
         const b = bind(d.obj, d.key, x => x);
@@ -715,7 +1171,7 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, d.int ?? false));
+        }, d.int ?? false), d);
     }
     enum(d) {
         const b = bind(d.obj, d.key, x => x);
@@ -724,7 +1180,7 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, () => val(d.options)));
+        }, () => val(d.options)), d);
     }
     vec(n, d) {
         const arr = (t) => t[d.key];
@@ -736,7 +1192,7 @@ class UI_SECTION {
                 a[i] = v[i]; }, // in place
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, n, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step, labels: d.labels ?? "xyzw" }));
+        }, n, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step, labels: d.labels ?? "xyzw" }), d);
     }
     vec2(d) { return this.vec(2, d); }
     vec3(d) { return this.vec(3, d); }
@@ -751,7 +1207,7 @@ class UI_SECTION {
                 a[i] = v[i]; }, // in place
             def: b.def, frozen: d.frozen, onChange: d.onPick,
             visible: d.visible, tooltip: d.tooltip
-        }));
+        }), d);
     }
     glsl(d) {
         const b = bind(d.obj, d.key, x => x);
@@ -760,7 +1216,7 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, d));
+        }, d), d);
     }
     /** a small heading inside the section, to group the rows that follow it. */
     subtitle(text) {
@@ -776,6 +1232,23 @@ class UI_SECTION {
         el.className = "sep";
         this.body.appendChild(el);
         return el;
+    }
+    push(e, d) {
+        if (d.persist !== false && typeof d.obj !== "function")
+            e.pid = `${this.name}.${d.label}`;
+        e.track = d.track !== false;
+        this.elements.push(e);
+        return e;
+    }
+    float(d) {
+        const b = bind(d.obj, d.key, x => x);
+        return this.push(new UI_FLOAT(this.body, d.label, String(d.key), {
+            get: () => b.target()[d.key],
+            set: v => { b.target()[d.key] = v; },
+            def: b.def, frozen: d.frozen, onChange: d.onChange,
+            visible: d.visible, tooltip: d.tooltip
+        }, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step,
+            int: d.int ?? false, decimals: d.decimals }), d);
     }
 }
 class UI_PALETTE {
@@ -849,7 +1322,20 @@ class UI_INSPECTOR {
     constructor() {
         isolate(this.root);
         this.btn.addEventListener("click", () => this.collapse(!this.collapsed));
+        $("insp-reset").addEventListener("click", e => { this.reset_all(); e.currentTarget.blur(); });
         this.init_resize();
+    }
+    reset_all() {
+        for (const s of this.sections.values())
+            for (const e of s.elements)
+                e.reset();
+        this.refresh();
+    }
+    restore_all() {
+        for (const s of this.sections.values())
+            for (const e of s.elements)
+                e.restore();
+        this.refresh();
     }
     get collapsed() { return this.root.classList.contains("min"); }
     collapse(v = true) {
@@ -881,8 +1367,12 @@ class UI_INSPECTOR {
         target.open(true);
         target.el.scrollIntoView({ block: "nearest" });
     }
-    refresh() { for (const s of this.sections.values())
-        s.refresh(); }
+    refresh() {
+        let n = 0;
+        for (const s of this.sections.values())
+            n += s.refresh();
+        $("insp-reset").classList.toggle("dirty", n > 0);
+    }
     toggle_visibility() {
         this.root.hidden = !this.root.hidden;
     }
@@ -1074,10 +1564,10 @@ class UI_BOUNDS {
      *  decrease toward the right and the top. */
     update(cx, cy, hw, hh) {
         const x0 = cx - hw, x1 = cx + hw, y0 = cy - hh, y1 = cy + hh;
-        UI_BOUNDS.fmt(this.tl, x0, y1);
-        UI_BOUNDS.fmt(this.tr, x1, y1);
-        UI_BOUNDS.fmt(this.bl, x0, y0);
-        UI_BOUNDS.fmt(this.br, x1, y0);
+        UI_BOUNDS.fmt(this.tl, x0, y1); // quadrant II  (-, +)
+        UI_BOUNDS.fmt(this.tr, x1, y1); // quadrant I   (+, +)
+        UI_BOUNDS.fmt(this.bl, x0, y0); // quadrant III (-, -)
+        UI_BOUNDS.fmt(this.br, x1, y0); // quadrant IV  (+, -)
     }
     toggle_visibility() {
         this.tl.hidden = this.tr.hidden = this.bl.hidden = this.br.hidden = !this.tl.hidden;

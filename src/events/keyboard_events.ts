@@ -31,11 +31,11 @@ function w_keydown(e:KeyboardEvent) {
             ui_force_btn.set(force.is_active, false);
             return;
         case "Backspace":
-            renderer.request_color_clear.pending = true;
-            renderer.request_color_clear.noise = true;
+            renderer.request_color_clear(true, keyboard.ctrl_down);
             return;
         case "Escape":
             ui_container.hidden = !ui_container.hidden;
+            if (ui_field_glsl.is_open) ui_field_glsl.close();
             return;
         case "ArrowRight":
             // @ts-ignore

@@ -1,6 +1,6 @@
 /** event called by window.onload */
 function main() {
-    init_shaders();
+    init_webgl();
     init_textures();
     init_ui();
 
@@ -16,4 +16,5 @@ function main() {
     draw(0);
 }
 
-//
+// add UI_FIELD_FLOAT, to have Precision > time be editable
+// remove focus from toggle after clicking it

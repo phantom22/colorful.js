@@ -94,7 +94,7 @@ function init_shaders() {
         new uniform("outline_width", GL_FLOAT, U_UPDATE, () => obstacle_splat.outline_width),
         new uniform("erase", GL_FLOAT)
     ]);
-    forcefield_p = new shader_program("forcefield", quad_vert, sh_forcefield(force.glsl), [
+    forcefield_p = new shader_program("forcefield", quad_vert, sh_forcefield(force.glsl.src), [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
@@ -139,6 +139,7 @@ function init_shaders() {
         new uniform("curl_strength", GL_FLOAT, U_UPDATE, () => fluid.curl_strength),
         new uniform("max_velocity", GL_FLOAT, U_UPDATE, () => fluid.max_velocity),
         new uniform("max_force", GL_FLOAT, U_UPDATE, () => fluid.max_force),
+        new uniform("drag", GL_FLOAT, U_UPDATE, () => fluid.drag)
     ]);
     divergence_p = new shader_program("divergence", quad_vert, sh_sim_divergence, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),

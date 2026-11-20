@@ -1,4 +1,185 @@
 "use strict";
+let DEFAULT_FORCE_FIELDS;
+{
+    const __FORCE_FIELDS_COMMON = `float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3. - 2. * f);
+    return mix(mix(hash21(i),               hash21(i + vec2(1, 0)), f.x),
+               mix(hash21(i + vec2(0, 1)),  hash21(i + vec2(1, 1)), f.x), f.y);
+}`;
+    const sh_double_gyre = `${__FORCE_FIELDS_COMMON}
+
+vec2 get_velocity(vec2 p) {
+    const float A = 0.1, eps = 0.25, w = 2. * 3.14159265 / 10.;
+    float s = eps * sin(w * time);
+    float a = s, b = 1. - 2. * s;
+    float f  = a * p.x * p.x + b * p.x;
+    float df = 2. * a * p.x + b;
+    float PI = 3.14159265;
+    return vec2(-PI * A * sin(PI * f) * cos(PI * p.y),
+                 PI * A * cos(PI * f) * sin(PI * p.y) * df);
+}`;
+    const sh_karman_vortex_sheet = `vec2 vortex_row(vec2 p, float a, float gamma) {
+    float k = 6.28318530718 / a;
+    float d = cosh(k * p.y) - cos(k * p.x) + 0.02;   // softened denominator
+    return gamma / (2. * a) * vec2(sinh(k * p.y), -sin(k * p.x)) / d;
+}
+
+vec2 get_velocity(vec2 p) {
+    const float a = 1.0, h = 0.25, G = 1.0;
+    p.x -= time * 0.1;                               // slow drift of the street
+    vec2 v  = vortex_row(p - vec2(0., h),          a, -G);
+    v      += vortex_row(p - vec2(0.5 * a, -h),    a,  G);
+    return v;
+}`;
+    const sh_electric_dipole = `vec2 charge(vec2 p, vec2 c, float q) {
+    vec2 d = p - c;
+    return q * d / (dot(d, d) + 0.01);
+}
+
+vec2 get_velocity(vec2 p) {
+    float t = time * 0.5;
+    vec2 off = 0.6 * vec2(cos(t), sin(t));
+    return charge(p,  off,  1.) + charge(p, -off, -1.);
+}`;
+    const sh_curl_noise = `${__FORCE_FIELDS_COMMON}
+
+float potential(vec2 p) {
+    float s = 0., a = 0.5;
+    for (int i = 0; i < 4; i++) {
+        s += a * vnoise(p + time * 0.15 * float(i + 1));
+        p = p * 2.03 + 17.1;
+        a *= 0.5;
+    }
+    return s;
+}
+
+vec2 get_velocity(vec2 p) {
+    const float e = 1e-2;
+    float dpdx = potential(p + vec2(e, 0.)) - potential(p - vec2(e, 0.));
+    float dpdy = potential(p + vec2(0., e)) - potential(p - vec2(0., e));
+    return vec2(dpdy, -dpdx) / (2. * e) * 1.5;
+}`;
+    const sh_orbiting_gravity_wells = `vec2 get_velocity(vec2 p) {
+    vec2 v = vec2(0.);
+    for (int i = 0; i < 3; i++) {
+        float ang = time * 0.4 + float(i) * 2.0943951;     // 120° apart
+        vec2 c = 0.7 * vec2(cos(ang), sin(ang));
+        vec2 d = c - p;
+        float r2 = dot(d, d) + 0.03;                         // softening
+        vec2 dir = d * inversesqrt(r2);
+        vec2 tang = vec2(-dir.y, dir.x);
+        float g = 0.5 / r2;
+        v += g * (dir + 0.8 * tang);                         // pull + swirl
+    }
+    return v;
+}`;
+    const sh_drifting_taylor_green = `vec2 get_velocity(vec2 p) {
+    p = p * 3. + 0.5 * vec2(sin(time * 0.3), cos(time * 0.4));
+    return vec2( sin(p.x) * cos(p.y),
+                -cos(p.x) * sin(p.y));
+}`;
+    const sh_cilinder_potential_flow = `vec2 get_velocity(vec2 p) {
+    const float U = 1.0, R = 0.5;
+    float a = time * 0.3;
+    float c = cos(a), s = sin(a);
+
+    vec2 q = vec2(c * p.x + s * p.y, -s * p.x + c * p.y);   // rotate into flow frame
+    float r2 = dot(q, q);
+    if (r2 < R * R) return vec2(0.);
+
+    float r4 = r2 * r2;
+    vec2 v = U * vec2(1. - R * R * (q.x * q.x - q.y * q.y) / r4,
+                         -2. * R * R * q.x * q.y / r4);
+
+    float G = 1.5 * sin(time * 0.7);                         // circulation
+    v += G / (6.28318530718 * r2) * vec2(-q.y, q.x);
+
+    return vec2(c * v.x - s * v.y, s * v.x + c * v.y);       // rotate back
+}`;
+    const sh_pendulum_phase = `vec2 get_velocity(vec2 p) {
+    p *= 3.;
+    float drive = 0.5 * sin(time);
+    return vec2(p.y,
+                -sin(p.x) - 0.15 * p.y + drive);
+}`;
+    const sh_vortex_pair = `vec2 lamb_oseen(vec2 p, vec2 c, float gamma, float core2) {
+    vec2 d = p - c;
+    float r2 = dot(d, d) + 1e-6;
+    return gamma * (1. - exp(-r2 / core2)) / (6.28318530718 * r2) * vec2(-d.y, d.x);
+}
+
+vec2 get_velocity(vec2 p) {
+    const float G = 1.0, sep = 0.8;
+    float omega = G / (3.14159265 * sep * sep);
+    float a = time * omega;
+    vec2 c = 0.5 * sep * vec2(cos(a), sin(a));
+    return lamb_oseen(p,  c, G, 0.04)
+         + lamb_oseen(p, -c, G, 0.04);
+}`;
+    const sh_spiral_sink = `vec2 get_velocity(vec2 p) {
+    float r2 = dot(p, p) + 0.02;
+    vec2 radial = -p / r2;                        // inward
+    vec2 tang   = vec2(-p.y, p.x) / r2;           // swirl
+
+    float sink  = 0.6 + 0.4 * sin(time * 0.8);
+    float swirl = 0.9 * cos(time * 0.5);
+    return sink * radial + swirl * tang;
+}`;
+    DEFAULT_FORCE_FIELDS = [
+        {
+            label: "Double gyre",
+            src: sh_double_gyre
+        },
+        {
+            label: "Kármán vortex street",
+            src: sh_karman_vortex_sheet
+        },
+        {
+            label: "Electric dipole field",
+            src: sh_electric_dipole
+        },
+        {
+            label: "Curl noise (divergence-free turbulence)",
+            src: sh_curl_noise
+        },
+        {
+            label: "Orbiting gravity wells with swirl",
+            src: sh_orbiting_gravity_wells
+        },
+        {
+            label: "Drifting Taylor-Green cells",
+            src: sh_drifting_taylor_green
+        },
+        {
+            label: "Potential flow past a cylinder",
+            src: sh_cilinder_potential_flow
+        },
+        {
+            label: "Driven damped pendulum phase portrait",
+            src: sh_pendulum_phase
+        },
+        {
+            label: "Co-rotating vortex pair (orbiting)",
+            src: sh_vortex_pair
+        },
+        {
+            label: "Pulsing spiral sink",
+            src: sh_spiral_sink
+        },
+    ];
+    DEFAULT_FORCE_FIELDS.forEach(Object.freeze);
+    Object.freeze(DEFAULT_FORCE_FIELDS);
+}
+const FORCE_FIELD_DEFAULT = DEFAULT_FORCE_FIELDS[Math.floor(Math.random() * DEFAULT_FORCE_FIELDS.length)];
+
+"use strict";
 const searchParams = new (class {
     url;
     constructor() {
@@ -91,145 +272,12 @@ const fluid = {
     },
     sim_res: resolution(sim_resolution, window_ar),
     dye_res: resolution(dye_resolution, window_ar),
-    open_borders: 0
+    open_borders: 0,
+    drag: 0.05
 };
 color_logarithm(fluid.bg, bg);
 const TEXEL = fluid.sim_res.texel.toString(), DYE_TEXEL = fluid.dye_res.texel.toString(), [N1, N2] = fluid.sim_res.dims, [M1, M2] = fluid.dye_res.dims, ASPECT_NUM = N1 / N2, ASPECT = ASPECT_NUM.toFixed(6);
 const texel = (t) => N1 < N2 ? t / N1 : t / N2, texel_radius = (t) => texel(t) * 0.5;
-const __FORCE_FIELDS_COMMON = `float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
-
-float vnoise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3. - 2. * f);
-    return mix(mix(hash21(i),               hash21(i + vec2(1, 0)), f.x),
-               mix(hash21(i + vec2(0, 1)),  hash21(i + vec2(1, 1)), f.x), f.y);
-}`;
-const DEFAULT_FORCE_FIELDS = [
-    `${__FORCE_FIELDS_COMMON}
-
-vec2 get_velocity(vec2 p) {
-    const float A = 0.1, eps = 0.25, w = 2. * 3.14159265 / 10.;
-    float s = eps * sin(w * time);
-    float a = s, b = 1. - 2. * s;
-    float f  = a * p.x * p.x + b * p.x;
-    float df = 2. * a * p.x + b;
-    float PI = 3.14159265;
-    return vec2(-PI * A * sin(PI * f) * cos(PI * p.y),
-                 PI * A * cos(PI * f) * sin(PI * p.y) * df);
-}`,
-    `vec2 vortex_row(vec2 p, float a, float gamma) {
-    float k = 6.28318530718 / a;
-    float d = cosh(k * p.y) - cos(k * p.x) + 0.02;   // softened denominator
-    return gamma / (2. * a) * vec2(sinh(k * p.y), -sin(k * p.x)) / d;
-}
-
-vec2 get_velocity(vec2 p) {
-    const float a = 1.0, h = 0.25, G = 1.0;
-    p.x -= time * 0.1;                               // slow drift of the street
-    vec2 v  = vortex_row(p - vec2(0., h),          a, -G);
-    v      += vortex_row(p - vec2(0.5 * a, -h),    a,  G);
-    return v;
-}`,
-    `vec2 charge(vec2 p, vec2 c, float q) {
-    vec2 d = p - c;
-    return q * d / (dot(d, d) + 0.01);
-}
-
-vec2 get_velocity(vec2 p) {
-    float t = time * 0.5;
-    vec2 off = 0.6 * vec2(cos(t), sin(t));
-    return charge(p,  off,  1.) + charge(p, -off, -1.);
-}`,
-    `${__FORCE_FIELDS_COMMON}
-
-float potential(vec2 p) {
-    float s = 0., a = 0.5;
-    for (int i = 0; i < 4; i++) {
-        s += a * vnoise(p + time * 0.15 * float(i + 1));
-        p = p * 2.03 + 17.1;
-        a *= 0.5;
-    }
-    return s;
-}
-
-vec2 get_velocity(vec2 p) {
-    const float e = 1e-2;
-    float dpdx = potential(p + vec2(e, 0.)) - potential(p - vec2(e, 0.));
-    float dpdy = potential(p + vec2(0., e)) - potential(p - vec2(0., e));
-    return vec2(dpdy, -dpdx) / (2. * e) * 1.5;
-}`,
-    `vec2 get_velocity(vec2 p) {
-    vec2 v = vec2(0.);
-    for (int i = 0; i < 3; i++) {
-        float ang = time * 0.4 + float(i) * 2.0943951;     // 120° apart
-        vec2 c = 0.7 * vec2(cos(ang), sin(ang));
-        vec2 d = c - p;
-        float r2 = dot(d, d) + 0.03;                         // softening
-        vec2 dir = d * inversesqrt(r2);
-        vec2 tang = vec2(-dir.y, dir.x);
-        float g = 0.5 / r2;
-        v += g * (dir + 0.8 * tang);                         // pull + swirl
-    }
-    return v;
-}`,
-    `vec2 get_velocity(vec2 p) {
-    p = p * 3. + 0.5 * vec2(sin(time * 0.3), cos(time * 0.4));
-    return vec2( sin(p.x) * cos(p.y),
-                -cos(p.x) * sin(p.y));
-}`,
-    `vec2 get_velocity(vec2 p) {
-    const float U = 1.0, R = 0.5;
-    float a = time * 0.3;
-    float c = cos(a), s = sin(a);
-
-    vec2 q = vec2(c * p.x + s * p.y, -s * p.x + c * p.y);   // rotate into flow frame
-    float r2 = dot(q, q);
-    if (r2 < R * R) return vec2(0.);
-
-    float r4 = r2 * r2;
-    vec2 v = U * vec2(1. - R * R * (q.x * q.x - q.y * q.y) / r4,
-                         -2. * R * R * q.x * q.y / r4);
-
-    float G = 1.5 * sin(time * 0.7);                         // circulation
-    v += G / (6.28318530718 * r2) * vec2(-q.y, q.x);
-
-    return vec2(c * v.x - s * v.y, s * v.x + c * v.y);       // rotate back
-}`,
-    `vec2 get_velocity(vec2 p) {
-    p *= 3.;
-    float drive = 0.5 * sin(time);
-    return vec2(p.y,
-                -sin(p.x) - 0.15 * p.y + drive);
-}`,
-    `vec2 lamb_oseen(vec2 p, vec2 c, float gamma, float core2) {
-    vec2 d = p - c;
-    float r2 = dot(d, d) + 1e-6;
-    return gamma * (1. - exp(-r2 / core2)) / (6.28318530718 * r2) * vec2(-d.y, d.x);
-}
-
-vec2 get_velocity(vec2 p) {
-    const float G = 1.0, sep = 0.8;
-    float omega = G / (3.14159265 * sep * sep);
-    float a = time * omega;
-    vec2 c = 0.5 * sep * vec2(cos(a), sin(a));
-    return lamb_oseen(p,  c, G, 0.04)
-         + lamb_oseen(p, -c, G, 0.04);
-}`,
-    `vec2 get_velocity(vec2 p) {
-    float r2 = dot(p, p) + 0.02;
-    vec2 radial = -p / r2;                        // inward
-    vec2 tang   = vec2(-p.y, p.x) / r2;           // swirl
-
-    float sink  = 0.6 + 0.4 * sin(time * 0.8);
-    float swirl = 0.9 * cos(time * 0.5);
-    return sink * radial + swirl * tang;
-}`
-];
-const FORCE_FIELD_DEFAULT = DEFAULT_FORCE_FIELDS[Math.floor(Math.random() * DEFAULT_FORCE_FIELDS.length)];
 const force = {
     is_active: false,
     center: new Float32Array([0.0, 0.0]),
@@ -247,9 +295,9 @@ const force = {
         color_logarithm(t, v);
         return t;
     },
-    glsl: FORCE_FIELD_DEFAULT,
+    glsl: { ...FORCE_FIELD_DEFAULT },
     pure_vector_field: false,
-    relaxation: 0.5
+    relaxation: 500.0
 };
 function rate_from_ms(wave_delay_ms, convergence_fraction = 0.95) {
     const t_seconds = wave_delay_ms * 0.001;
@@ -990,12 +1038,12 @@ uniform float dt;
 uniform float relax;
 uniform float time;
 
-${user || FORCE_FIELD_DEFAULT}
+${user || FORCE_FIELD_DEFAULT.src}
 
 void main() {
     if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
-    vec2 p = ((vec2(0.5) - v_uv) * window_width * 0.5) * vec2(ASPECT, 1.0) + center_worldpos;
-    
+    vec2 p = ((v_uv - vec2(0.5)) * window_width * 0.5) * vec2(ASPECT, 1.0) + center_worldpos;
+
     vec2 F = get_velocity(p) * force_strength;
     vec4 old = texture(tex_velocity, v_uv);
     float k = 1.0 - exp(-relax * dt);
@@ -1061,30 +1109,50 @@ out vec4 o;
 
 ${obst_glsl}
 
+float wall_fade(vec2 uv) {
+    vec2 e = min(uv, 1.0 - uv) / TEXEL;
+    float m = smoothstep(2.0, 6.0, min(e.x, e.y));
+    for (int i = 0; i < 8; ++i) {
+        float a = 0.78539816 * float(i);
+        vec2 d = vec2(cos(a), sin(a)) * TEXEL;
+        if (solid(uv + d * 3.0) > 0.5) m = 0.0;
+        else if (solid(uv + d * 5.0) > 0.5) m = min(m, 0.5);
+    }
+    return m;
+}
+
 uniform sampler2D tex_velocity;
 uniform sampler2D tex_curl;
 uniform float curl_strength;
 uniform float dt;
 uniform float max_force;
 uniform float max_velocity;
+uniform float drag;
+
 void main() {
     if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
+
     float L = texture(tex_curl, v_uv - vec2(TEXEL.x, 0.0)).x;
     float R = texture(tex_curl, v_uv + vec2(TEXEL.x, 0.0)).x;
     float B = texture(tex_curl, v_uv - vec2(0.0, TEXEL.y)).x;
     float T = texture(tex_curl, v_uv + vec2(0.0, TEXEL.y)).x;
-    float C = texture(tex_curl, v_uv).x;
+    float C = texture(tex_curl, v_uv).x;                    // <- this was missing
 
     vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
-    force /= length(force) + 1e-4;
-    force *= curl_strength * C;
+    force /= max(length(force), 0.05);
+    force *= curl_strength * C * wall_fade(v_uv);           // <- C restored
     force.y *= -1.0;
 
     float fm = length(force);
-    if (fm > max_force) force *= max_force / fm;     // cap the injected energy
+    if (fm > max_force) force *= max_force / fm;
 
     vec2 v = texture(tex_velocity, v_uv).xy + force * dt;
+
     float sp = length(v);
+    float s  = sp / max_velocity;                       // 0..1 normalized speed
+    v *= exp(-drag * s * s * dt);                       // quadratic: negligible when slow
+
+    sp = length(v);
     if (sp > max_velocity) v *= max_velocity / sp;
     o = vec4(edge_valve(v, v_uv), 0.0, 1.0);
 }`;
@@ -1388,10 +1456,10 @@ void main() {
 /** event called on window.onresize */
 function update_viewport() {
     const r = canvas_el.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+    // const dpr = window.devicePixelRatio || 1;
+    // const w = r.width, h = r.height;
     canvas_rect = r;
-    // const w = window.innerWidth, h = window.innerHeight;
+    const w = window.innerWidth, h = window.innerHeight;
     if (w !== canvas_el.width || h !== canvas_el.height) {
         canvas_el.width = w;
         canvas_el.height = h;
@@ -1498,17 +1566,19 @@ function run_splats() {
     splat.queue.length = 0;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
-function fill_grid(color, add_noise = false) {
+function fill_grid(color, only_walls = false, add_noise = false) {
+    const rgba16fv = new Float32Array([0.0, 0.0, 0.0, 0.0]);
+    texture_fill(obstacles_fbo, rgba16fv);
+    if (only_walls)
+        return;
     if (color === undefined) {
         color = new Float32Array(4);
         color_logarithm(color, stroke.choosen_palette[stroke.palette_color].fcolor);
     }
     texture_fill(dye_fbo[dye_read], color);
-    const rgba16fv = new Float32Array([0.0, 0.0, 0.0, 0.0]);
     texture_fill(pressure_fbo[pressure_read], rgba16fv);
     texture_fill(curl_fbo, rgba16fv);
     texture_fill(divergence_fbo, rgba16fv);
-    texture_fill(obstacles_fbo, rgba16fv);
     if (add_noise) {
         curl_velocity_fill_p.use_program();
         curl_velocity_fill_p.uniforms["seed"].set(Math.random());
@@ -1546,7 +1616,7 @@ function run_obstacle_splats() {
 const renderer = {
     /** when true, the grid vertex color lut table will get cleared with grid_bg
      * color (initial grid color). */
-    request_color_clear: { noise: false, pending: false },
+    color_clear_request: { noise: false, pending: false, only_walls: false },
     /** current frame id. */
     frame: 0,
     /** used to calculate delta_time. */
@@ -1558,7 +1628,12 @@ const renderer = {
     fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
     checkboard_fill: false,
     time_scale: 1.0,
-    time: 0
+    time: 0,
+    request_color_clear(noise, only_walls) {
+        renderer.color_clear_request.pending = true;
+        renderer.color_clear_request.noise = noise;
+        renderer.color_clear_request.only_walls = only_walls;
+    }
 };
 function draw(timestamp) {
     renderer.delta_time = (timestamp - renderer.prev_timestamp) * 0.001;
@@ -1567,18 +1642,20 @@ function draw(timestamp) {
         requestAnimationFrame(draw);
         return;
     }
-    renderer.time = timestamp * 0.001;
+    renderer.time += renderer.delta_time;
     if (++renderer.frame % 6 === 0)
         ui_inspector.refresh();
     ui_status.fps(renderer.delta_time);
+    ui_update_mouse_overlay();
     gl.enable(gl.BLEND);
     gl.viewport(0, 0, N1, N2);
     gl.enable(gl.BLEND);
     gl.bindVertexArray(vao);
-    if (renderer.request_color_clear.pending) {
-        fill_grid(fluid.bg, renderer.request_color_clear.noise);
-        renderer.request_color_clear.pending = false;
-        renderer.request_color_clear.noise = false;
+    if (renderer.color_clear_request.pending) {
+        fill_grid(fluid.bg, renderer.color_clear_request.only_walls, renderer.color_clear_request.noise);
+        renderer.color_clear_request.pending = false;
+        renderer.color_clear_request.noise = false;
+        renderer.color_clear_request.only_walls = false;
     }
     run_obstacle_splats();
     gl.disable(gl.BLEND);
@@ -1815,11 +1892,12 @@ function w_keydown(e) {
             ui_force_btn.set(force.is_active, false);
             return;
         case "Backspace":
-            renderer.request_color_clear.pending = true;
-            renderer.request_color_clear.noise = true;
+            renderer.request_color_clear(true, keyboard.ctrl_down);
             return;
         case "Escape":
             ui_container.hidden = !ui_container.hidden;
+            if (ui_field_glsl.is_open)
+                ui_field_glsl.close();
             return;
         case "ArrowRight":
             // @ts-ignore
@@ -1891,7 +1969,9 @@ const mouse = {
     last_processed_frame: -1,
     uv_pos: new Float32Array(2),
     prev_uv_pos: new Float32Array(2),
-    mode: MOUSE_MODE_DYE_FORCE
+    mode: MOUSE_MODE_DYE_FORCE,
+    over_canvas: false,
+    wall_anchor: new Float32Array(2), // where the next ctrl-line starts
 };
 let _mouse_never_processed = true;
 function process_client_pos(clientX, clientY) {
@@ -1903,6 +1983,7 @@ function process_client_pos(clientX, clientY) {
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
     splat.next_is_start = obstacle_splat.next_is_start = true;
+    mouse.over_canvas = false;
 }
 /** event called on canvas.onmousedown */
 function c_mousedown(e) {
@@ -1914,6 +1995,7 @@ function c_mousedown(e) {
         _mouse_never_processed = false;
     }
     if (e.button === 0) {
+        mouse.wall_anchor.set(mouse.uv_pos);
         mouse.m1_down = true;
         mouse.m2_down = false;
         dispatch_splat(mouse.uv_pos, true);
@@ -1921,22 +2003,25 @@ function c_mousedown(e) {
     else if (force.is_active && !mouse.m1_down && e.button === 2) {
         mouse.m2_down = true;
         mouse.prev_uv_pos.set(mouse.uv_pos);
+        canvas_el.style.cursor = "grabbing";
         return;
     }
 }
 /** event called on window.onmousemove */
 function w_mousemove(e) {
+    mouse.over_canvas = e.target.id === "screen";
     process_client_pos(e.clientX, e.clientY);
+    canvas_el.style.cursor = mouse.m2_down ? "grabbing" : "none";
     if (!mouse.m1_down && !mouse.m2_down)
         return;
     if (mouse.m2_down) {
         if (!force.is_active)
             return;
         const f = force.span * 0.5;
-        force.center[0] += (mouse.uv_pos[0] - mouse.prev_uv_pos[0]) * f * ASPECT_NUM;
-        force.center[1] += (mouse.uv_pos[1] - mouse.prev_uv_pos[1]) * f;
+        force.center[0] -= (mouse.uv_pos[0] - mouse.prev_uv_pos[0]) * f * ASPECT_NUM;
+        force.center[1] -= (mouse.uv_pos[1] - mouse.prev_uv_pos[1]) * f;
         mouse.prev_uv_pos.set(mouse.uv_pos);
-        renderer.request_color_clear = { pending: true, noise: false };
+        renderer.request_color_clear(false, false);
         ui_update_bounds();
         ui_field_center.refresh();
         return;
@@ -1945,17 +2030,23 @@ function w_mousemove(e) {
     if (mouse.last_processed_frame === frame)
         return;
     mouse.last_processed_frame = frame;
+    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
+        return;
     dispatch_splat(mouse.uv_pos, false);
+    mouse.wall_anchor.set(mouse.uv_pos);
 }
 /** event called on window.onmouseup */
 function w_mouseup(e) {
     if (e.button === 2) {
         e.preventDefault();
         mouse.m2_down = false;
+        canvas_el.style.cursor = "none";
         return;
     }
     if (e.button !== 0)
         return;
+    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
+        dispatch_splat(mouse.uv_pos, false);
     splat.next_is_start = obstacle_splat.next_is_start = true;
     mouse.m1_down = false;
 }
@@ -1970,7 +2061,7 @@ function w_wheel(e) {
     const dy = -e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1);
     force.span *= Math.exp(dy * 0.00025); // wheel down: larger span, more of the field visible
     force.span = Math.min(Math.max(force.span, 0.01), 200);
-    renderer.request_color_clear = { pending: true, noise: false };
+    renderer.request_color_clear(false, false);
     ui_field_span.refresh();
     ui_update_bounds();
 }
@@ -1978,10 +2069,10 @@ function w_wheel(e) {
 "use strict";
 /** event called on window.onmouseleave and on window.onblur */
 function state_cleanup() {
-    mouse.m1_down = false;
-    mouse.m2_down = false;
+    mouse.m1_down = mouse.m2_down = false;
     keyboard.shift_down = keyboard.ctrl_down = keyboard.alt_down = false;
     splat.next_is_start = obstacle_splat.next_is_start = true;
+    canvas_el.style.cursor = "none";
 }
 function d_visibilitychange() {
     renderer.window_hidden = document.hidden;
@@ -2021,445 +2112,6 @@ function highlight_glsl(src) {
         last = m.index + t.length;
     }
     return out + esc(src.slice(last)) + "\n"; // trailing newline keeps the last line's height
-}
-
-"use strict";
-const $ = (id) => document.getElementById(id);
-const TOOL_ICONS = [
-    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/><path d="M4 20h9m-3-3 3 3-3 3"/>',
-    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/>',
-    '<path d="M4 8h10a3 3 0 1 0-3-3M4 13h14a3 3 0 1 1-3 3M4 18h7"/>',
-    '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16M10 5v7M15 12v7"/>',
-];
-const FORCE_ICON = '<path d="M13 5.5c-1.8-1-3.4 0-3.7 2L8 19c-.3 1.6-1.4 2.300-2.800 1.600"/>' +
-    '<path d="M5.500 11.500h7"/>' +
-    '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>', BORDERS_ICON = '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
-    '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
-const val = (s) => (typeof s === "function" ? s() : s);
-/** resolves a lazy target and remembers each target's initial value (for reset). */
-function bind(obj, key, copy) {
-    const defaults = new WeakMap();
-    const target = () => {
-        const t = val(obj);
-        if (!defaults.has(t))
-            defaults.set(t, copy(t[key]));
-        return t;
-    };
-    target();
-    return { target, def: () => defaults.get(target()) };
-}
-function isolate(el) {
-    for (const ev of ["mousedown", "contextmenu"])
-        el.addEventListener(ev, e => e.stopPropagation());
-}
-/** true when the event comes from a form control. */
-function in_field(e) {
-    const t = e.target;
-    return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
-        t.tagName === "SELECT" || t.isContentEditable);
-}
-/** form control or a modifier combo. Use this in component hotkeys. */
-function is_typing(e) { return in_field(e) || e.ctrlKey || e.metaKey || e.altKey; }
-function render_tooltip(src) {
-    const esc_ = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const inline = (s) => esc_(s).replace(/\[([^\]]+)\]/g, '<b class="tv">$1</b>').replace(/\n/g, "<br>");
-    let out = "";
-    // order matters: $$..$$ before $..$
-    const re = /\$\$([\s\S]*?)\$\$|\$([\s\S]*?)\$|\{([\s\S]*?)\}/g;
-    let m;
-    while ((m = re.exec(src))) {
-        if (m[1] !== undefined)
-            out += `<div class="tt-h2">${inline(m[1].trim())}</div>`;
-        else if (m[2] !== undefined)
-            out += `<div class="tt-h1">${inline(m[2].trim())}</div>`;
-        else {
-            const lines = m[3].trim();
-            const cls = lines.includes("\n") ? "tt-p tt-list" : "tt-p";
-            out += `<div class="${cls}">${inline(lines)}</div>`;
-        }
-    }
-    return out;
-}
-/** one shared floating tooltip for the whole UI. */
-class UI_TOOLTIP {
-    static el;
-    static timer = 0;
-    static ensure() {
-        if (this.el)
-            return;
-        this.el = document.createElement("div");
-        this.el.className = "tt";
-        this.el.hidden = true;
-        $("hud").appendChild(this.el);
-    }
-    /** attaches a rich tooltip to an element. */
-    static attach(target, src, delay = 350) {
-        this.ensure();
-        const html = render_tooltip(src);
-        target.addEventListener("mouseenter", () => {
-            clearTimeout(this.timer);
-            this.timer = window.setTimeout(() => this.show(target, html), delay);
-        });
-        const hide = () => { clearTimeout(this.timer); this.el.hidden = true; };
-        target.addEventListener("mouseleave", hide);
-        target.addEventListener("mousedown", hide);
-    }
-    static show(target, html) {
-        this.el.innerHTML = html;
-        this.el.hidden = false;
-        const r = target.getBoundingClientRect();
-        const w = this.el.offsetWidth, h = this.el.offsetHeight;
-        // prefer the left of the target (the inspector sits on the right edge)
-        let x = r.left - w - 10;
-        if (x < 8)
-            x = Math.min(r.right + 10, innerWidth - w - 8);
-        let y = r.top + r.height / 2 - h / 2;
-        y = Math.max(8, Math.min(y, innerHeight - h - 8));
-        this.el.style.left = `${x}px`;
-        this.el.style.top = `${y}px`;
-    }
-}
-class UI_ELEMENT {
-    io;
-    row = document.createElement("div");
-    constructor(parent, label, title, io, row_class = "") {
-        this.io = io;
-        this.row.className = ("row " + row_class).trim();
-        const l = document.createElement("label");
-        l.textContent = label;
-        if (io.tooltip)
-            UI_TOOLTIP.attach(l, io.tooltip);
-        else
-            l.title = title;
-        this.row.appendChild(l);
-        parent.appendChild(this.row);
-    }
-    set_visible(visible) {
-        this.row.hidden = !visible;
-    }
-    toggle_visibility() { this.row.hidden = !this.row.hidden; }
-    refresh_visibility() {
-        this.io.visible && this.set_visible(this.io.visible());
-    }
-    refresh() {
-        this.refresh_visibility();
-        if (!this.row.hidden)
-            this.refresh_value();
-    }
-    get is_frozen() { return this.io.frozen?.() !== undefined; }
-    reset() { this.apply(this.io.def()); }
-    /** greys out and disables every input in the row. */
-    lock(on) {
-        this.row.classList.toggle("frozen", on);
-        this.row.querySelectorAll("input,select")
-            .forEach(i => { i.disabled = on; });
-    }
-}
-class UI_SLIDER extends UI_ELEMENT {
-    o;
-    in_range = document.createElement("input");
-    in_number = document.createElement("input");
-    constructor(parent, label, key, io, o) {
-        super(parent, label, key, io);
-        this.o = o;
-        this.in_range.type = "range";
-        this.in_range.min = "0";
-        this.in_range.max = "1000";
-        this.in_number.type = "number";
-        this.row.append(this.in_range, this.in_number);
-        this.in_range.addEventListener("input", () => this.apply(this.from_t(+this.in_range.value / 1000)));
-        // leave the slider after a mouse drag, so the global arrow hotkeys work again.
-        // keyboard focus (Tab) keeps it, so arrows can still move the slider.
-        this.in_range.addEventListener("pointerup", () => this.in_range.blur());
-        this.in_number.addEventListener("change", () => {
-            const v = parseFloat(this.in_number.value);
-            Number.isNaN(v) ? this.refresh_value() : this.apply(v);
-        });
-        this.row.addEventListener("dblclick", e => { if (e.target !== this.in_number)
-            this.reset(); });
-        this.refresh_value();
-    }
-    to_t(v) {
-        const min = this.o.min(), max = this.o.max();
-        if (max <= min)
-            return 0;
-        return this.o.log ? (Math.log(Math.max(v, min)) - Math.log(min)) / (Math.log(max) - Math.log(min))
-            : (v - min) / (max - min);
-    }
-    from_t(t) {
-        const min = this.o.min(), max = this.o.max();
-        return this.o.log ? Math.exp(Math.log(min) + t * (Math.log(max) - Math.log(min)))
-            : min + t * (max - min);
-    }
-    apply(v) {
-        if (this.is_frozen)
-            return this.refresh_value();
-        const { log, int, step } = this.o;
-        const min = this.o.min(), max = this.o.max();
-        if (int)
-            v = Math.round(v);
-        if (step && !log)
-            v = Math.round(v / step) * step;
-        v = Math.min(max, Math.max(min, v));
-        this.io.set(v);
-        this.io.onChange?.(v);
-        this.refresh_value();
-    }
-    refresh_value() {
-        const max = this.o.max(), min = this.o.min();
-        const cur = this.io.get();
-        if (!this.is_frozen && (cur > max || cur < min))
-            this.io.set(Math.min(max, Math.max(min, cur)));
-        const forced = this.io.frozen?.();
-        const v = forced ?? this.io.get();
-        const { int, step } = this.o;
-        const decimals = int ? 0
-            : Math.max(0, Math.ceil(-Math.log10(step ?? ((this.o.max() - this.o.min()) / 200 || 1))));
-        this.in_range.value = String(Math.min(1, Math.max(0, this.to_t(v))) * 1000);
-        this.in_number.step = String(10 ** -decimals); // arrow keys step by the displayed precision
-        if (document.activeElement !== this.in_number)
-            this.in_number.value = v.toFixed(decimals);
-        this.lock(forced !== undefined);
-    }
-}
-class UI_TOGGLE extends UI_ELEMENT {
-    int;
-    input = document.createElement("input");
-    constructor(parent, label, key, io, int) {
-        super(parent, label, key, io, "toggle");
-        this.int = int;
-        this.input.type = "checkbox";
-        this.row.appendChild(this.input);
-        this.input.addEventListener("change", () => this.apply(this.input.checked));
-        this.refresh_value();
-    }
-    apply(v) {
-        if (this.is_frozen)
-            return this.refresh_value();
-        const t = this.int ? Number(v) : !!v;
-        this.io.set(t);
-        this.io.onChange?.(t);
-        this.refresh_value();
-    }
-    refresh_value() {
-        const forced = this.io.frozen?.();
-        this.input.checked = !!(forced ?? this.io.get());
-        this.lock(forced !== undefined);
-    }
-}
-class UI_VECTOR extends UI_ELEMENT {
-    n;
-    o;
-    inputs = [];
-    decimals;
-    constructor(parent, label, key, io, n, o) {
-        super(parent, label, key, io, "vec");
-        this.n = n;
-        this.o = o;
-        this.decimals = o.step ? Math.max(0, Math.ceil(-Math.log10(o.step))) : 3;
-        const comps = document.createElement("div");
-        comps.className = "comps";
-        comps.style.setProperty("--n", String(n));
-        for (let i = 0; i < n; ++i) {
-            const c = document.createElement("span");
-            c.className = "c";
-            const axis = document.createElement("i");
-            axis.textContent = o.labels[i] ?? "xyzw"[i];
-            this.scrub(axis, i);
-            const input = document.createElement("input");
-            input.type = "number";
-            input.step = String(o.step ?? 10 ** -this.decimals);
-            input.addEventListener("change", () => {
-                const x = parseFloat(input.value);
-                if (Number.isNaN(x))
-                    return this.refresh_value();
-                const v = this.io.get();
-                v[i] = x;
-                this.apply(v);
-            });
-            c.append(axis, input);
-            comps.appendChild(c);
-            this.inputs.push(input);
-        }
-        this.row.appendChild(comps);
-        this.row.addEventListener("dblclick", e => {
-            if (!(e.target instanceof HTMLInputElement))
-                this.reset();
-        });
-        this.refresh_value();
-    }
-    scrub(axis, i) {
-        let x0 = 0, v0 = 0;
-        axis.addEventListener("pointerdown", e => {
-            if (this.is_frozen)
-                return;
-            axis.setPointerCapture(e.pointerId);
-            x0 = e.clientX;
-            v0 = this.io.get()[i];
-            e.preventDefault();
-        });
-        axis.addEventListener("pointermove", e => {
-            if (!axis.hasPointerCapture(e.pointerId))
-                return;
-            const speed = (this.o.step ?? 0.01) * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
-            const v = this.io.get();
-            v[i] = v0 + (e.clientX - x0) * speed;
-            this.apply(v);
-        });
-    }
-    apply(v) {
-        if (this.is_frozen)
-            return this.refresh_value();
-        const { min, max, step } = this.o;
-        const out = v.slice(0, this.n).map(x => {
-            if (step)
-                x = Math.round(x / step) * step;
-            return Math.min(max, Math.max(min, x));
-        });
-        this.io.set(out);
-        this.io.onChange?.(out);
-        this.refresh_value();
-    }
-    refresh_value() {
-        const forced = this.io.frozen?.();
-        const v = forced ?? this.io.get();
-        this.inputs.forEach((inp, i) => {
-            if (document.activeElement !== inp)
-                inp.value = v[i].toFixed(this.decimals);
-        });
-        this.lock(forced !== undefined);
-    }
-}
-class UI_ENUM extends UI_ELEMENT {
-    options;
-    select = document.createElement("select");
-    shown = null;
-    constructor(parent, label, key, io, options) {
-        super(parent, label, key, io, "enum");
-        this.options = options;
-        this.row.appendChild(this.select);
-        this.select.addEventListener("change", () => { this.apply(+this.select.value); this.select.blur(); });
-        this.row.addEventListener("dblclick", e => { if (e.target !== this.select)
-            this.reset(); });
-        this.refresh_value();
-    }
-    apply(v) {
-        if (this.is_frozen)
-            return this.refresh_value();
-        this.io.set(v);
-        this.io.onChange?.(v);
-        this.refresh_value();
-    }
-    refresh_value() {
-        const opts = this.options();
-        const same = this.shown !== null && this.shown.length === opts.length &&
-            opts.every((o, i) => o.value === this.shown[i].value && o.name === this.shown[i].name);
-        if (!same) {
-            this.select.replaceChildren(...opts.map(o => {
-                const el = document.createElement("option");
-                el.value = String(o.value);
-                el.textContent = o.name;
-                return el;
-            }));
-            this.shown = opts.map(o => ({ ...o }));
-        }
-        const forced = this.io.frozen?.();
-        this.select.value = String(forced ?? this.io.get());
-        this.lock(forced !== undefined);
-        this.select.title = forced !== undefined ? "locked by the current view" : "";
-    }
-}
-class UI_COLOR extends UI_ELEMENT {
-    inputs = [];
-    picker = document.createElement("input");
-    swatch = document.createElement("label");
-    constructor(parent, label, key, io) {
-        super(parent, label, key, io, "color");
-        // native color dialog, behind the square swatch
-        this.swatch.className = "swatch";
-        this.picker.type = "color";
-        this.swatch.appendChild(this.picker);
-        this.picker.addEventListener("input", () => {
-            const n = parseInt(this.picker.value.slice(1), 16);
-            this.apply([((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]);
-        });
-        // numeric view, 0..1
-        const comps = document.createElement("div");
-        comps.className = "comps";
-        comps.style.setProperty("--n", "3");
-        "rgb".split("").forEach((axis, i) => {
-            const c = document.createElement("span");
-            c.className = "c";
-            const a = document.createElement("i");
-            a.textContent = axis;
-            this.scrub(a, i);
-            const input = document.createElement("input");
-            input.type = "number";
-            input.step = "0.01";
-            input.addEventListener("change", () => {
-                const x = parseFloat(input.value);
-                if (Number.isNaN(x))
-                    return this.refresh_value();
-                const v = this.io.get();
-                v[i] = x;
-                this.apply(v);
-            });
-            c.append(a, input);
-            comps.appendChild(c);
-            this.inputs.push(input);
-        });
-        this.row.append(comps, this.swatch);
-        this.row.addEventListener("dblclick", e => {
-            if (!(e.target instanceof HTMLInputElement))
-                this.reset();
-        });
-        this.refresh_value();
-    }
-    /** drag an axis letter left/right to change that channel (shift = x10, alt = x0.1). */
-    scrub(axis, i) {
-        let x0 = 0, v0 = 0;
-        axis.addEventListener("pointerdown", e => {
-            if (this.is_frozen)
-                return;
-            axis.setPointerCapture(e.pointerId);
-            x0 = e.clientX;
-            v0 = this.io.get()[i];
-            e.preventDefault();
-        });
-        axis.addEventListener("pointermove", e => {
-            if (!axis.hasPointerCapture(e.pointerId))
-                return;
-            const speed = 0.013 * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
-            const v = this.io.get();
-            v[i] = v0 + (e.clientX - x0) * speed;
-            this.apply(v);
-        });
-    }
-    static hex(v) {
-        return "#" + [0, 1, 2].map(i => Math.round(Math.min(1, Math.max(0, v[i])) * 255).toString(16).padStart(2, "0")).join("");
-    }
-    apply(v) {
-        if (this.is_frozen)
-            return this.refresh_value();
-        const out = v.slice(0, 3).map(x => Math.min(1, Math.max(0, x)));
-        this.io.set(out);
-        this.io.onChange?.(out);
-        this.refresh_value();
-    }
-    refresh_value() {
-        const forced = this.io.frozen?.();
-        const v = forced ?? this.io.get();
-        this.inputs.forEach((inp, i) => {
-            if (document.activeElement !== inp)
-                inp.value = v[i].toFixed(2);
-        });
-        const hex = UI_COLOR.hex(v);
-        // only write when it differs, so a live drag isn't fought by the 8-bit round trip
-        if (this.picker.value !== hex)
-            this.picker.value = hex;
-        this.swatch.style.setProperty("--c", hex);
-        this.lock(forced !== undefined);
-    }
 }
 /** basic structural lint, 1-based lines. */
 function lint_glsl(src, required_fn) {
@@ -2502,9 +2154,610 @@ function lint_glsl(src, required_fn) {
         out.push({ line: 1, msg: `missing function '${required_fn}'` });
     return out;
 }
-class UI_GLSL extends UI_ELEMENT {
+
+"use strict";
+const store = (() => {
+    const KEY = "fluid_ui_v1";
+    let data = {};
+    try {
+        data = JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {};
+    }
+    catch { }
+    let timer = 0;
+    const flush = () => { clearTimeout(timer); try {
+        localStorage.setItem(KEY, JSON.stringify(data));
+    }
+    catch { } };
+    const queue = () => { clearTimeout(timer); timer = window.setTimeout(flush, 250); };
+    addEventListener("pagehide", flush);
+    return {
+        get: (id) => data[id],
+        set: (id, v) => { data[id] = v; queue(); },
+        del: (id) => { delete data[id]; queue(); },
+    };
+})();
+
+"use strict";
+const SrcVal = (s) => (typeof s === "function" ? s() : s);
+
+"use strict";
+const $ = (id) => document.getElementById(id);
+function field_same(a, b) {
+    if (typeof a === "boolean" || typeof b === "boolean")
+        return Number(a) === Number(b);
+    if (typeof a === "number" && typeof b === "number")
+        return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
+    if (Array.isArray(a) && Array.isArray(b))
+        return a.length === b.length && a.every((x, i) => field_same(x, b[i]));
+    return a === b;
+}
+/** resolves a lazy target and remembers each target's initial value (for reset). */
+function bind(obj, key, copy) {
+    const defaults = new WeakMap();
+    const target = () => {
+        const t = SrcVal(obj);
+        if (!defaults.has(t))
+            defaults.set(t, copy(t[key]));
+        return t;
+    };
+    target();
+    return { target, def: () => defaults.get(target()) };
+}
+function isolate(el) {
+    for (const ev of ["mousedown", "contextmenu"])
+        el.addEventListener(ev, e => e.stopPropagation());
+}
+/** true when the event comes from a form control. */
+function in_field(e) {
+    const t = e.target;
+    return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" || t.isContentEditable);
+}
+/** form control or a modifier combo. Use this in component hotkeys. */
+function is_typing(e) { return in_field(e) || e.ctrlKey || e.metaKey || e.altKey; }
+function scrub_number(input, o) {
+    let active = false, moved = false, y0 = 0, v0 = 0;
+    const mult = (e) => e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+    // keep the first click from focusing the box, so a drag doesn't start a text edit
+    input.addEventListener("mousedown", e => { if (document.activeElement !== input)
+        e.preventDefault(); });
+    input.addEventListener("pointerdown", e => {
+        if (e.button !== 0 || o.frozen() || document.activeElement === input)
+            return;
+        active = true;
+        moved = false;
+        y0 = e.clientY;
+        v0 = o.get();
+        input.setPointerCapture(e.pointerId);
+    });
+    input.addEventListener("pointermove", e => {
+        if (!active)
+            return;
+        if (!moved && Math.abs(e.clientY - y0) < 3)
+            return; // dead zone, so clicks stay clicks
+        moved = true;
+        const dy = y0 - e.clientY, k = mult(e);
+        o.apply(o.log ? v0 * Math.exp(dy * 0.01 * k) : v0 + dy * o.base() * k);
+    });
+    const end = (e) => {
+        if (!active)
+            return;
+        active = false;
+        input.releasePointerCapture(e.pointerId);
+        if (!moved) {
+            input.focus();
+            input.select();
+        }
+    };
+    input.addEventListener("pointerup", end);
+    input.addEventListener("pointercancel", end);
+    // wheel steps the value, only while the box is focused
+    input.addEventListener("wheel", e => {
+        if (document.activeElement !== input || o.frozen())
+            return;
+        e.preventDefault(); // don't scroll the inspector
+        e.stopPropagation();
+        const d = e.deltaY || e.deltaX;
+        if (!d)
+            return;
+        const dir = d < 0 ? 1 : -1, k = mult(e), v = o.get();
+        o.apply(o.log ? v * Math.exp(dir * 0.05 * k) : v + dir * o.base() * k);
+        input.value = o.text();
+        input.select();
+    }, { passive: false });
+}
+
+"use strict";
+class UI_FIELD {
+    io;
+    pid = "";
+    track = true;
+    /** Root div container. */
+    root = document.createElement("div");
+    label;
+    /** is the field currently frozen. */
+    get is_frozen() { return this.io.frozen?.() !== undefined; }
+    /** true when the current value differs from the original default. */
+    get modified() {
+        if (!this.track || this.is_frozen)
+            return false;
+        return !field_same(this.io.get(), this.io.def());
+    }
+    constructor(section_body, label, title, io, row_class = "") {
+        this.io = io;
+        const set = io.set;
+        this.label = label;
+        this.io = {
+            ...io,
+            set: (v) => { set(v); this.save(v); this.update_mod(); }
+        };
+        this.root.className = ("row " + row_class).trim();
+        const l = document.createElement("label");
+        l.textContent = label;
+        if (io.tooltip)
+            UI_TOOLTIP.attach(l, io.tooltip);
+        else
+            l.title = title;
+        this.root.appendChild(l);
+        section_body.appendChild(this.root);
+    }
+    /** Updates root classlist based on `modified`. */
+    update_mod() { this.root.classList.toggle("mod", this.modified); }
+    set_visible(visible) {
+        this.root.hidden = !visible;
+    }
+    toggle_visibility() { this.root.hidden = !this.root.hidden; }
+    /** Sets visibility to io.visible(). */
+    refresh_visibility() {
+        this.io.visible && this.set_visible(this.io.visible());
+    }
+    refresh() {
+        this.refresh_visibility();
+        this.update_mod();
+        if (!this.root.hidden)
+            this.refresh_value();
+    }
+    /** Greys out and disables every input in the field root. */
+    lock(on) {
+        this.root.classList.toggle("frozen", on);
+        this.root.querySelectorAll("input,select")
+            .forEach(i => { i.disabled = on; });
+    }
+    /** Store into localStorage the passed state. */
+    save(v) {
+        if (this.pid)
+            store.set(this.pid, Array.isArray(v) ? v.slice() : v);
+    }
+    save_now() { this.save(this.io.get()); }
+    restore() {
+        if (!this.pid || this.is_frozen)
+            return;
+        const v = store.get(this.pid);
+        if (v === undefined)
+            return;
+        try {
+            this.apply(v);
+        }
+        catch {
+            store.del(this.pid);
+        }
+    }
+    reset() {
+        this.apply(this.io.def());
+        if (this.pid)
+            store.del(this.pid);
+    }
+}
+
+"use strict";
+function render_tooltip(src) {
+    const esc_ = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = (s) => esc_(s).replace(/\[([^\]]+)\]/g, '<b class="tv">$1</b>').replace(/\n/g, "<br>");
+    let out = "";
+    // order matters: $$..$$ before $..$
+    const re = /\$\$([\s\S]*?)\$\$|\$([\s\S]*?)\$|\{([\s\S]*?)\}/g;
+    let m;
+    while ((m = re.exec(src))) {
+        if (m[1] !== undefined)
+            out += `<div class="tt-h2">${inline(m[1].trim())}</div>`;
+        else if (m[2] !== undefined)
+            out += `<div class="tt-h1">${inline(m[2].trim())}</div>`;
+        else {
+            const lines = m[3].trim();
+            const cls = lines.includes("\n") ? "tt-p tt-list" : "tt-p";
+            out += `<div class="${cls}">${inline(lines)}</div>`;
+        }
+    }
+    return out;
+}
+/** one shared floating tooltip for the whole UI. */
+class UI_TOOLTIP {
+    static el;
+    static timer = 0;
+    static hud = $("hud");
+    static ensure() {
+        if (this.el)
+            return;
+        this.el = document.createElement("div");
+        this.el.className = "tt";
+        this.el.hidden = true;
+        this.hud.appendChild(this.el);
+    }
+    /** attaches a rich tooltip to an element. */
+    static attach(target, src, delay = 350) {
+        this.ensure();
+        target.addEventListener("mouseenter", () => {
+            clearTimeout(this.timer);
+            this.timer = window.setTimeout(() => this.show(target, render_tooltip(typeof src === "function" ? src() : src)), delay);
+        });
+        const hide = () => { clearTimeout(this.timer); this.el.hidden = true; };
+        target.addEventListener("mouseleave", hide);
+        target.addEventListener("mousedown", hide);
+    }
+    static show(target, html) {
+        this.el.innerHTML = html;
+        this.el.hidden = false;
+        const r = target.getBoundingClientRect();
+        const w = this.el.offsetWidth, h = this.el.offsetHeight;
+        // prefer the left of the target (the inspector sits on the right edge)
+        let x = r.left - w - 10;
+        if (x < 8)
+            x = Math.min(r.right + 10, innerWidth - w - 8);
+        let y = r.top + r.height / 2 - h / 2;
+        y = Math.max(8, Math.min(y, innerHeight - h - 8));
+        this.el.style.left = `${x}px`;
+        this.el.style.top = `${y}px`;
+    }
+}
+
+"use strict";
+class UI_FIELD_SLIDER extends UI_FIELD {
+    o;
+    range_input = document.createElement("input");
+    number_input = document.createElement("input");
+    decimals() {
+        return this.o.int ? 0
+            : Math.max(0, Math.ceil(-Math.log10(this.o.step ?? ((this.o.max() - this.o.min()) / 200 || 1))));
+    }
+    constructor(parent, label, key, io, o) {
+        super(parent, label, key, io);
+        this.o = o;
+        this.range_input.type = "range";
+        this.range_input.min = "0";
+        this.range_input.max = "1000";
+        this.number_input.type = "number";
+        this.root.append(this.range_input, this.number_input);
+        this.range_input.addEventListener("input", () => this.apply(this.from_t(+this.range_input.value / 1000)));
+        // leave the slider after a mouse drag, so the global arrow hotkeys work again.
+        // keyboard focus (Tab) keeps it, so arrows can still move the slider.
+        this.range_input.addEventListener("pointerup", () => this.range_input.blur());
+        this.number_input.addEventListener("change", () => {
+            const v = parseFloat(this.number_input.value);
+            Number.isNaN(v) ? this.refresh_value() : this.apply(v);
+        });
+        this.root.addEventListener("dblclick", e => { if (e.target !== this.number_input)
+            this.reset(); });
+        this.refresh_value();
+        scrub_number(this.number_input, {
+            get: () => this.io.get(), apply: v => this.apply(v), frozen: () => this.is_frozen,
+            base: () => this.o.int ? 1 : this.o.step ?? 10 ** -this.decimals(),
+            text: () => this.io.get().toFixed(this.decimals()),
+            log: this.o.log,
+        });
+    }
+    to_t(v) {
+        const min = this.o.min(), max = this.o.max();
+        if (max <= min)
+            return 0;
+        return this.o.log ? (Math.log(Math.max(v, min)) - Math.log(min)) / (Math.log(max) - Math.log(min))
+            : (v - min) / (max - min);
+    }
+    from_t(t) {
+        const min = this.o.min(), max = this.o.max();
+        return this.o.log ? Math.exp(Math.log(min) + t * (Math.log(max) - Math.log(min)))
+            : min + t * (max - min);
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const { log, int, step } = this.o;
+        const min = this.o.min(), max = this.o.max();
+        if (int)
+            v = Math.round(v);
+        if (step && !log)
+            v = Math.round(v / step) * step;
+        v = Math.min(max, Math.max(min, v));
+        this.io.set(v);
+        this.io.onChange?.(v);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const max = this.o.max(), min = this.o.min();
+        const cur = this.io.get();
+        if (!this.is_frozen && (cur > max || cur < min))
+            this.io.set(Math.min(max, Math.max(min, cur)));
+        const forced = this.io.frozen?.();
+        const v = forced ?? this.io.get();
+        const { int, step } = this.o;
+        const decimals = int ? 0
+            : Math.max(0, Math.ceil(-Math.log10(step ?? ((this.o.max() - this.o.min()) / 200 || 1))));
+        this.range_input.value = String(Math.min(1, Math.max(0, this.to_t(v))) * 1000);
+        this.number_input.step = String(10 ** -decimals); // arrow keys step by the displayed precision
+        if (document.activeElement !== this.number_input)
+            this.number_input.value = v.toFixed(decimals);
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
+class UI_FIELD_FLOAT extends UI_FIELD {
+    o;
+    number_input = document.createElement("input");
+    decimals;
+    constructor(parent, label, key, io, o) {
+        super(parent, label, key, io, "float");
+        this.o = o;
+        this.decimals = o.int ? 0
+            : o.decimals ?? (o.step ? Math.max(0, Math.ceil(-Math.log10(o.step))) : 3);
+        this.number_input.type = "number";
+        this.number_input.step = String(o.step ?? 10 ** -this.decimals);
+        this.root.appendChild(this.number_input);
+        this.number_input.addEventListener("change", () => {
+            const v = parseFloat(this.number_input.value);
+            Number.isNaN(v) ? this.refresh_value() : this.apply(v);
+        });
+        this.root.addEventListener("dblclick", e => { if (e.target !== this.number_input)
+            this.reset(); });
+        this.refresh_value();
+        scrub_number(this.number_input, {
+            get: () => this.io.get(), apply: v => this.apply(v), frozen: () => this.is_frozen,
+            base: () => this.o.speed ?? (this.o.int ? 1 : this.o.step ?? 10 ** -this.decimals),
+            text: () => this.io.get().toFixed(this.decimals),
+        });
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const { min, max, step, int } = this.o;
+        if (int)
+            v = Math.round(v);
+        if (step)
+            v = Math.round(v / step) * step;
+        v = Math.min(max, Math.max(min, v));
+        this.io.set(v);
+        this.io.onChange?.(v);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        const v = forced ?? this.io.get();
+        if (document.activeElement !== this.number_input)
+            this.number_input.value = v.toFixed(this.decimals);
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
+class UI_FIELD_TOGGLE extends UI_FIELD {
+    int;
+    checkbox_input = document.createElement("input");
+    constructor(parent, label, key, io, int) {
+        super(parent, label, key, io, "toggle");
+        this.int = int;
+        this.checkbox_input.type = "checkbox";
+        this.root.appendChild(this.checkbox_input);
+        this.checkbox_input.addEventListener("change", () => this.apply(this.checkbox_input.checked));
+        this.checkbox_input.addEventListener("pointerup", () => this.checkbox_input.blur());
+        this.refresh_value();
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const t = this.int ? Number(v) : !!v;
+        this.io.set(t);
+        this.io.onChange?.(t);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        this.checkbox_input.checked = !!(forced ?? this.io.get());
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
+class UI_FIELD_VECTOR extends UI_FIELD {
+    n;
+    o;
+    number_inputs = [];
+    decimals;
+    constructor(parent, label, key, io, n, o) {
+        super(parent, label, key, io, "vec");
+        this.n = n;
+        this.o = o;
+        this.decimals = o.step ? Math.max(0, Math.ceil(-Math.log10(o.step))) : 3;
+        const comps = document.createElement("div");
+        comps.className = "comps";
+        comps.style.setProperty("--n", String(n));
+        for (let i = 0; i < n; ++i) {
+            const c = document.createElement("span");
+            c.className = "c";
+            const axis = document.createElement("i");
+            axis.textContent = o.labels[i] ?? "xyzw"[i];
+            const input = document.createElement("input");
+            input.type = "number";
+            input.step = String(o.step ?? 10 ** -this.decimals);
+            input.addEventListener("change", () => {
+                const x = parseFloat(input.value);
+                if (Number.isNaN(x))
+                    return this.refresh_value();
+                const v = this.io.get();
+                v[i] = x;
+                this.apply(v);
+            });
+            scrub_number(input, {
+                get: () => this.io.get()[i],
+                apply: x => { const v = this.io.get(); v[i] = x; this.apply(v); },
+                frozen: () => this.is_frozen,
+                base: () => 0.005, // channel units per pixel (0..1 range)
+                text: () => this.io.get()[i].toFixed(2),
+            });
+            c.append(axis, input);
+            comps.appendChild(c);
+            this.number_inputs.push(input);
+        }
+        this.root.appendChild(comps);
+        this.root.addEventListener("dblclick", e => {
+            if (!(e.target instanceof HTMLInputElement))
+                this.reset();
+        });
+        this.refresh_value();
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const { min, max, step } = this.o;
+        const out = v.slice(0, this.n).map(x => {
+            if (step)
+                x = Math.round(x / step) * step;
+            return Math.min(max, Math.max(min, x));
+        });
+        this.io.set(out);
+        this.io.onChange?.(out);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        const v = forced ?? this.io.get();
+        this.number_inputs.forEach((inp, i) => {
+            if (document.activeElement !== inp)
+                inp.value = v[i].toFixed(this.decimals);
+        });
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
+class UI_FIELD_ENUM extends UI_FIELD {
+    get_options;
+    input_select = document.createElement("select");
+    options = null;
+    constructor(parent, label, key, io, get_options) {
+        super(parent, label, key, io, "enum");
+        this.get_options = get_options;
+        this.root.appendChild(this.input_select);
+        this.input_select.addEventListener("change", () => { this.apply(+this.input_select.value); this.input_select.blur(); });
+        this.root.addEventListener("dblclick", e => { if (e.target !== this.input_select)
+            this.reset(); });
+        this.refresh_value();
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        this.io.set(v);
+        this.io.onChange?.(v);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const opts = this.get_options();
+        const same = this.options !== null && this.options.length === opts.length &&
+            opts.every((o, i) => o.value === this.options[i].value && o.name === this.options[i].name);
+        if (!same) {
+            this.input_select.replaceChildren(...opts.map(o => {
+                const el = document.createElement("option");
+                el.value = String(o.value);
+                el.textContent = o.name;
+                return el;
+            }));
+            this.options = opts.map(o => ({ ...o }));
+        }
+        const forced = this.io.frozen?.();
+        this.input_select.value = String(forced ?? this.io.get());
+        this.lock(forced !== undefined);
+        this.input_select.title = forced !== undefined ? "locked by the current view" : "";
+    }
+}
+
+"use strict";
+class UI_FIELD_COLOR extends UI_FIELD {
+    number_inputs = [];
+    color_input = document.createElement("input");
+    color_swatch = document.createElement("label");
+    constructor(parent, label, key, io) {
+        super(parent, label, key, io, "color");
+        // native color dialog, behind the square swatch
+        this.color_swatch.className = "swatch";
+        this.color_input.type = "color";
+        this.color_swatch.appendChild(this.color_input);
+        this.color_input.addEventListener("input", () => {
+            const n = parseInt(this.color_input.value.slice(1), 16);
+            this.apply([((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]);
+        });
+        // numeric view, 0..1
+        const comps = document.createElement("div");
+        comps.className = "comps";
+        comps.style.setProperty("--n", "3");
+        "rgb".split("").forEach((axis, i) => {
+            const c = document.createElement("span");
+            c.className = "c";
+            const a = document.createElement("i");
+            a.textContent = axis;
+            const input = document.createElement("input");
+            input.type = "number";
+            input.step = "0.01";
+            scrub_number(input, {
+                get: () => this.io.get()[i],
+                apply: x => { const v = this.io.get(); v[i] = x; this.apply(v); },
+                frozen: () => this.is_frozen,
+                base: () => 0.005, // channel units per pixel (0..1 range)
+                text: () => this.io.get()[i].toFixed(2),
+            });
+            c.append(a, input);
+            comps.appendChild(c);
+            this.number_inputs.push(input);
+        });
+        this.root.append(comps, this.color_swatch);
+        this.root.addEventListener("dblclick", e => {
+            if (!(e.target instanceof HTMLInputElement))
+                this.reset();
+        });
+        this.refresh_value();
+    }
+    static hex(v) {
+        return "#" + [0, 1, 2].map(i => Math.round(Math.min(1, Math.max(0, v[i])) * 255).toString(16).padStart(2, "0")).join("");
+    }
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        const out = v.slice(0, 3).map(x => Math.min(1, Math.max(0, x)));
+        this.io.set(out);
+        this.io.onChange?.(out);
+        this.refresh_value();
+    }
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        const v = forced ?? this.io.get();
+        this.number_inputs.forEach((inp, i) => {
+            if (document.activeElement !== inp)
+                inp.value = v[i].toFixed(2);
+        });
+        const hex = UI_FIELD_COLOR.hex(v);
+        // only write when it differs, so a live drag isn't fought by the 8-bit round trip
+        if (this.color_input.value !== hex)
+            this.color_input.value = hex;
+        this.color_swatch.style.setProperty("--c", hex);
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
+const UNTITLED = "untitled script";
+class UI_FIELD_GLSL extends UI_FIELD {
     o;
     win = document.createElement("div");
+    $title;
+    $lib;
+    saved = [];
     ta;
     hl;
     sq;
@@ -2516,19 +2769,33 @@ class UI_GLSL extends UI_ELEMENT {
     $btn;
     busy = false;
     btn_timer = 0;
+    $save;
+    query = "";
+    def_title = "";
+    save_timer = 0;
+    $unsaved;
+    title_prev = "";
     constructor(parent, label, key, io, o) {
         const t = io.tooltip;
         delete io.tooltip;
         super(parent, label, key, io, "glsl");
         this.o = o;
+        this.def_title = o.title();
         const b = document.createElement("button");
         b.className = "glsl-open";
         b.textContent = o.button;
         b.addEventListener("click", () => this.open());
-        this.row.appendChild(b);
+        this.root.appendChild(b);
         if (t)
             UI_TOOLTIP.attach(b, t);
     }
+    draft() { return this.pid ? store.get(this.pid) : undefined; }
+    save_draft() {
+        if (this.pid && this.built)
+            store.set(this.pid, { label: this.$title.value, src: this.ta.value });
+    }
+    save() { } // the generic path would store the bare source
+    save_now() { }
     show() { this.lock(this.io.frozen?.() !== undefined); }
     apply(v) { if (this.is_frozen)
         return; this.io.set(v); this.io.onChange?.(v); }
@@ -2538,15 +2805,24 @@ class UI_GLSL extends UI_ELEMENT {
             return;
         if (!this.built)
             this.build();
+        this.load_saved();
+        const d = this.draft();
+        this.ta.value = d?.src ?? this.io.get();
+        this.$title.value = d?.label ?? this.o.title();
         this.win.hidden = false;
-        this.ta.value = this.io.get();
         this.errors = [];
         this.$err.textContent = "";
         this.render();
         this.ta.focus();
         this.set_btn("idle");
+        this.$lib.hidden = true;
+        this.update_unsaved();
     }
-    close() { this.win.hidden = true; document.activeElement?.blur(); }
+    close() {
+        this.save_draft();
+        this.win.hidden = true;
+        document.activeElement?.blur();
+    }
     /** compiles the editor text. On success the window closes. */
     submit() {
         if (this.busy)
@@ -2570,23 +2846,75 @@ class UI_GLSL extends UI_ELEMENT {
             }, wait);
         }, 0));
     }
-    run_compile() {
-        const src = this.ta.value;
+    load_saved() {
+        const key = this.o.library?.storage_key;
+        if (!key)
+            return;
+        try {
+            this.saved = JSON.parse(localStorage.getItem(key) ?? "[]");
+        }
+        catch {
+            this.saved = [];
+        }
+    }
+    is_stored() {
+        const label = this.$title.value.trim(), src = this.ta.value;
+        const field_same = (e) => e.label === label && e.src === src;
+        return this.saved.some(field_same) || (this.o.library?.defaults().some(field_same) ?? false);
+    }
+    update_unsaved() {
+        if (!this.built)
+            return;
+        this.$unsaved.hidden = !this.o.library || this.is_stored();
+    }
+    /** lint, compile and apply. Works without the editor DOM, so restore and reset can use it. */
+    try_commit(src, title, restoring) {
         const hard = lint_glsl(src, this.o.required_fn);
         if (hard.length)
             return { ok: false, errors: hard.map(h => ({ ...h, hard: true })) };
-        const log = this.o.compile(src);
+        const log = this.o.compile(src, restoring);
         if (log === null) {
             this.apply(src);
-            this.errors = [];
-            this.$err.textContent = "";
-            this.render();
+            this.o.set_title(title.trim() || this.o.title());
             return { ok: true };
         }
         const found = [];
         for (const m of log.matchAll(/(?:ERROR|WARNING):\s*\d+:(\d+):\s*([^\n]*)/g))
             found.push({ line: Math.max(1, +m[1] - this.o.line_offset), msg: m[2], hard: true });
         return { ok: false, errors: found.length ? found : [{ line: 1, msg: log.trim(), hard: true }] };
+    }
+    run_compile() {
+        const r = this.try_commit(this.ta.value, this.$title.value, false);
+        if (r.ok) {
+            if (this.pid)
+                store.set(this.pid + ".applied", { label: this.o.title(), src: this.ta.value });
+            this.errors = [];
+            this.$err.textContent = "";
+            this.render();
+        }
+        return r;
+    }
+    restore() {
+        const a = this.pid ? store.get(this.pid + ".applied") : undefined;
+        if (a && typeof a.src === "string")
+            this.try_commit(a.src, a.label || this.def_title, true);
+    }
+    reset() {
+        if (this.pid) {
+            store.del(this.pid);
+            store.del(this.pid + ".applied");
+        }
+        const src = this.io.def();
+        this.try_commit(src, this.def_title, true);
+        if (this.built) {
+            this.ta.value = src;
+            this.$title.value = this.def_title;
+            this.errors = [];
+            this.$err.textContent = "";
+            this.set_btn("idle");
+            this.render();
+            this.update_unsaved();
+        }
     }
     show_errors(errs) {
         this.errors = errs;
@@ -2598,7 +2926,7 @@ class UI_GLSL extends UI_ELEMENT {
         const src = this.ta.value, lines = src.split("\n");
         this.hl.innerHTML = highlight_glsl(src);
         this.gut.innerHTML = lines.map((_, i) => `<span${this.errors.some(e => e.line === i + 1 && e.hard) ? ' class="e"' : ""}>${i + 1}</span>`).join("\n") + "\n";
-        // squiggle layer: same text, transparent, only the error lines underlined
+        // squiggle layer: field_same text, transparent, only the error lines underlined
         const bad = new Map(this.errors.map(e => [e.line, e]));
         this.sq.innerHTML = lines.map((l, i) => {
             if (!bad.has(i + 1) || !l.trim())
@@ -2623,34 +2951,51 @@ class UI_GLSL extends UI_ELEMENT {
             this.btn_timer = window.setTimeout(() => this.set_btn("idle"), revert_ms);
     }
     build() {
+        if (this.built)
+            return;
         this.built = true;
         const w = this.win;
         w.className = "glsl-win";
         w.hidden = true;
         w.innerHTML = `
-          <header>
-            <span class="title">${this.o.title}</span>
+        <header>
+            ${this.o.library ? '<button class="lib" title="Browse saved and default fields">▾</button>' : ""}
+            <input class="title" spellcheck="false" maxlength="60" title="Click to rename">
+            <span class="unsaved" hidden>(unsaved)</span>
             <button class="compile" data-state="idle" title="Ctrl+S">
-            <span class="spin"></span><span class="lbl">▶ Compile</span><kbd>Ctrl+S</kbd>
+                <span class="spin"></span><span class="lbl">▶ Compile</span><kbd>Ctrl+S</kbd>
             </button>
             <button class="x" title="Close (Esc)">×</button>
-          </header>
-          <div class="gbody">
+        </header>
+        <div class="lib-pop" hidden></div>
+        <div class="gbody">
             <pre class="gut" aria-hidden="true"></pre>
-            <div class="ed"><pre class="hl" aria-hidden="true"></pre><pre class="sqp" aria-hidden="true"></pre>
-              <textarea spellcheck="false" autocapitalize="off" autocomplete="off"></textarea></div>
-          </div>
-          <footer class="gerr"></footer>`;
+            <div class="ed">
+                <pre class="hl" aria-hidden="true"></pre>
+                <pre class="sqp" aria-hidden="true"></pre>
+                <textarea spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+                <button class="save-snip" title="Save current as a snippet">+ Save</button>
+            </div>
+        </div>
+        <footer class="gerr"></footer>`;
+        this.$title = w.querySelector(".title");
+        this.$lib = w.querySelector(".lib-pop");
         this.gut = w.querySelector(".gut");
         this.hl = w.querySelector(".hl");
         this.sq = w.querySelector(".sqp");
         this.ta = w.querySelector("textarea");
         this.$err = w.querySelector(".gerr");
         this.$btn = w.querySelector(".compile");
+        this.$save = w.querySelector(".save-snip");
+        if (!this.o.library)
+            this.$save.hidden = true;
+        this.$save.addEventListener("click", () => this.save_current());
         w.querySelector(".x").addEventListener("click", () => this.close());
         w.querySelector(".compile").addEventListener("click", () => this.submit());
         this.ta.addEventListener("scroll", () => this.sync());
         this.ta.addEventListener("input", () => {
+            this.save_draft();
+            this.update_unsaved();
             if (this.$btn.dataset.state === "fail" || this.$btn.dataset.state === "ok")
                 this.set_btn("idle");
             this.errors = []; // stale after an edit
@@ -2672,36 +3017,271 @@ class UI_GLSL extends UI_ELEMENT {
                 e.preventDefault();
                 this.submit();
             }
-            else if (e.key === "Escape")
-                this.close();
-            else if (e.key === "Tab") {
+            else if (e.key === "Escape") {
+                if (!this.$lib.hidden)
+                    this.$lib.hidden = true;
+                else
+                    this.close();
+            }
+            else if (e.key === "Tab" && e.target === this.ta) {
                 e.preventDefault();
                 this.ta.setRangeText("    ", this.ta.selectionStart, this.ta.selectionEnd, "end");
                 this.ta.dispatchEvent(new Event("input"));
             }
+        });
+        this.$unsaved = w.querySelector(".unsaved");
+        this.$title.addEventListener("focus", () => { this.title_prev = this.$title.value; });
+        this.$title.addEventListener("input", () => { this.save_draft(); this.update_unsaved(); });
+        this.$title.addEventListener("change", () => this.rename());
+        this.$title.addEventListener("keydown", e => {
+            if (e.key === "Enter")
+                this.$title.blur();
+            else if (e.key === "Escape") { // revert, don't close the window
+                this.$title.value = this.title_prev;
+                this.save_draft();
+                this.update_unsaved();
+                this.$title.blur();
+                e.stopPropagation();
+            }
+        });
+        w.querySelector(".lib")?.addEventListener("click", e => { e.stopPropagation(); this.toggle_lib(); });
+        w.addEventListener("click", e => {
+            if (!this.$lib.hidden && !this.$lib.contains(e.target))
+                this.$lib.hidden = true;
         });
         isolate(w);
         w.addEventListener("wheel", e => e.stopPropagation(), { passive: true });
         $("hud").appendChild(w);
     }
     refresh_value() { }
+    rename() {
+        this.$title.value = this.$title.value.trim() || UNTITLED;
+        this.save_draft();
+        this.update_unsaved();
+    }
+    $list;
+    toggle_lib() {
+        if (!this.$lib.hidden) {
+            this.$lib.hidden = true;
+            return;
+        }
+        const key = this.o.library.storage_key;
+        try {
+            this.load_saved();
+        }
+        catch {
+            this.saved = [];
+        }
+        this.query = "";
+        this.$lib.replaceChildren();
+        const search = document.createElement("input");
+        search.className = "lib-search";
+        search.type = "text";
+        search.placeholder = "Search…";
+        search.spellcheck = false;
+        search.addEventListener("input", () => { this.query = search.value; this.render_lib(); });
+        search.addEventListener("keydown", e => {
+            if (e.key === "Enter") { // load the first match
+                const first = this.$list.querySelector(".lib-item");
+                first?.click();
+            }
+        });
+        this.$list = document.createElement("div");
+        this.$lib.append(search, this.$list);
+        this.$lib.hidden = false;
+        this.render_lib();
+        search.focus();
+    }
+    render_lib() {
+        const list = this.$list;
+        list.replaceChildren();
+        const q = this.query.trim().toLowerCase();
+        const match = (e) => !q || e.label.toLowerCase().includes(q);
+        const group = (name, items, deletable) => {
+            const shown = items.filter(match);
+            if (!shown.length)
+                return;
+            const h = document.createElement("div");
+            h.className = "lib-h";
+            h.textContent = name;
+            list.appendChild(h);
+            for (const it of shown) {
+                const row = document.createElement("div");
+                row.className = "lib-item";
+                const s = document.createElement("span");
+                s.textContent = it.label;
+                row.appendChild(s);
+                row.addEventListener("click", () => this.pick(it));
+                if (deletable) {
+                    const x = document.createElement("button");
+                    x.textContent = "×";
+                    x.title = "Delete";
+                    x.addEventListener("click", e => {
+                        e.stopPropagation();
+                        this.saved.splice(this.saved.indexOf(it), 1); // index in the full list, not the filtered one
+                        this.persist();
+                        this.update_unsaved();
+                        this.render_lib();
+                    });
+                    row.appendChild(x);
+                }
+                list.appendChild(row);
+            }
+        };
+        group("Saved", this.saved, true);
+        group("Default", this.o.library.defaults(), false);
+        if (!list.firstChild) {
+            const none = document.createElement("div");
+            none.className = "lib-empty";
+            none.textContent = "No matches";
+            list.appendChild(none);
+        }
+    }
+    persist() {
+        try {
+            localStorage.setItem(this.o.library.storage_key, JSON.stringify(this.saved));
+        }
+        catch { }
+    }
+    pick(e) {
+        this.$lib.hidden = true;
+        this.ta.value = e.src;
+        this.$title.value = e.label;
+        this.save_draft();
+        this.update_unsaved();
+        this.errors = [];
+        this.$err.textContent = "";
+        this.set_btn("idle");
+        this.render();
+        this.submit();
+    }
+    flash_save(text) {
+        this.$save.textContent = text;
+        clearTimeout(this.save_timer);
+        this.save_timer = window.setTimeout(() => { this.$save.textContent = "+ Save"; }, 1200);
+    }
+    save_current() {
+        const label = this.$title.value.trim();
+        if (!label || label === UNTITLED) {
+            this.$title.focus();
+            this.$title.select();
+            return this.flash_save("Name it first");
+        }
+        else if (this.o.library?.defaults().some(d => d.label === label && d.src !== this.ta.value)) {
+            this.$title.focus();
+            this.$title.select();
+            return this.flash_save("Name taken");
+        }
+        this.load_saved();
+        const entry = { label, src: this.ta.value };
+        const i = this.saved.findIndex(s => s.label === label);
+        if (i >= 0)
+            this.saved[i] = entry;
+        else
+            this.saved.push(entry);
+        this.persist();
+        this.save_draft();
+        this.update_unsaved();
+        this.flash_save(i >= 0 ? "✓ Updated" : "✓ Saved");
+        if (!this.$lib.hidden)
+            this.render_lib();
+    }
 }
+
+"use strict";
+class UI_FIELD_PALETTE extends UI_FIELD {
+    colors;
+    onAdd;
+    grid = document.createElement("div");
+    constructor(parent, label, key, io, colors, onAdd) {
+        super(parent, label, key, io, "palette");
+        this.colors = colors;
+        this.onAdd = onAdd;
+        this.grid.className = "palette-grid";
+        this.root.appendChild(this.grid);
+        this.render();
+    }
+    static hex(c) {
+        return "#" + [c[0], c[1], c[2]].map(v => v.toString(16).padStart(2, "0")).join("");
+    }
+    /** rebuilds the swatches, call after changing the colors array. */
+    render() {
+        const colors = this.colors();
+        this.grid.replaceChildren();
+        colors.forEach((c, i) => {
+            const b = document.createElement("button");
+            b.className = "sw";
+            b.style.setProperty("--c", UI_FIELD_PALETTE.hex(c.color));
+            b.title = UI_FIELD_PALETTE.hex(c.color);
+            b.addEventListener("click", () => this.apply(i));
+            this.grid.appendChild(b);
+        });
+        if (this.onAdd) {
+            const add = document.createElement("label");
+            add.className = "sw add";
+            add.title = "Add color";
+            add.innerHTML = `<span>+</span><input type="color" value="#ffffff">`;
+            const inp = add.querySelector("input");
+            inp.addEventListener("change", () => {
+                const n = parseInt(inp.value.slice(1), 16);
+                this.onAdd(get_color_data(new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255, 255])));
+                this.render();
+                this.apply(this.colors().length - 1);
+            });
+            this.grid.appendChild(add);
+        }
+        this.refresh_value();
+    }
+    /** selects a swatch and notifies. */
+    apply(v) {
+        if (this.is_frozen)
+            return this.refresh_value();
+        v = Math.min(this.colors().length - 1, Math.max(0, Math.round(v)));
+        this.io.set(v);
+        this.io.onChange?.(v);
+        this.refresh_value();
+    }
+    /** moves the highlight only (use it when code changed the color). */
+    refresh_value() {
+        const forced = this.io.frozen?.();
+        const cur = forced ?? this.io.get();
+        this.grid.querySelectorAll(".sw:not(.add)")
+            .forEach((b, k) => b.classList.toggle("picked", k === cur));
+        this.lock(forced !== undefined);
+    }
+}
+
+"use strict";
 class UI_SECTION {
     name;
     el = document.createElement("section");
     body = document.createElement("div");
-    elements = [];
+    fields = [];
     visible;
+    /** Collection of all the modified field labels. */
+    mod_labels = [];
+    badge = document.createElement("span");
     constructor(name, visible, open = true) {
         this.name = name;
         const h3 = document.createElement("h3");
         h3.textContent = name;
         h3.addEventListener("click", () => this.open(!this.is_open));
+        this.badge.className = "mods";
+        this.badge.hidden = true;
+        h3.appendChild(this.badge);
+        UI_TOOLTIP.attach(this.badge, () => this.mod_tip());
         this.body.className = "body";
         this.el.dataset.id = name;
         this.el.append(h3, this.body);
         this.open(open);
         this.visible = visible;
+    }
+    mod_tip() {
+        const n = this.mod_labels.length;
+        return `$Modified$ ` +
+            `{[${n}] ${n === 1 ? "setting differs" : "settings differ"} from the default in this section.} ` +
+            `{${this.mod_labels.join("\n")}} ` +
+            `{Double-click a row to reset it.}`;
     }
     get is_open() { return this.el.classList.contains("open"); }
     open(v = true) { this.el.classList.toggle("open", v); }
@@ -2721,47 +3301,51 @@ class UI_SECTION {
     refresh() {
         this.refresh_visibility();
         if (!this.el.hidden)
-            this.elements.forEach(e => e.refresh());
+            this.fields.forEach(e => e.refresh());
+        const mods = this.fields.filter(e => e.modified);
+        this.mod_labels = mods.map(e => e.label);
+        this.badge.hidden = mods.length === 0;
+        this.badge.textContent = `● ${mods.length}`;
+        return mods.length;
     }
-    push(e) { this.elements.push(e); return e; }
     slider(d) {
         const b = bind(d.obj, d.key, x => x);
-        return this.push(new UI_SLIDER(this.body, d.label, String(d.key), {
+        return this.push(new UI_FIELD_SLIDER(this.body, d.label, String(d.key), {
             get: () => b.target()[d.key],
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, { min: () => val(d.min), max: () => val(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false }));
+        }, { min: () => SrcVal(d.min), max: () => SrcVal(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false }), d);
     }
     toggle(d) {
         const b = bind(d.obj, d.key, x => x);
-        return this.push(new UI_TOGGLE(this.body, d.label, String(d.key), {
+        return this.push(new UI_FIELD_TOGGLE(this.body, d.label, String(d.key), {
             get: () => b.target()[d.key],
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, d.int ?? false));
+        }, d.int ?? false), d);
     }
     enum(d) {
         const b = bind(d.obj, d.key, x => x);
-        return this.push(new UI_ENUM(this.body, d.label, String(d.key), {
+        return this.push(new UI_FIELD_ENUM(this.body, d.label, String(d.key), {
             get: () => b.target()[d.key],
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, () => val(d.options)));
+        }, () => SrcVal(d.options)), d);
     }
     vec(n, d) {
         const arr = (t) => t[d.key];
         const read = (t) => Array.from({ length: n }, (_, i) => arr(t)[i]);
-        const b = bind(d.obj, d.key, () => read(val(d.obj)));
-        return this.push(new UI_VECTOR(this.body, d.label, String(d.key), {
+        const b = bind(d.obj, d.key, () => read(SrcVal(d.obj)));
+        return this.push(new UI_FIELD_VECTOR(this.body, d.label, String(d.key), {
             get: () => read(b.target()),
             set: v => { const a = arr(b.target()); for (let i = 0; i < n; ++i)
                 a[i] = v[i]; }, // in place
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, n, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step, labels: d.labels ?? "xyzw" }));
+        }, n, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step, labels: d.labels ?? "xyzw" }), d);
     }
     vec2(d) { return this.vec(2, d); }
     vec3(d) { return this.vec(3, d); }
@@ -2769,23 +3353,23 @@ class UI_SECTION {
     color(d) {
         const arr = (t) => t[d.key];
         const read = (t) => [arr(t)[0], arr(t)[1], arr(t)[2]];
-        const b = bind(d.obj, d.key, () => read(val(d.obj)));
-        return this.push(new UI_COLOR(this.body, d.label, String(d.key), {
+        const b = bind(d.obj, d.key, () => read(SrcVal(d.obj)));
+        return this.push(new UI_FIELD_COLOR(this.body, d.label, String(d.key), {
             get: () => read(b.target()),
             set: v => { const a = arr(b.target()); for (let i = 0; i < 3; ++i)
                 a[i] = v[i]; }, // in place
             def: b.def, frozen: d.frozen, onChange: d.onPick,
             visible: d.visible, tooltip: d.tooltip
-        }));
+        }), d);
     }
     glsl(d) {
         const b = bind(d.obj, d.key, x => x);
-        return this.push(new UI_GLSL(this.body, d.label, String(d.key), {
+        return this.push(new UI_FIELD_GLSL(this.body, d.label, String(d.key), {
             get: () => b.target()[d.key],
             set: v => { b.target()[d.key] = v; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, d));
+        }, d), d);
     }
     /** a small heading inside the section, to group the rows that follow it. */
     subtitle(text) {
@@ -2802,84 +3386,64 @@ class UI_SECTION {
         this.body.appendChild(el);
         return el;
     }
-}
-class UI_PALETTE {
-    palette;
-    onPick;
-    onAdd;
-    section;
-    grid = document.createElement("div");
-    current;
-    constructor(section, palette, picked, onPick, onAdd) {
-        this.palette = palette;
-        this.onPick = onPick;
-        this.onAdd = onAdd;
-        this.section = section;
-        this.current = picked;
-        this.grid.id = "color-picker";
-        section.body.appendChild(this.grid);
-        this.render();
+    push(e, d) {
+        if (d.persist !== false && typeof d.obj !== "function")
+            e.pid = `${this.name}.${d.label}`;
+        e.track = d.track !== false;
+        this.fields.push(e);
+        return e;
     }
-    static hex(c) {
-        return "#" + [c[0], c[1], c[2]].map(v => v.toString(16).padStart(2, "0")).join("");
+    float(d) {
+        const b = bind(d.obj, d.key, x => x);
+        return this.push(new UI_FIELD_FLOAT(this.body, d.label, String(d.key), {
+            get: () => b.target()[d.key],
+            set: v => { b.target()[d.key] = v; },
+            def: b.def, frozen: d.frozen, onChange: d.onChange,
+            visible: d.visible, tooltip: d.tooltip
+        }, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step,
+            int: d.int ?? false, decimals: d.decimals }), d);
     }
-    /** rebuilds the swatches, call after changing the palette array. */
-    render() {
-        this.grid.replaceChildren();
-        this.palette.forEach((c, i) => {
-            const b = document.createElement("button");
-            b.className = "sw";
-            b.style.setProperty("--c", UI_PALETTE.hex(c.color));
-            b.title = UI_PALETTE.hex(c.color);
-            b.addEventListener("click", () => this.pick(i));
-            this.grid.appendChild(b);
-        });
-        if (this.onAdd) {
-            const add = document.createElement("label");
-            add.className = "sw add";
-            add.title = "Add color";
-            add.innerHTML = `<span>+</span><input type="color" value="#ffffff">`;
-            const inp = add.querySelector("input");
-            inp.addEventListener("change", () => {
-                const n = parseInt(inp.value.slice(1), 16);
-                this.onAdd(get_color_data(new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255, 255])));
-                this.render();
-                this.pick(this.palette.length - 1);
-            });
-            this.grid.appendChild(add);
-        }
-        this.highlight(Math.min(this.current, this.palette.length - 1));
-    }
-    highlight(i) {
-        this.current = i;
-        this.grid.querySelectorAll(".sw:not(.add)")
-            .forEach((b, k) => b.classList.toggle("picked", k === i));
-    }
-    /** selects a swatch; notify=false only moves the highlight (use it when code changed the color). */
-    pick(i, notify = true) {
-        this.highlight(i);
-        if (notify)
-            this.onPick(i);
-    }
-    get picked() { return this.current; }
-    toggle_visibility() {
-        this.section.toggle_visibility();
+    palette(d) {
+        const b = bind(d.obj, d.key, x => x);
+        return this.push(new UI_FIELD_PALETTE(this.body, d.label, String(d.key), {
+            get: () => b.target()[d.key],
+            set: v => { b.target()[d.key] = v; },
+            def: b.def, frozen: d.frozen, onChange: d.onChange,
+            visible: d.visible, tooltip: d.tooltip
+        }, d.colors, d.onAdd), d);
     }
 }
+
+"use strict";
 class UI_INSPECTOR {
     root = $("inspector");
     body = $("insp-body");
-    btn = $("insp-toggle");
+    toggle = $("insp-toggle");
+    reset = $("insp-reset");
+    resize = $("insp-resize");
     sections = new Map();
     constructor() {
         isolate(this.root);
-        this.btn.addEventListener("click", () => this.collapse(!this.collapsed));
+        this.toggle.addEventListener("click", () => this.collapse(!this.collapsed));
+        this.reset.addEventListener("click", e => { this.reset_all(); e.currentTarget.blur(); });
         this.init_resize();
+    }
+    reset_all() {
+        for (const s of this.sections.values())
+            for (const e of s.fields)
+                e.reset();
+        this.refresh();
+    }
+    restore_all() {
+        for (const s of this.sections.values())
+            for (const e of s.fields)
+                e.restore();
+        this.refresh();
     }
     get collapsed() { return this.root.classList.contains("min"); }
     collapse(v = true) {
         this.root.classList.toggle("min", v);
-        this.btn.textContent = v ? "+" : "–";
+        this.toggle.textContent = v ? "+" : "–";
     }
     /** returns the section, creating it on first use. */
     section(name, visible, open = true) {
@@ -2891,13 +3455,6 @@ class UI_INSPECTOR {
         }
         return s;
     }
-    /** builds the palette section (always first) and its swatch grid. */
-    palette(palette, picked, onPick, onAdd) {
-        const s = new UI_SECTION("Palette", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE, true);
-        this.sections.set("Palette", s);
-        this.body.append(s.el);
-        return new UI_PALETTE(s, palette, picked, onPick, onAdd);
-    }
     /** opens one section and closes the others (the pinned palette stays as it is). */
     focus(name) {
         const target = this.sections.get(name);
@@ -2906,19 +3463,23 @@ class UI_INSPECTOR {
         target.open(true);
         target.el.scrollIntoView({ block: "nearest" });
     }
-    refresh() { for (const s of this.sections.values())
-        s.refresh(); }
+    refresh() {
+        let n = 0;
+        for (const s of this.sections.values())
+            n += s.refresh();
+        this.reset.classList.toggle("dirty", n > 0);
+    }
     toggle_visibility() {
         this.root.hidden = !this.root.hidden;
     }
     init_resize() {
-        const handle = $("insp-resize");
+        const resize = this.resize;
         const MIN = 240, MAX = () => Math.min(720, innerWidth - 120);
         const saved = parseInt(localStorage.getItem("insp_w") ?? "", 10);
         if (saved)
             this.root.style.width = `${Math.min(MAX(), Math.max(MIN, saved))}px`;
-        handle.addEventListener("pointerdown", e => {
-            handle.setPointerCapture(e.pointerId);
+        resize.addEventListener("pointerdown", e => {
+            resize.setPointerCapture(e.pointerId);
             const x0 = e.clientX, w0 = this.root.getBoundingClientRect().width;
             const move = (ev) => {
                 // the panel is anchored right, so dragging left makes it wider
@@ -2926,18 +3487,20 @@ class UI_INSPECTOR {
                 this.root.style.width = `${w}px`;
             };
             const up = (ev) => {
-                handle.releasePointerCapture(ev.pointerId);
-                handle.removeEventListener("pointermove", move);
-                handle.removeEventListener("pointerup", up);
+                resize.releasePointerCapture(ev.pointerId);
+                resize.removeEventListener("pointermove", move);
+                resize.removeEventListener("pointerup", up);
                 localStorage.setItem("insp_w", String(Math.round(this.root.getBoundingClientRect().width)));
             };
-            handle.addEventListener("pointermove", move);
-            handle.addEventListener("pointerup", up);
+            resize.addEventListener("pointermove", move);
+            resize.addEventListener("pointerup", up);
             e.preventDefault();
         });
-        handle.addEventListener("dblclick", () => { this.root.style.width = ""; localStorage.removeItem("insp_w"); });
+        resize.addEventListener("dblclick", () => { this.root.style.width = ""; localStorage.removeItem("insp_w"); });
     }
 }
+
+"use strict";
 class UI_TOOLBAR {
     onPick;
     nav = $("tools");
@@ -3000,6 +3563,8 @@ class UI_TOOLBAR {
         return { set, toggle: () => set(!state), get on() { return state; } };
     }
 }
+
+"use strict";
 class UI_VIEW_SELECT {
     onPick;
     root = $("view-select");
@@ -3010,7 +3575,7 @@ class UI_VIEW_SELECT {
     current;
     constructor(items, initial, onPick) {
         this.onPick = onPick;
-        isolate($("view-select"));
+        isolate(this.root);
         const keys = new Map();
         for (const it of items) {
             const li = document.createElement("li");
@@ -3058,16 +3623,15 @@ class UI_VIEW_SELECT {
         this.root.hidden = !this.root.hidden;
     }
 }
-/* ================================================================== */
-/*  status bar (bottom center)                                        */
-/* ================================================================== */
+
+"use strict";
 class UI_STATUS {
     root = $("status");
     $cursor = $("st-cursor");
     $tool = $("st-tool");
     $fps = $("st-fps");
     fps_smooth = 60;
-    constructor() { isolate($("status")); }
+    constructor() { isolate(this.root); }
     cursor(x, y) {
         this.$cursor.textContent = `x ${x.toFixed(3)}  y ${y.toFixed(3)}`;
     }
@@ -3082,9 +3646,8 @@ class UI_STATUS {
         this.root.hidden = !this.root.hidden;
     }
 }
-/* ================================================================== */
-/*  world bounds in the screen corners                                */
-/* ================================================================== */
+
+"use strict";
 class UI_BOUNDS {
     tl = $("c-tl");
     tr = $("c-tr");
@@ -3099,10 +3662,10 @@ class UI_BOUNDS {
      *  decrease toward the right and the top. */
     update(cx, cy, hw, hh) {
         const x0 = cx - hw, x1 = cx + hw, y0 = cy - hh, y1 = cy + hh;
-        UI_BOUNDS.fmt(this.tl, x0, y1);
-        UI_BOUNDS.fmt(this.tr, x1, y1);
-        UI_BOUNDS.fmt(this.bl, x0, y0);
-        UI_BOUNDS.fmt(this.br, x1, y0);
+        UI_BOUNDS.fmt(this.tl, x0, y1); // quadrant II  (-, +)
+        UI_BOUNDS.fmt(this.tr, x1, y1); // quadrant I   (+, +)
+        UI_BOUNDS.fmt(this.bl, x0, y0); // quadrant III (-, -)
+        UI_BOUNDS.fmt(this.br, x1, y0); // quadrant IV  (+, -)
     }
     toggle_visibility() {
         this.tl.hidden = this.tr.hidden = this.bl.hidden = this.br.hidden = !this.tl.hidden;
@@ -3149,7 +3712,7 @@ function recompile_forcefield(get_velocity) {
         return e;
     }
 }
-function init_shaders() {
+function init_webgl() {
     canvas_el = document.getElementById("screen");
     if (!(canvas_el instanceof HTMLCanvasElement))
         throw "Colorful.js: couldn't find 'canvas#screen' element.";
@@ -3205,7 +3768,7 @@ function init_shaders() {
         new uniform("outline_width", GL_FLOAT, U_UPDATE, () => obstacle_splat.outline_width),
         new uniform("erase", GL_FLOAT)
     ]);
-    forcefield_p = new shader_program("forcefield", quad_vert, sh_forcefield(force.glsl), [
+    forcefield_p = new shader_program("forcefield", quad_vert, sh_forcefield(force.glsl.src), [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
@@ -3250,6 +3813,7 @@ function init_shaders() {
         new uniform("curl_strength", GL_FLOAT, U_UPDATE, () => fluid.curl_strength),
         new uniform("max_velocity", GL_FLOAT, U_UPDATE, () => fluid.max_velocity),
         new uniform("max_force", GL_FLOAT, U_UPDATE, () => fluid.max_force),
+        new uniform("drag", GL_FLOAT, U_UPDATE, () => fluid.drag)
     ]);
     divergence_p = new shader_program("divergence", quad_vert, sh_sim_divergence, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
@@ -3356,9 +3920,52 @@ function init_textures() {
 }
 
 "use strict";
-let ui_toolbar, ui_status, ui_views, ui_inspector, ui_palette, ui_bounds, 
+let ui_toolbar, ui_status, ui_views, ui_inspector, ui_palette_s, ui_bounds, 
 //ui_brush_s: UI_SECTION,
 ui_dye_brush_s, ui_force_brush_s, ui_diffusion_s, ui_wall_s, ui_field_s, ui_fluid_s, ui_field_strength, ui_field_center, ui_field_span, ui_visualizer_s, ui_container, ui_force_btn, ui_borders_btn, ui_fluid_bg, ui_field_glsl;
+const TOOL_ICONS = [
+    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/><path d="M4 20h9m-3-3 3 3-3 3"/>',
+    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/>',
+    '<path d="M4 8h10a3 3 0 1 0-3-3M4 13h14a3 3 0 1 1-3 3M4 18h7"/>',
+    '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16M10 5v7M15 12v7"/>',
+];
+const FORCE_ICON = '<path d="M13 5.5c-1.8-1-3.4 0-3.7 2L8 19c-.3 1.6-1.4 2.300-2.800 1.600"/>' +
+    '<path d="M5.500 11.500h7"/>' +
+    '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>';
+const BORDERS_ICON = '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
+    '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
+let wall_ring, wall_line; // assign in init_ui: $("wall-ring"), $("wall-line")
+function ui_update_mouse_overlay() {
+    const wall = mouse.mode === MOUSE_MODE_WALL;
+    const on = mouse.over_canvas && !mouse.m2_down;
+    const line_on = on && wall && mouse.m1_down && keyboard.ctrl_down;
+    wall_ring.style.display = on ? "" : "none";
+    wall_line.style.display = line_on ? "" : "none";
+    if (!on)
+        return;
+    const h = canvas_rect.height;
+    const px = (u) => [canvas_rect.left + u[0] * canvas_rect.width,
+        canvas_rect.bottom - u[1] * h];
+    // radius in screen-height units
+    const unit = wall
+        ? obstacle_splat.radius + (keyboard.shift_down ? 0.045 : 0)
+        : Math.sqrt(mouse.mode === MOUSE_MODE_DYE_FORCE ? Math.max(splat.dye_radius, splat.velocity_radius)
+            : mouse.mode === MOUSE_MODE_DYE ? splat.dye_radius
+                : splat.velocity_radius);
+    const r = Math.max(0.5, unit * h);
+    const [x, y] = px(mouse.uv_pos);
+    wall_ring.setAttribute("cx", String(x));
+    wall_ring.setAttribute("cy", String(y));
+    wall_ring.setAttribute("r", String(r));
+    if (line_on) {
+        const [ax, ay] = px(mouse.wall_anchor);
+        wall_line.setAttribute("x1", String(ax));
+        wall_line.setAttribute("y1", String(ay));
+        wall_line.setAttribute("x2", String(x));
+        wall_line.setAttribute("y2", String(y));
+        wall_line.setAttribute("stroke-width", String(2 * r));
+    }
+}
 function ui_update_bounds() {
     const h = force.span * 0.25;
     ui_bounds.update(force.center[0], force.center[1], h * ASPECT_NUM, h);
@@ -3371,63 +3978,76 @@ function ui_set_force_active(on) {
     ui_bounds.toggle_visibility();
 }
 function init_ui() {
+    wall_ring = $("wall-ring");
+    wall_line = $("wall-line");
     ui_bounds = new UI_BOUNDS();
     ui_status = new UI_STATUS();
     ui_inspector = new UI_INSPECTOR();
-    const sim = ui_inspector.section("Precision");
+    const sim = ui_inspector.section("precision");
+    sim.float({ label: "elapsed time", tooltip: "$elapsed time$", obj: renderer, key: "time", min: 0.0, step: 0.15, persist: false, track: false });
     sim.slider({ label: "time scale", tooltip: "$Time scale$ {Multiplies the simulated time that passes per frame.} $$Values$$ {[0]: paused\n[0.1 – 0.9]: slow motion\n[1]: real time\n[1 – 2]: fast forward, less stable}", obj: renderer, key: "time_scale", min: 0.0, max: 2.0 });
     sim.slider({ label: "dt", tooltip: "$Time step$ {Seconds simulated per step. Smaller steps are more accurate and stable, larger ones are faster but smear and can blow up.} $$Values$$ {[0.004 – 0.008]: very accurate (120–240 Hz)\n[0.0167]: default (60 Hz)\n[> 0.025]: visibly unstable with strong forces}", obj: renderer, key: "fixed_delta_time", min: 0.0, max: 1 / 30 });
     sim.slider({ label: "iterations", tooltip: "$Pressure iterations$ {Jacobi passes per step. Pressure travels one texel per pass, so more passes make the fluid more incompressible and let flow reach far through thin tubes.} $$Values$$ {[0]: no projection, the fluid compresses\n[20 – 40]: fast, mushy\n[60 – 150]: good quality\n[> 200]: only for long thin channels}", obj: fluid, key: "jacobi_iterations", min: 0, max: 300, int: true });
-    ui_palette = ui_inspector.palette(palette_color_data, stroke.palette_color, i => { stroke.palette_color = i; }, c => { stroke.choosen_palette.push(c); });
-    ui_dye_brush_s = ui_inspector.section("Dye brush", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE);
-    ui_dye_brush_s.slider({ label: "radius", tooltip: "$Dye radius$ {Size of the dye brush, as the 1/e radius of a Gaussian in sim texels.} $$Values$$ {[1 – 5]: thin lines\n[10 – 25]: normal\n[> 40]: big soft blobs}", obj: splat, key: "dye_radius", min: 1e-4, max: 0.01, log: true });
-    ui_dye_brush_s.slider({ label: "strength", tooltip: "$Dye strength$ {How strongly the brush replaces the existing dye per frame. It blends, it never adds, so slow strokes can't saturate.} $$Values$$ {[0 – 0.2]: faint, builds up slowly\n[0.3 – 0.6]: normal\n[0.8 – 1]: opaque, overrides what is there}", obj: splat, key: "dye_strength", min: 0, max: 1 });
-    ui_force_brush_s = ui_inspector.section("Force brush", () => mouse.mode === MOUSE_MODE_DYE_FORCE || mouse.mode === MOUSE_MODE_FORCE);
-    ui_force_brush_s.slider({ label: "radius", tooltip: "$Force radius$ {Size of the push applied by the brush, in sim texels (1/e radius). Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 8]: sharp, dies quickly\n[15 – 30]: normal\n[> 40]: broad, slow currents}", obj: splat, key: "velocity_radius", min: 1e-4, max: 0.02, log: true });
-    ui_force_brush_s.slider({ label: "strength", tooltip: "$Force strength$ {Opacity of the push at the center of the brush.} $$Values$$ {[0 – 0.3]: gentle\n[0.4 – 0.7]: normal\n[0.8 – 1]: full push}", obj: splat, key: "velocity_strength", min: 0, max: 1 });
-    ui_force_brush_s.slider({ label: "speed sensitivity", tooltip: "$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", obj: splat, key: "force_scale", min: 0, max: 2 });
-    ui_wall_s = ui_inspector.section("Wall brush", () => mouse.mode === MOUSE_MODE_WALL);
-    ui_wall_s.slider({ label: "radius", tooltip: "$Wall radius$ {Half thickness of the wall stroke, in units of screen height. Total thickness is twice this value.} $$Values$$ {[< 0.006]: under 3 texels, leaks\n[0.008 – 0.02]: solid walls\n[> 0.03]: big blocks}", obj: obstacle_splat, key: "radius", min: 0.002, max: 0.05, log: true });
-    ui_wall_s.slider({ label: "outline thickness", tooltip: "$Edge softness$ {Width of the soft ramp at the wall contour. It makes the rim smooth and anti-aliased.} $$Values$$ {[0.0005 – 0.002]: crisp\n[0.003]: default\n[> 0.006]: blurry walls}", obj: obstacle_splat, key: "outline_width", min: 0.0005, max: 0.01, log: true });
-    ui_field_s = ui_inspector.section("Force field", () => force.is_active);
+    ui_palette_s = ui_inspector.section("palette", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE);
+    ui_palette_s.palette({
+        label: "color", obj: stroke, key: "palette_color",
+        colors: () => palette_color_data,
+        onAdd: c => stroke.choosen_palette.push(c),
+    });
+    ui_dye_brush_s = ui_inspector.section("dye brush", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE);
+    ui_dye_brush_s.slider({ label: "radius", tooltip: "$Dye radius$ {Size of the dye brush, as the 1/e radius of a Gaussian in sim texels.} $$Values$$ {[1 – 5]: thin lines\n[10 – 25]: normal\n[> 40]: big soft blobs}", obj: splat, key: "dye_radius", min: 1e-4, max: 0.01, log: true, persist: true });
+    ui_dye_brush_s.slider({ label: "strength", tooltip: "$Dye strength$ {How strongly the brush replaces the existing dye per frame. It blends, it never adds, so slow strokes can't saturate.} $$Values$$ {[0 – 0.2]: faint, builds up slowly\n[0.3 – 0.6]: normal\n[0.8 – 1]: opaque, overrides what is there}", obj: splat, key: "dye_strength", min: 0, max: 1, persist: true });
+    ui_force_brush_s = ui_inspector.section("force brush", () => mouse.mode === MOUSE_MODE_DYE_FORCE || mouse.mode === MOUSE_MODE_FORCE);
+    ui_force_brush_s.slider({ label: "radius", tooltip: "$Force radius$ {Size of the push applied by the brush, in sim texels (1/e radius). Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 8]: sharp, dies quickly\n[15 – 30]: normal\n[> 40]: broad, slow currents}", obj: splat, key: "velocity_radius", min: 1e-4, max: 0.02, log: true, persist: true });
+    ui_force_brush_s.slider({ label: "strength", tooltip: "$Force strength$ {Opacity of the push at the center of the brush.} $$Values$$ {[0 – 0.3]: gentle\n[0.4 – 0.7]: normal\n[0.8 – 1]: full push}", obj: splat, key: "velocity_strength", min: 0, max: 1, persist: true });
+    ui_force_brush_s.slider({ label: "speed sensitivity", tooltip: "$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", obj: splat, key: "force_scale", min: 0, max: 2, persist: true });
+    ui_wall_s = ui_inspector.section("wall brush", () => mouse.mode === MOUSE_MODE_WALL);
+    ui_wall_s.slider({ label: "radius", tooltip: "$Wall radius$ {Half thickness of the wall stroke, in units of screen height. Total thickness is twice this value.} $$Values$$ {[< 0.006]: under 3 texels, leaks\n[0.008 – 0.02]: solid walls\n[> 0.03]: big blocks}", obj: obstacle_splat, key: "radius", min: 0.002, max: 0.05, log: true, persist: true });
+    ui_wall_s.slider({ label: "outline thickness", tooltip: "$Edge softness$ {Width of the soft ramp at the wall contour. It makes the rim smooth and anti-aliased.} $$Values$$ {[0.0005 – 0.002]: crisp\n[0.003]: default\n[> 0.006]: blurry walls}", obj: obstacle_splat, key: "outline_width", min: 0.0005, max: 0.01, log: true, persist: true });
+    ui_field_s = ui_inspector.section("force field", () => force.is_active);
     ui_field_glsl = ui_field_s.glsl({
-        label: "field", obj: force, key: "glsl",
+        label: "field", obj: force.glsl, key: "src",
         tooltip: "$Field source$ {Edit [get_velocity(vec2 p)] in GLSL. [p] is the world position, the return value is the velocity at that point before the strength is applied.} {Compile with [Ctrl+S]. Errors show on the line.}",
-        title: "glsl code", button: "get_velocity(vec2 p)",
-        required_fn: "get_velocity", line_offset: 0,
-        compile: (s) => {
-            if (!force.is_active) {
+        title: () => force.glsl.label,
+        set_title: (t) => force.glsl.label = t,
+        library: { defaults: () => DEFAULT_FORCE_FIELDS, storage_key: "saved_force_fields" },
+        button: "get_velocity(vec2 p)",
+        required_fn: "get_velocity", line_offset: 49,
+        compile: (s, restoring) => {
+            if (!restoring && !force.is_active) {
                 force.is_active = true;
                 ui_force_btn.set(true, false);
             }
             return recompile_forcefield(s);
         }
     });
-    ui_field_center = ui_field_s.vec2({ label: "center", tooltip: "$Center$ {World coordinates that sit at the middle of the screen. Right-drag pans it.} $$Values$$ {Any value. The corner labels show the result.}", obj: force, key: "center", step: 0.01, onChange: ui_update_bounds });
-    ui_field_strength = ui_field_s.slider({ label: "strength", tooltip: "$Force strength$ {Scales the velocity returned by [get_velocity].} {Higher values push the fluid harder and hit the speed cap sooner.} $$Values$$ {[1 – 100]: gentle drift\n[100 – 1000]: strong flow\n[> 1000]: saturates [max velocity]}", obj: force, key: "strength", min: 1, max: 10000 });
-    ui_field_span = ui_field_s.slider({ label: "window", tooltip: "$Window$ {World width that the screen shows. Mouse wheel zooms it.} $$Values$$ {[0.5 – 5]: zoomed in on the details\n[10 – 40]: a few periods of the field\n[> 100]: whole field in view}", obj: force, key: "span", min: 0.5, max: 200, log: true, onChange: ui_update_bounds });
+    ui_field_center = ui_field_s.vec2({ label: "center", tooltip: "$Center$ {World coordinates that sit at the middle of the screen. Right-drag pans it.} $$Values$$ {Any value. The corner labels show the result.}", obj: force, key: "center", step: 0.01, onChange: ui_update_bounds, persist: true });
+    ui_field_strength = ui_field_s.slider({ label: "strength", tooltip: "$Force strength$ {Scales the velocity returned by [get_velocity].} {Higher values push the fluid harder and hit the speed cap sooner.} $$Values$$ {[1 – 100]: gentle drift\n[100 – 1000]: strong flow\n[> 1000]: saturates [max velocity]}", obj: force, key: "strength", min: 1, max: 10000, persist: true });
+    ui_field_span = ui_field_s.slider({ label: "window", tooltip: "$Window$ {World width that the screen shows. Mouse wheel zooms it.} $$Values$$ {[0.5 – 5]: zoomed in on the details\n[10 – 40]: a few periods of the field\n[> 100]: whole field in view}", obj: force, key: "span", min: 0.5, max: 200, log: true, onChange: ui_update_bounds, persist: true });
     ui_field_s.separator();
     ui_field_s.subtitle("vector field");
-    ui_field_s.toggle({ label: "pure field", tooltip: "$Pure field$ {Pulls the velocity back toward the field after the pressure solve, so the picture follows the vector field and the fluid only adds perturbations.} {Off: the field is a plain force and the solver reshapes it.}", obj: force, key: "pure_vector_field", int: true });
-    ui_field_s.slider({ label: "relaxation", tooltip: "$Relaxation$ {How quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field}", obj: force, key: "relaxation", min: 0.0, max: 30.0, visible: () => force.pure_vector_field });
-    ui_fluid_s = ui_inspector.section("Simulation");
+    ui_field_s.toggle({ label: "pure field", tooltip: "$Pure field$ {Pulls the velocity back toward the field after the pressure solve, so the picture follows the vector field and the fluid only adds perturbations.} {Off: the field is a plain force and the solver reshapes it.}", obj: force, key: "pure_vector_field", int: true, persist: true });
+    ui_field_s.slider({ label: "relaxation", tooltip: "$Relaxation$ {How quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field}", obj: force, key: "relaxation", min: 0.0, max: 500.0, visible: () => force.pure_vector_field, persist: true });
+    ui_fluid_s = ui_inspector.section("simulation");
     ui_fluid_bg = ui_fluid_s.color(({
         label: "background", tooltip: "$Background$ {Color of the empty fluid. Changing it clears the dye. Locked while a non-dye view is shown.} $$Values$$ {Each channel [0 – 1].}", obj: fluid, key: "bg_arr", onPick: () => {
             color_logarithm(fluid.bg, fluid.bg_arr);
-            renderer.request_color_clear = { pending: true, noise: false };
+            renderer.request_color_clear(false, false);
         },
         frozen: () => fluid.display_mode === DISPLAY_DYE ? undefined : fluid.bg_arr,
+        persist: true
     }));
-    ui_fluid_s.slider({ label: "jacobi scale", tooltip: "$Pressure carry-over$ {Fraction of last frame's pressure used as the starting guess. High values converge faster over time.} $$Values$$ {[0 – 0.5]: restarts, needs many iterations\n[0.8 – 0.95]: good\n[1]: never forgets, can accumulate noise}", obj: fluid, key: "jacobi_scale", min: 0, max: 1 });
-    ui_fluid_s.slider({ label: "curl strength", tooltip: "$Vorticity confinement$ {Re-injects the swirl lost to numerical blur, so eddies live longer.} $$Values$$ {[0]: smooth, dies quickly\n[5 – 20]: lively\n[> 35]: noisy, can go unstable}", obj: fluid, key: "curl_strength", min: 0, max: 60 });
-    ui_fluid_s.slider({ label: "velocity decay", tooltip: "$Velocity decay$ {Multiplier applied to the velocity every step. Below 1 acts like friction.} $$Values$$ {[1]: motion never fades\n[0.999 – 0.9999]: slow fade\n[< 0.99]: thick, syrup-like}", obj: fluid, key: "velocity_dissipation", min: 0.9, max: 1, step: 0.0001 });
-    ui_fluid_s.slider({ label: "max velocity", tooltip: "$Max velocity$ {Speed cap in texels/s. It keeps the solver stable.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: normal\n[> 3000]: only with a small dt}", obj: fluid, key: "max_velocity", min: 0, max: 10000 });
-    ui_diffusion_s = ui_inspector.section("Diffusion");
-    ui_diffusion_s.slider({ label: "base diff.", tooltip: "$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[0]: crisp, only advection mixes\n[0.5 – 2]: soft\n[> 5]: washes out fast}", obj: fluid, key: "base_diffusion", min: 0, max: 10 });
-    ui_diffusion_s.slider({ label: "curl diff.", tooltip: "$Curl diffusion$ {Extra blending where the flow swirls, like eddy mixing.} $$Values$$ {[0]: off\n[0.05 – 0.3]: swirls blend\n[> 1]: vortex cores dissolve}", obj: fluid, key: "curl_diffusion", min: 0, max: 2 });
-    ui_diffusion_s.slider({ label: "vel. diff.", tooltip: "$Speed diffusion$ {Extra blending proportional to the local speed.} $$Values$$ {[0]: off\n[0.02 – 0.1]: moving dye smears gently\n[> 0.3]: heavy blur in fast regions}", obj: fluid, key: "velocity_diffusion", min: 0, max: 0.5 });
-    ui_diffusion_s.slider({ label: "max diff.", tooltip: "$Max diffusion$ {Upper limit of the total rate, in 1/s.} $$Values$$ {[2 – 10]: safe\n[> 20]: can wash out the dye in a few frames}", obj: fluid, key: "max_diffusion", min: 0, max: 30 });
-    ui_diffusion_s.slider({ label: "diff. radius", tooltip: "$Diffusion radius$ {Radius of the blending ring in dye texels. Larger spreads color farther per step.} $$Values$$ {[1 – 3]: fine\n[4 – 6]: normal\n[> 8]: star-shaped artifacts}", obj: fluid, key: "diffusion_texel_radius", min: 1, max: 12 });
+    ui_fluid_s.slider({ label: "jacobi scale", tooltip: "$Pressure carry-over$ {Fraction of last frame's pressure used as the starting guess. High values converge faster over time.} $$Values$$ {[0 – 0.5]: restarts, needs many iterations\n[0.8 – 0.95]: good\n[1]: never forgets, can accumulate noise}", obj: fluid, key: "jacobi_scale", min: 0, max: 1, persist: true });
+    ui_fluid_s.slider({ label: "curl strength", tooltip: "$Vorticity confinement$ {Re-injects the swirl lost to numerical blur, so eddies live longer.} $$Values$$ {[0]: smooth, dies quickly\n[5 – 20]: lively\n[> 35]: noisy, can go unstable}", obj: fluid, key: "curl_strength", min: 0, max: 60, persist: true });
+    ui_fluid_s.slider({ label: "velocity decay", tooltip: "$Velocity decay$ {Multiplier applied to the velocity every step. Below 1 acts like friction.} $$Values$$ {[1]: motion never fades\n[0.999 – 0.9999]: slow fade\n[< 0.99]: thick, syrup-like}", obj: fluid, key: "velocity_dissipation", min: 0.9, max: 1, step: 0.0001, persist: true });
+    ui_fluid_s.slider({ label: "max velocity", tooltip: "$Max velocity$ {Speed cap in texels/s. It keeps the solver stable.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: normal\n[> 3000]: only with a small dt}", obj: fluid, key: "max_velocity", min: 0, max: 10000, persist: true });
+    ui_fluid_s.slider({ label: "drag", tooltip: "$Drag$", obj: fluid, key: "drag", min: 0, max: 1500, persist: true });
+    ui_diffusion_s = ui_inspector.section("diffusion");
+    ui_diffusion_s.slider({ label: "base diff.", tooltip: "$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[0]: crisp, only advection mixes\n[0.5 – 2]: soft\n[> 5]: washes out fast}", obj: fluid, key: "base_diffusion", min: 0, max: 10, persist: true });
+    ui_diffusion_s.slider({ label: "curl diff.", tooltip: "$Curl diffusion$ {Extra blending where the flow swirls, like eddy mixing.} $$Values$$ {[0]: off\n[0.05 – 0.3]: swirls blend\n[> 1]: vortex cores dissolve}", obj: fluid, key: "curl_diffusion", min: 0, max: 2, persist: true });
+    ui_diffusion_s.slider({ label: "vel. diff.", tooltip: "$Speed diffusion$ {Extra blending proportional to the local speed.} $$Values$$ {[0]: off\n[0.02 – 0.1]: moving dye smears gently\n[> 0.3]: heavy blur in fast regions}", obj: fluid, key: "velocity_diffusion", min: 0, max: 0.5, persist: true });
+    ui_diffusion_s.slider({ label: "max diff.", tooltip: "$Max diffusion$ {Upper limit of the total rate, in 1/s.} $$Values$$ {[2 – 10]: safe\n[> 20]: can wash out the dye in a few frames}", obj: fluid, key: "max_diffusion", min: 0, max: 30, persist: true });
+    ui_diffusion_s.slider({ label: "diff. radius", tooltip: "$Diffusion radius$ {Radius of the blending ring in dye texels. Larger spreads color farther per step.} $$Values$$ {[1 – 3]: fine\n[4 – 6]: normal\n[> 8]: star-shaped artifacts}", obj: fluid, key: "diffusion_texel_radius", min: 1, max: 51, persist: true });
     const SECTION_OF_TOOL = {
         [MOUSE_MODE_DYE_FORCE]: "Dye brush",
         [MOUSE_MODE_DYE]: "Dye brush",
@@ -3514,15 +4134,16 @@ function init_ui() {
         fluid.display_mode = id;
         ui_fluid_bg.refresh();
     });
+    ui_inspector.restore_all();
     ui_container = $("hud");
     ui_update_bounds();
-    document.getElementById("hud")?.classList.toggle("hidden");
+    ui_container?.classList.toggle("hidden");
 }
 
 "use strict";
 /** event called by window.onload */
 function main() {
-    init_shaders();
+    init_webgl();
     init_textures();
     init_ui();
     canvas_el.onmouseleave = c_mouseleave;
@@ -3535,4 +4156,5 @@ function main() {
     };
     draw(0);
 }
-//
+// add UI_FIELD_FLOAT, to have Precision > time be editable
+// remove focus from toggle after clicking it
