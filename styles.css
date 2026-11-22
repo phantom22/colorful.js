@@ -374,7 +374,7 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row input[type=number].scrub:not(:focus) { cursor: ns-resize; }   /* only inputs with drag scrubbing */
 /* touch: a vertical drag on a scrub field scrubs instead of scrolling the inspector */
 .row input[type=number].scrub { touch-action: none; }
-#tools button { -webkit-touch-callout: none; user-select: none; }   /* toolbar long-press */
+#tools button { -webkit-touch-callout: none; user-select: none; touch-action: none; }   /* toolbar long-press: no browser gestures */
 
 .row.palette { height: auto; grid-template-columns: 1fr; }
 .row.palette label { display: none; }

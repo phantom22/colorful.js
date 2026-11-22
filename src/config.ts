@@ -1,6 +1,6 @@
 /** default sim / dye resolution: target texel area N1*N2 (M1*M2) is res², shaped to the window. */
-const SIM_RESOLUTION = 1024,
-      DYE_RESOLUTION = 2048;
+const SIM_RESOLUTION = 256,
+      DYE_RESOLUTION = 512;
 let window_ar = window.innerHeight / window.innerWidth;
 
 const bg_arr = [0, 0, 0],

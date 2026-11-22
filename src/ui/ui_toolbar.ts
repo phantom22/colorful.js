@@ -77,15 +77,23 @@ class UI_TOOLBAR<T extends number> {
         };
         let held = false;
         if (o.onHold) {
-            let timer = 0;
+            let timer = 0, x0 = 0, y0 = 0;
             b.addEventListener("pointerdown", e => {
                 if (e.pointerType === "mouse") return;
-                held = false;
+                held = false; x0 = e.clientX; y0 = e.clientY;
                 clearTimeout(timer);
-                timer = window.setTimeout(() => { held = true; o.onHold!(); }, TOOLBAR_HOLD_MS);
+                timer = window.setTimeout(() => {
+                    held = true;
+                    navigator.vibrate?.(15);                    // tactile "it worked"
+                    o.onHold!();
+                }, TOOLBAR_HOLD_MS);
             });
-            for (const ev of ["pointerup", "pointercancel", "pointerleave"])
-                b.addEventListener(ev, () => clearTimeout(timer));
+            // only a real lift or a slide cancels the hold: mobile browsers fire
+            // pointercancel / pointerleave on their own long-press handling
+            b.addEventListener("pointerup", () => clearTimeout(timer));
+            b.addEventListener("pointermove", e => {
+                if (Math.hypot(e.clientX - x0, e.clientY - y0) > 10) clearTimeout(timer);
+            });
             b.addEventListener("contextmenu", e => e.preventDefault());   // the phone's long-press menu
         }
         b.addEventListener("click", () => {
