@@ -41,7 +41,7 @@ function scrub_number(input: HTMLInputElement, o: {
     log?: boolean;               // multiplicative steps for log sliders
 }) {
     input.classList.add("scrub");   // gets the drag cursor, see styles.css
-    let active = false, moved = false, y0 = 0, v0 = 0;
+    let active = false, moved = false, y0 = 0, v0 = 0, dead = 3;
     const mult = (e: { shiftKey: boolean; altKey: boolean }) => e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
 
     // keep the first click from focusing the box, so a drag doesn't start a text edit
@@ -49,11 +49,12 @@ function scrub_number(input: HTMLInputElement, o: {
     input.addEventListener("pointerdown", e => {
         if (e.button !== 0 || o.frozen() || document.activeElement === input) return;
         active = true; moved = false; y0 = e.clientY; v0 = o.get();
+        dead = e.pointerType === "mouse" ? 3 : 6;         // fingers wobble more before a tap
         input.setPointerCapture(e.pointerId);
     });
     input.addEventListener("pointermove", e => {
         if (!active) return;
-        if (!moved && Math.abs(e.clientY - y0) < 3) return;       // dead zone, so clicks stay clicks
+        if (!moved && Math.abs(e.clientY - y0) < dead) return;    // dead zone, so clicks / taps stay clicks
         moved = true;
         const dy = y0 - e.clientY, k = mult(e);
         o.apply(o.log ? v0 * Math.exp(dy * 0.01 * k) : v0 + dy * o.base() * k);

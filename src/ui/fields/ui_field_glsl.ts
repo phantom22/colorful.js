@@ -83,8 +83,7 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
         this.win.hidden = false;
         this.errors = [];
         this.$err.textContent = "";
-        this.render();
-        this.ta.focus();
+        this.render();                  // no autofocus: click / tap into the code to edit
         this.set_btn("idle");
         this.$lib.hidden = true;
         this.update_unsaved();

@@ -2,6 +2,9 @@ type ToolItem<T extends number> = {
     id: T; tip: string; icon: string; key?: string; separator?: boolean;
 };
 
+/** touch long-press duration on toolbar toggles. */
+const TOOLBAR_HOLD_MS = 500;
+
 class UI_TOOLBAR<T extends number> {
     private readonly nav = $("tools");
     private readonly buttons = new Map<T, HTMLButtonElement>();
@@ -58,7 +61,8 @@ class UI_TOOLBAR<T extends number> {
         this.nav.hidden = !this.nav.hidden;
     }
 
-    add_toggle(o: { tip: string; icon: string; initial: boolean; onToggle: (on: boolean) => void; separator?: boolean }) {
+    /** onHold: touch / pen long-press action (the press then doesn't toggle). */
+    add_toggle(o: { tip: string; icon: string; initial: boolean; onToggle: (on: boolean) => void; separator?: boolean; onHold?: () => void }) {
         if (o.separator !== false) this.nav.appendChild(document.createElement("hr"));
         const b = document.createElement("button");
         b.className = "toggle";
@@ -71,7 +75,23 @@ class UI_TOOLBAR<T extends number> {
             b.setAttribute("aria-pressed", String(on));
             if (notify) o.onToggle(on);
         };
-        b.addEventListener("click", () => { set(!state); b.blur(); });    // blur so Space doesn't re-click it
+        let held = false;
+        if (o.onHold) {
+            let timer = 0;
+            b.addEventListener("pointerdown", e => {
+                if (e.pointerType === "mouse") return;
+                held = false;
+                clearTimeout(timer);
+                timer = window.setTimeout(() => { held = true; o.onHold!(); }, TOOLBAR_HOLD_MS);
+            });
+            for (const ev of ["pointerup", "pointercancel", "pointerleave"])
+                b.addEventListener(ev, () => clearTimeout(timer));
+            b.addEventListener("contextmenu", e => e.preventDefault());   // the phone's long-press menu
+        }
+        b.addEventListener("click", () => {
+            if (held) { held = false; b.blur(); return; }   // the release after a long-press
+            set(!state); b.blur();                          // blur so Space doesn't re-click it
+        });
         this.nav.appendChild(b);
         set(o.initial, false);
         return { set, toggle: () => set(!state), get on() { return state; } };

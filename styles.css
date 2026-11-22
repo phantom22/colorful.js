@@ -372,6 +372,9 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row.float { grid-template-columns: var(--lbl) 1fr; }
 
 .row input[type=number].scrub:not(:focus) { cursor: ns-resize; }   /* only inputs with drag scrubbing */
+/* touch: a vertical drag on a scrub field scrubs instead of scrolling the inspector */
+.row input[type=number].scrub { touch-action: none; }
+#tools button { -webkit-touch-callout: none; user-select: none; }   /* toolbar long-press */
 
 .row.palette { height: auto; grid-template-columns: 1fr; }
 .row.palette label { display: none; }

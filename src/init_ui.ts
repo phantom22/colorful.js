@@ -311,10 +311,11 @@ function init_ui() {
     });
 
     ui_force_btn = ui_toolbar.add_toggle({
-        tip: "Force field [F]",
+        tip: "Force field [F] · hold: edit the field [T]",
         icon: FORCE_ICON, 
         initial: force.is_active, 
         onToggle: ui_set_force_active,
+        onHold: () => ui_field_glsl.open(),   // touch / pen long-press
     });
     
     ui_borders_btn = ui_toolbar.add_toggle({
@@ -330,7 +331,6 @@ function init_ui() {
         tip: "Arrows: pressure push in the pressure view, flow elsewhere",
         icon: ARROWS_ICON,
         initial: fluid.display.arrows === 1,
-        separator: false,
         onToggle: (v:boolean) => { fluid.display.arrows = v ? 1 : 0; ui_fluid_s.refresh(); },
     });
 
