@@ -601,6 +601,14 @@ uniform int   auto_exposure;      // 1: reference = eased RMS of the field / exp
 uniform sampler2D tex_exposure;   // 1x1, see exposure.ts
 uniform float exposure;
 
+// velocity arrows (see draw_arrows)
+uniform int   arrows;           // 1: overlay the arrow grid
+uniform float arrow_rows;       // arrows per screen height, cells are square
+uniform vec2  screen_px;        // drawing buffer size
+uniform sampler2D tex_velocity; // raw sim velocity, whatever the view shows
+uniform float arrow_ref;        // speed that maps to ~63% of the full arrow length
+uniform int   arrow_gradient;   // 1: pressure view, arrows show its push (-gradient)
+
 const float border_size = 0.0025;
 
 vec3 viridis(float t) {
@@ -682,13 +690,104 @@ vec3 get_color() {
         ? max(texelFetch(tex_exposure, ivec2(0), 0).x / max(exposure, 1e-6), 1e-6)
         : reference_value;
     float t = 1.0 - exp(-mag / ref);
-    t = t < value_rescale_threshold ? t * rescale_factor : t;
+    // weak values (below the threshold) are scaled by k. Above it the rest of
+    // the range is stretched up to 1, so the mapping has no jump: a jump makes
+    // values hovering at the threshold flicker between two distant colors.
+    float th = value_rescale_threshold, lo = th * rescale_factor;
+    t = t < th ? t * rescale_factor : lo + (t - th) * (1.0 - lo) / max(1.0 - th, 1e-6);
 
     if (palette_type == 3 && source_kind == 2) {
         return diverging(sign(s.x) * t);
     }
 
     return palette(t, hue);
+}
+
+// distance from p to the segment a-b
+float seg(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+}
+
+// signed distance to the triangle p0 p1 p2 (negative inside)
+float tri(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+    vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+    vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
+    vec2 q0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+    vec2 q1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+    vec2 q2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+    float sg = sign(e0.x * e2.y - e0.y * e2.x);
+    vec2 d = min(min(vec2(dot(q0, q0), sg * (v0.x * e0.y - v0.y * e0.x)),
+                     vec2(dot(q1, q1), sg * (v1.x * e1.y - v1.y * e1.x))),
+                     vec2(dot(q2, q2), sg * (v2.x * e2.y - v2.y * e2.x)));
+    return -sqrt(d.x) * sign(d.y);
+}
+
+// one arrow per square cell, centered on it. The pressure view shows its push
+// on the fluid (-gradient, measured across the cell); every other view shows
+// the velocity averaged over the cell (curl / divergence slopes don't read as
+// arrows). Size follows t² (t = the 1 - e^-x/ref mapping of the views), so
+// weak values shrink fast and the big arrows stand out. Every cell keeps a
+// small dot at its center, which the arrow grows out of. Light with a dark
+// outline so it reads on any palette, like the brush rings.
+vec3 draw_arrows(vec3 col) {
+    float cell = screen_px.y / arrow_rows;
+    vec2 px = v_uv * screen_px;
+    vec2 center = (floor(px / cell) + 0.5) * cell;
+    vec2 cuv = center / screen_px;
+    if (cuv.x > 1.0 || texture(tex_obstacles, cuv).x > 0.5) return col;
+
+    // the view's own scale (its ref, or the auto exposure)
+    float view_ref = auto_exposure == 1
+        ? max(texelFetch(tex_exposure, ivec2(0), 0).x / max(exposure, 1e-6), 1e-6)
+        : reference_value;
+    vec2 v; float t;
+    if (arrow_gradient == 1) {
+        // downhill across the cell: f differences over half a cell each way
+        vec2 h = 0.5 * cell / screen_px;
+        v = -vec2(texture(tex_source, cuv + vec2(h.x, 0.0)).x - texture(tex_source, cuv - vec2(h.x, 0.0)).x,
+                  texture(tex_source, cuv + vec2(0.0, h.y)).x - texture(tex_source, cuv - vec2(0.0, h.y)).x);
+        // a change of about the view's ref across one cell is a full-length arrow
+        t = 1.0 - exp(-4.0 * length(v) / max(view_ref, 1e-6));
+    } else {
+        vec2 q = 0.25 * cell / screen_px;        // 4 bilinear taps = the cell's average
+        v = 0.25 * (texture(tex_velocity, cuv + vec2(-q.x, -q.y)).xy + texture(tex_velocity, cuv + vec2(q.x, -q.y)).xy
+                  + texture(tex_velocity, cuv + vec2(-q.x,  q.y)).xy + texture(tex_velocity, cuv + vec2(q.x,  q.y)).xy);
+        // velocity view: its own scale; other views: the velocity view's ref
+        float ref = source_kind == 1 ? view_ref : arrow_ref;
+        t = 1.0 - exp(-length(v) / max(ref, 1e-6));
+    }
+    float speed = length(v);
+    float s = t * t;                             // emphasis: half strength -> quarter size
+    float len = 0.88 * cell * s;
+    float dot_r = max(1.2, cell * 0.06);         // calm cells show a dot...
+    // ...which shrinks away as the arrow grows out of it (no blob on the shaft)
+    float dot_k = 1.0 - smoothstep(2.0 * dot_r, 5.0 * dot_r, len);
+    float d = dot_k > 0.0 ? length(px - center) - dot_r * dot_k : 1e9;
+
+    if (speed > 0.0 && len > 2.0 * dot_r) {
+        vec2 dir = v / speed, nrm = vec2(-dir.y, dir.x);
+        vec2 tip = center + dir * len * 0.5, tail = center - dir * len * 0.5;
+        float head = min(len * 0.45, cell * 0.32), hw = head * 0.6;
+        vec2 base = tip - dir * head;
+        float shaft_w = max(0.6, cell * 0.05 * sqrt(s));   // half width in px, thinner when small
+        d = min(d, min(seg(px, tail, base + dir * 0.5) - shaft_w,
+                       tri(px, tip, base + nrm * hw, base - nrm * hw)));
+    }
+
+    // dye view: white with a black outline, slightly translucent, readable over
+    // any dye. Palette views: the view's palette by the arrow's own strength
+    // (hsv: hue is the direction), lifted toward white to stand apart from the
+    // field painted in those same colors.
+    float hue = speed > 0.0 ? atan(v.y, v.x) / 6.2831853 + 0.5 : 0.0;
+    bool dye = source_kind == 0;
+    vec3 ink = dye ? vec3(1.0) : mix(palette(clamp(t, 0.0, 1.0), hue), vec3(1.0), 0.6);
+    float opacity = dye ? 0.75 : 1.0;
+
+    float fill = 1.0 - smoothstep(-0.5, 0.5, d);           // anti-aliased arrow / dot
+    float edge = 1.0 - smoothstep(1.0, 2.0, d);            // dark outline, ~1.5 px
+    col = mix(col, vec3(0.0), edge * (dye ? 0.75 : 0.9));
+    return mix(col, ink, fill * opacity);
 }
 
 const float EDGE_PX = 2.5;
@@ -699,6 +798,7 @@ void main() {
     float d  = (s - 0.5) / aa;
 
     vec3 col = get_color();
+    if (arrows == 1) col = draw_arrows(col);
 
     float inside = clamp(d + 0.5, 0.0, 1.0);                  // anti-aliased mask
     float rim = 1.0 - smoothstep(EDGE_PX - 1.0, EDGE_PX, d);

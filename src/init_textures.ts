@@ -224,4 +224,5 @@ function resize_simulation(old_w:number, old_h:number, new_w:number, new_h:numbe
 
     obstacle_splat.next_is_start = splat.next_is_start = true;
     ui_update_bounds();
+    ui_sync_brushes();
 }

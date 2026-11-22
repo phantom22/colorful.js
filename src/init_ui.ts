@@ -24,10 +24,17 @@ let ui_toolbar: UI_TOOLBAR<mouse_mode_t>,
 
     ui_field_glsl: UI_FIELD_GLSL;
 
+/** tool glyphs: the droplet is always the dye color, the wind the force color
+ * (--dye-c / --force-c in styles.css, also used by the brush rings). */
+const DYE_GLYPH = '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z" vector-effect="non-scaling-stroke"/>',
+      // a push: arrow with two speed lines
+      FORCE_GLYPH = '<path d="M3 12h14" vector-effect="non-scaling-stroke"/><path d="M13 7l5 5-5 5" vector-effect="non-scaling-stroke"/><path d="M3 7.5h5M3 16.5h5" vector-effect="non-scaling-stroke"/>';
 const TOOL_ICONS = [
-    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/><path d="M4 20h9m-3-3 3 3-3 3"/>',
-    '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"/>',
-    '<path d="M4 8h10a3 3 0 1 0-3-3M4 13h14a3 3 0 1 1-3 3M4 18h7"/>',
+    // dye + force: both glyphs side by side, scaled down (non-scaling strokes keep the line width)
+    `<g class="ic-dye" transform="translate(-2.3 5.2) scale(.66)">${DYE_GLYPH}</g>` +
+    `<g class="ic-force" transform="translate(11 4.8) scale(.6)">${FORCE_GLYPH}</g>`,
+    `<g class="ic-dye">${DYE_GLYPH}</g>`,
+    `<g class="ic-force">${FORCE_GLYPH}</g>`,
     '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16M10 5v7M15 12v7"/>',
 ];
 
@@ -36,13 +43,30 @@ const FORCE_ICON =
     '<path d="M5.500 11.500h7"/>' +
     '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>';
 
+/** a vector field arrow. */
+const ARROWS_ICON = '<path d="M6 18L18 6M18 6h-7.5M18 6v7.5"/>';
+
 const BORDERS_ICON =
     '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
     '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
 
 /** splat weight the brush ring is drawn at. */
 const RING_WEIGHT = 0.1;
+/** the three brush radius fields (texels), see ui_sync_brushes. */
+let ui_brush_fields: UI_FIELD<number>[] = [],
+    /** set once saved values are restored; before that nothing is saved back. */
+    ui_ready = false;
+
+/** after the sim grid changed: brushes keep their screen size, so their texel
+ * counts change. Saved, so a reload restores the same size on this grid. */
+function ui_sync_brushes() {
+    brushes_read();
+    if (!ui_ready) return;   // startup restore: the stored values come next
+    for (const f of ui_brush_fields) { f.save_now(); f.refresh(); }
+}
+
 let wall_ring: HTMLElement, wall_line: HTMLElement, force_ring: HTMLElement,
+    wall_ring_halo: HTMLElement, force_ring_halo: HTMLElement,
     /** erase highlight currently shown on the wall tool / ring. */
     _shown_erasing = false;
 /** shows the wall tool's effective mode (sticky erase, inverted by shift) on
@@ -53,9 +77,31 @@ function ui_sync_tool(force = false) {
         _shown_erasing = erasing;
         ui_toolbar?.mark(MOUSE_MODE_WALL, "erase", erasing);   // unset while the toolbar constructor picks
         wall_ring.classList.toggle("erase", erasing);
+        wall_ring.classList.toggle("dye", mouse.mode !== MOUSE_MODE_WALL);
+        wall_ring.classList.toggle("wall", mouse.mode === MOUSE_MODE_WALL);
         ui_status.tool(erasing ? "Wall (erase)" : MODE2STR[mouse.mode]);
     }
     return erasing;
+}
+
+/** a dark copy drawn under a ring, so it reads on any background. */
+function ring_halo(ring: HTMLElement) {
+    const h = ring.cloneNode() as HTMLElement;
+    h.removeAttribute("id");
+    h.classList.add("halo");
+    ring.before(h);
+    return h;
+}
+
+/** shows / places a ring and its halo. */
+function set_ring(ring: HTMLElement, halo: HTMLElement, on: boolean, x = 0, y = 0, r = 0) {
+    ring.style.display = halo.style.display = on ? "" : "none";
+    if (!on) return;
+    for (const el of [halo, ring]) {
+        el.setAttribute("cx", String(x));
+        el.setAttribute("cy", String(y));
+        el.setAttribute("r", String(r));
+    }
 }
 
 /** solid ring: dye or wall brush. dashed ring: force brush. */
@@ -66,10 +112,12 @@ function ui_update_mouse_overlay() {
     const line_on = on && wall && mouse.m1_down && keyboard.ctrl_down;
     const solid_on = on && mouse.mode !== MOUSE_MODE_FORCE;
     const force_on = on && (mouse.mode & MOUSE_MODE_FORCE) !== 0;
-    wall_ring.style.display = solid_on ? "" : "none";
     wall_line.style.display = line_on ? "" : "none";
-    force_ring.style.display = force_on ? "" : "none";
-    if (!on) return;
+    if (!on) {
+        set_ring(wall_ring, wall_ring_halo, false);
+        set_ring(force_ring, force_ring_halo, false);
+        return;
+    }
 
     const h = canvas_rect.height;
     const px = (u: Float32Array) => [canvas_rect.left + u[0] * canvas_rect.width,
@@ -82,18 +130,9 @@ function ui_update_mouse_overlay() {
         ? obstacle_splat.radius + (erasing ? 0.045 : 0)
         : gaussian_extent(splat.dye_radius, splat.dye_strength, RING_WEIGHT)));
 
-    if (solid_on) {
-        wall_ring.setAttribute("cx", String(x));
-        wall_ring.setAttribute("cy", String(y));
-        wall_ring.setAttribute("r", String(r));
-    }
-
-    if (force_on) {
-        const fr = gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) * h;
-        force_ring.setAttribute("cx", String(x));
-        force_ring.setAttribute("cy", String(y));
-        force_ring.setAttribute("r", String(Math.max(0.5, fr)));
-    }
+    set_ring(wall_ring, wall_ring_halo, solid_on, x, y, r);
+    set_ring(force_ring, force_ring_halo, force_on, x, y,
+        Math.max(0.5, gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) * h));
 
     if (line_on) {
         const [ax, ay] = px(mouse.wall_anchor);
@@ -119,19 +158,42 @@ function init_ui() {
     wall_ring = $("wall-ring");
     wall_line = $("wall-line");
     force_ring = $("force-ring");
+    wall_ring_halo = ring_halo(wall_ring);
+    force_ring_halo = ring_halo(force_ring);
     
     ui_bounds    = new UI_BOUNDS();
     ui_status    = new UI_STATUS();
     ui_inspector = new UI_INSPECTOR();
 
+    brushes_capture_defaults();
+    brushes_read();   // brush defaults in texels of the grid just built
+    // defaults quoted in tooltips, read before restore_all() applies saved values
+    const DEF = {
+        dt: renderer.fixed_delta_time,
+        smoothing: fluid.pressure_smoothing,
+        exposure: fluid.display.exposure,
+        arrow_rows: fluid.display.arrow_rows,
+        force_strength: splat.velocity_strength,
+        relaxation: force.relaxation,
+        jacobi_scale: fluid.jacobi_scale,
+        max_velocity: fluid.max_velocity,
+        drag: fluid.drag,
+        base_diffusion: fluid.base_diffusion,
+        curl_diffusion: fluid.curl_diffusion,
+        velocity_diffusion: fluid.velocity_diffusion,
+        max_diffusion: fluid.max_diffusion,
+        diffusion_radius: fluid.diffusion_texel_radius,
+    };
+
     const sim = ui_inspector.section("precision");
+    sim.float({label:"sim resolution", tooltip:`$Simulation resolution$ {Velocity / pressure grid size. The grid has about res² cells, shaped to the window. Applied on enter, rebuilding the textures (the flow is carried over).} $$Values$$ {[128 – 384]: fast, coarse eddies\n[512 – 768]: balanced\n[${SIM_RESOLUTION}]: default, fine detail\n[> 1536]: very fine, heavy}`, obj:fluid, key:"sim_resolution", min:32, max:2048, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution});
+    sim.float({label:"dye resolution", tooltip:`$Dye resolution$ {Dye texture size, about res² texels shaped to the window. Applied on enter, rebuilding the textures (the dye is carried over).} $$Values$$ {[512 – 1024]: fast, softer\n[${DYE_RESOLUTION}]: default, sharp\n[4096]: very sharp, heavy}`, obj:fluid, key:"dye_resolution", min:64, max:4096, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution});
     sim.float({label:"elapsed time", tooltip:"$Elapsed time$ {Elapsed time in seconds.}", obj:renderer, key:"time", min:0.0, step:0.15, unit:{symbol:"s", name:"seconds"}, persist:false, track:false});
     sim.slider({label:"time scale", tooltip:"$Time scale$ {Multiplies the simulated time that passes per frame.} $$Values$$ {[0]: paused\n[0.1 – 0.9]: slow motion\n[1]: real time\n[1 – 2]: fast forward, less stable}", obj:renderer, key:"time_scale", min:0.0, max:2.0});
-    sim.slider({label:"dt", tooltip:"$Time step$ {Seconds simulated per step. Smaller steps are more accurate and stable, larger ones are faster but smear and can blow up.} $$Values$$ {[0.004 – 0.008]: very accurate (120–240 Hz)\n[0.0167]: default (60 Hz)\n[> 0.025]: visibly unstable with strong forces}", obj:renderer, key:"fixed_delta_time", min:0.0, max:1/30, unit:{symbol:"s", name:"seconds"}});
-    sim.float({label:"sim resolution", tooltip:"$Simulation resolution$ {Velocity / pressure grid size. The grid has about res² cells, shaped to the window. Applied on enter, rebuilding the textures (the flow is carried over).} $$Values$$ {[128 – 256]: fast, coarse eddies\n[512]: default\n[> 768]: fine detail, heavy}", obj:fluid, key:"sim_resolution", min:32, max:2048, int:true, scrub:false, onChange:apply_resolution});
-    sim.float({label:"dye resolution", tooltip:"$Dye resolution$ {Dye texture size, about res² texels shaped to the window. Applied on enter, rebuilding the textures (the dye is carried over).} $$Values$$ {[512 – 1024]: fast, softer\n[2048]: default, sharp\n[4096]: very sharp, heavy}", obj:fluid, key:"dye_resolution", min:64, max:4096, int:true, scrub:false, onChange:apply_resolution});
-    sim.slider({label:"v-cycles", tooltip:"$Pressure solve$ {Multigrid V-cycles per step. Each cycle fixes pressure at every scale at once, so few are needed. One costs about 9 Jacobi passes.} $$Values$$ {[0]: no projection, the fluid compresses\n[1]: fast, slightly soft\n[2 – 3]: good quality\n[> 4]: little visible gain}", obj:fluid, key:"pressure_cycles", min:0, max:8, int:true});
-    sim.slider({label:"smoothing", tooltip:"$Smoothing sweeps$ {Jacobi sweeps on every level before and after each coarse correction. More sweeps make each cycle stronger but slower.} $$Values$$ {[1]: cheapest\n[2]: default\n[3 – 6]: helps around thin walls}", obj:fluid, key:"pressure_smoothing", min:1, max:6, int:true});
+    sim.slider({label:"dt", tooltip:`$Time step$ {Seconds simulated per step. Smaller steps are more accurate and stable, larger ones are faster but smear and can blow up.} $$Values$$ {[0.004 – 0.008]: very accurate (120–240 Hz)\n[${DEF.dt.toFixed(4)}]: default (${Math.round(1 / DEF.dt)} Hz)\n[> 0.025]: visibly unstable with strong forces}`, obj:renderer, key:"fixed_delta_time", min:0.0, max:1/30, unit:{symbol:"s", name:"seconds"}});
+    sim.slider({label:"v-cycles", tooltip:`$Pressure solve$ {Multigrid V-cycles per step. Each cycle fixes pressure at every scale at once, so few are needed. One costs about 8 Jacobi passes (at the default smoothing).} $$Values$$ {[0]: no projection, the fluid compresses\n[1]: fast, slightly soft\n[2 – 3]: good quality\n[> 4]: little visible gain}`, obj:fluid, key:"pressure_cycles", min:0, max:8, int:true});
+    sim.slider({label:"smoothing", tooltip:`$Smoothing sweeps$ {Jacobi sweeps on every level before and after each coarse correction. More sweeps make each cycle stronger but slower.} $$Values$$ {[1]: cheapest\n[${DEF.smoothing}]: default\n[3 – 6]: helps around thin walls}`, obj:fluid, key:"pressure_smoothing", min:1, max:6, int:true});
+    sim.slider({label:"reach", tooltip:`$Pressure reach$ {How far, in sim texels, the fluid pushes back on a stroke. Beyond it the pressure fades out, so a stroke keeps its momentum instead of the whole fluid reacting at once. In texels, so the same value covers less of the screen at a higher sim resolution.} $$Values$$ {[16 – 48]: punchy, jets run straight like the old solver\n[64 – 256]: balanced\n[${MG_REACH_UNLIMITED}]: unlimited: fully incompressible, strokes curl back sooner}`, obj:fluid, key:"pressure_reach", min:4, max:MG_REACH_UNLIMITED, log:true, int:true, unit:{symbol:"tx", name:"texel"}, persist:true});
 
     // colors added with "+" are stored too, the saved index alone would point
     // past the end of the default palette after a reload
@@ -162,17 +224,18 @@ function init_ui() {
     });
 
     ui_dye_brush_s = ui_inspector.section("dye brush", () => mouse.mode & MOUSE_MODE_DYE);
-    ui_dye_brush_s.slider({label:"radius", tooltip:"$Dye radius$ {Size of the dye brush, as the 1/e radius of a Gaussian in sim texels.} $$Values$$ {[1 – 5]: thin lines\n[10 – 25]: normal\n[> 40]: big soft blobs}"   , obj:splat, key:"dye_radius", min:1e-4, max:0.01, log:true, persist:true});
+    ui_brush_fields = [];
+    ui_brush_fields.push(ui_dye_brush_s.slider({label:"radius", tooltip:() => `$Dye radius$ {Size of the dye brush, in sim texels. Keeps its screen size when the sim resolution changes (the texel count follows).} $$Values$$ {[1 – 8]: thin lines\n[${brush_default.dye_radius()}]: default\n[> 60]: big soft blobs}`, obj:brushes, key:"dye_radius", def:brush_default.dye_radius, unit:{symbol:"tx", name:"texel"}, min:0.5, max:200, step:0.1, log:true, persist:true, onChange:brushes_apply}));
     ui_dye_brush_s.slider({label:"strength", tooltip:"$Dye strength$ {How strongly the brush replaces the existing dye per frame. It blends, it never adds, so slow strokes can't saturate.} $$Values$$ {[0 – 0.2]: faint, builds up slowly\n[0.3 – 0.6]: normal\n[0.8 – 1]: opaque, overrides what is there}", obj:splat, key:"dye_strength", min:0, max:1, persist:true});
 
     ui_force_brush_s = ui_inspector.section("force brush", () => mouse.mode & MOUSE_MODE_FORCE);
-    ui_force_brush_s.slider({label:"radius", tooltip:"$Force radius$ {Size of the push applied by the brush, in sim texels (1/e radius). Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 8]: sharp, dies quickly\n[15 – 30]: normal\n[> 40]: broad, slow currents}", obj:splat, key:"velocity_radius", min:1e-4, max:0.02, log:true, persist:true});
-    ui_force_brush_s.slider({label:"strength", tooltip:"$Force strength$ {Opacity of the push at the center of the brush.} $$Values$$ {[0 – 0.3]: gentle\n[0.4 – 0.7]: normal\n[0.8 – 1]: full push}", obj:splat, key:"velocity_strength", min:0, max:1, persist:true});
+    ui_brush_fields.push(ui_force_brush_s.slider({label:"radius", tooltip:() => `$Force radius$ {Size of the push applied by the brush, in sim texels. Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 10]: sharp, dies quickly\n[${brush_default.force_radius()}]: default\n[> 80]: broad, slow currents}`, obj:brushes, key:"force_radius", def:brush_default.force_radius, unit:{symbol:"tx", name:"texel"}, min:0.5, max:200, step:0.1, log:true, persist:true, onChange:brushes_apply}));
+    ui_force_brush_s.slider({label:"strength", tooltip:`$Force strength$ {Scales the push at the center of the brush. The push is added to the existing flow (it doesn't replace it), fading out with the Gaussian.} $$Values$$ {[0 – 0.3]: gentle\n[${DEF.force_strength}]: default\n[0.8 – 1]: full push}`, obj:splat, key:"velocity_strength", min:0, max:1, persist:true});
     ui_force_brush_s.slider({label:"speed sensitivity", tooltip:"$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", obj:splat, key:"force_scale", min:0, max:2, persist:true});
 
     ui_wall_s = ui_inspector.section("wall brush", () => mouse.mode === MOUSE_MODE_WALL);
-    ui_wall_s.slider({label:"radius", tooltip:"$Wall radius$ {Half thickness of the wall stroke, in units of screen height. Total thickness is twice this value.} $$Values$$ {[< 0.006]: under 3 texels, leaks\n[0.008 – 0.02]: solid walls\n[> 0.03]: big blocks}", obj:obstacle_splat, key:"radius", min:0.002, max:0.05, log:true, persist:true});
-    ui_wall_s.slider({label:"outline thickness", tooltip:"$Edge softness$ {Width of the soft ramp at the wall contour. It makes the rim smooth and anti-aliased.} $$Values$$ {[0.0005 – 0.002]: crisp\n[0.003]: default\n[> 0.006]: blurry walls}", obj:obstacle_splat, key:"outline_width", min:0.0005, max:0.01, log:true, persist:true});
+    ui_brush_fields.push(ui_wall_s.slider({label:"radius", tooltip:() => `$Wall radius$ {Half thickness of the wall stroke, in sim texels. Total thickness is twice this value. The eraser reaches a bit further (+0.045 screen heights) so it clears walls cleanly.} $$Values$$ {[< 3]: leaks\n[${brush_default.wall_radius()}]: default\n[> 30]: big blocks}`, obj:brushes, key:"wall_radius", def:brush_default.wall_radius, unit:{symbol:"tx", name:"texel"}, min:1, max:150, step:0.1, log:true, persist:true, onChange:brushes_apply}));
+    ui_brush_fields.push(ui_wall_s.slider({label:"edge softness", tooltip:() => `$Edge softness$ {Width of the soft ramp at the wall contour, in sim texels. It makes the rim smooth and anti-aliased. Keeps its screen size when the sim resolution changes.} $$Values$$ {[< 1]: crisp, can alias\n[${brush_default.wall_outline()}]: default\n[> 6]: blurry walls}`, obj:brushes, key:"wall_outline", def:brush_default.wall_outline, unit:{symbol:"tx", name:"texel"}, min:0.25, max:20, step:0.1, log:true, onChange:brushes_apply, persist:true}));
 
     ui_field_s = ui_inspector.section("force field", () => force.is_active);
     ui_field_glsl = ui_field_s.glsl({
@@ -198,7 +261,7 @@ function init_ui() {
     ui_field_s.separator();
     ui_field_s.subtitle("vector field")
     ui_field_s.toggle({label:"pure field", tooltip:"$Pure field$ {Pulls the velocity back toward the field after the pressure solve, so the picture follows the vector field and the fluid only adds perturbations.} {Off: the field is a plain force and the solver reshapes it.}", obj:force, key:"pure_vector_field", int:true, persist:true});
-    ui_field_s.slider({label:"relaxation", tooltip:"$Relaxation$ {How quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field}", obj:force, key:"relaxation", min:0.0, max:500.0, visible:() => force.pure_vector_field, persist:true})
+    ui_field_s.slider({label:"relaxation", tooltip:`$Relaxation$ {With [pure field] on: how quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field\n[${DEF.relaxation}]: default}`, obj:force, key:"relaxation", min:0.0, max:500.0, visible:() => force.pure_vector_field, persist:true})
 
     ui_fluid_s = ui_inspector.section("simulation");
     ui_fluid_bg = ui_fluid_s.color(({
@@ -209,18 +272,19 @@ function init_ui() {
         frozen: () => fluid.display_mode === DISPLAY_DYE ? undefined : fluid.bg_arr,
         persist:true
     }));
-    ui_fluid_s.slider({label:"jacobi scale", tooltip:"$Pressure carry-over$ {Fraction of last frame's pressure used as the starting guess. High values converge faster over time.} $$Values$$ {[0 – 0.5]: restarts, needs many iterations\n[0.8 – 0.95]: good\n[1]: never forgets, can accumulate noise}", obj:fluid, key:"jacobi_scale", min:0, max:1, persist:true});
+    ui_fluid_s.slider({label:"jacobi scale", tooltip:`$Pressure carry-over$ {Fraction of last frame's pressure used as the solver's starting guess. High values converge faster over time.} $$Values$$ {[0 – 0.5]: restarts, needs more v-cycles\n[${DEF.jacobi_scale}]: default\n[1]: never forgets: steadier pressure view, but can add noise to the velocity near closed borders}`, obj:fluid, key:"jacobi_scale", min:0, max:1, persist:true});
     ui_fluid_s.slider({label:"curl strength", tooltip:"$Vorticity confinement$ {Re-injects the swirl lost to numerical blur, so eddies live longer.} $$Values$$ {[0]: smooth, dies quickly\n[5 – 20]: lively\n[> 35]: noisy, can go unstable}", obj:fluid, key:"curl_strength", min:0, max:60, persist:true});
     ui_fluid_s.slider({label:"velocity decay", tooltip:"$Velocity decay$ {Multiplier applied to the velocity every step. Below 1 acts like friction.} $$Values$$ {[1]: motion never fades\n[0.999 – 0.9999]: slow fade\n[< 0.99]: thick, syrup-like}", obj:fluid, key:"velocity_dissipation", min:0.9, max:1, step:0.0001, persist:true});
-    ui_fluid_s.slider({label:"max velocity", tooltip:"$Max velocity$ {Speed cap in texels/s. It keeps the solver stable.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: normal\n[> 3000]: only with a small dt}", obj:fluid, key:"max_velocity", min:0, max:10000, persist:true});
-    ui_fluid_s.slider({label:"drag", tooltip:"$Drag$", obj:fluid, key:"drag", min:0, max:1500, persist:true});
+    ui_fluid_s.slider({label:"max velocity", tooltip:`$Max velocity$ {Speed cap in sim texels/s. It keeps the solver stable. In texels, so the same value is slower on screen at a higher sim resolution.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: lively\n[${DEF.max_velocity}]: default\n[> 3000]: only with a small dt}`, obj:fluid, key:"max_velocity", min:0, max:10000, persist:true});
+    ui_fluid_s.slider({label:"drag", tooltip:`$Drag$ {Quadratic drag: slows fast flow much more than slow flow. The velocity loses drag·(speed / max velocity)² per second, so it only bites near the speed cap.} $$Values$$ {[0]: off\n[${DEF.drag}]: default, barely noticeable\n[1 – 10]: fast jets tame quickly\n[> 100]: hard ceiling well below [max velocity]}`, obj:fluid, key:"drag", min:0, max:1500, persist:true});
+    ui_fluid_s.slider({label:"arrow resolution", tooltip:`$Arrow resolution$ {Number of arrows per screen height (toggle the arrows from the toolbar). The grid cells are square, so the columns follow the window shape.} $$Values$$ {[10 – 15]: coarse, big arrows\n[${DEF.arrow_rows}]: default\n[25 – 30]: dense, small arrows}`, obj:fluid.display, key:"arrow_rows", min:10, max:30, int:true, visible:() => fluid.display.arrows === 1, persist:true});
 
     ui_diffusion_s = ui_inspector.section("diffusion");
-    ui_diffusion_s.slider({label:"base diff.", tooltip:"$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[0]: crisp, only advection mixes\n[0.5 – 2]: soft\n[> 5]: washes out fast}", obj:fluid, key:"base_diffusion", min:0, max:10, persist:true});
-    ui_diffusion_s.slider({label:"curl diff.", tooltip:"$Curl diffusion$ {Extra blending where the flow swirls, like eddy mixing.} $$Values$$ {[0]: off\n[0.05 – 0.3]: swirls blend\n[> 1]: vortex cores dissolve}", obj:fluid, key:"curl_diffusion", min:0, max:2, persist:true});
-    ui_diffusion_s.slider({label:"vel. diff.", tooltip:"$Speed diffusion$ {Extra blending proportional to the local speed.} $$Values$$ {[0]: off\n[0.02 – 0.1]: moving dye smears gently\n[> 0.3]: heavy blur in fast regions}", obj:fluid, key:"velocity_diffusion",min:0, max:0.5, persist:true});
-    ui_diffusion_s.slider({label:"max diff.", tooltip:"$Max diffusion$ {Upper limit of the total rate, in 1/s.} $$Values$$ {[2 – 10]: safe\n[> 20]: can wash out the dye in a few frames}", obj:fluid, key:"max_diffusion", min:0, max:30, persist:true});
-    ui_diffusion_s.slider({label:"diff. radius", tooltip:"$Diffusion radius$ {Radius of the blending ring in dye texels. Larger spreads color farther per step.} $$Values$$ {[1 – 3]: fine\n[4 – 6]: normal\n[> 8]: star-shaped artifacts}", obj:fluid, key:"diffusion_texel_radius", min:1, max:51, persist:true});
+    ui_diffusion_s.slider({label:"base diff.", tooltip:`$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[0]: crisp, only advection mixes\n[${DEF.base_diffusion}]: default\n[0.5 – 2]: soft\n[> 5]: washes out fast}`, obj:fluid, key:"base_diffusion", min:0, max:10, persist:true});
+    ui_diffusion_s.slider({label:"curl diff.", tooltip:`$Curl diffusion$ {Extra blending where the flow swirls, like eddy mixing: rate per unit of curl.} $$Values$$ {[0]: off\n[0.05 – 0.3]: swirls blend\n[${DEF.curl_diffusion}]: default\n[> 1]: vortex cores dissolve}`, obj:fluid, key:"curl_diffusion", min:0, max:2, persist:true});
+    ui_diffusion_s.slider({label:"vel. diff.", tooltip:`$Speed diffusion$ {Extra blending proportional to the local speed (rate per sim texel/s). Fast regions easily reach [max diff.], so this mostly decides where the cap applies.} $$Values$$ {[0]: off\n[0.01 – 0.1]: moving dye smears gently\n[${DEF.velocity_diffusion}]: default}`, obj:fluid, key:"velocity_diffusion",min:0, max:0.5, persist:true});
+    ui_diffusion_s.slider({label:"max diff.", tooltip:`$Max diffusion$ {Upper limit of the total blending rate, in 1/s.} $$Values$$ {[2 – 10]: gentle\n[${DEF.max_diffusion}]: default\n[> 20]: can wash out the dye in a few frames}`, obj:fluid, key:"max_diffusion", min:0, max:30, persist:true});
+    ui_diffusion_s.slider({label:"diff. radius", tooltip:`$Diffusion radius$ {Radius of the blending ring in dye texels: each step mixes a texel with 8 samples on this ring. Larger rings spread color farther per step.} $$Values$$ {[1 – 4]: fine, local blending\n[10 – 30]: wide\n[${DEF.diffusion_radius}]: default, very wide soft spread; the 8 taps can show as a faint star}`, obj:fluid, key:"diffusion_texel_radius", min:1, max:51, persist:true});
 
     const SECTION_OF_TOOL: Record<number, string> = {
         [MOUSE_MODE_DYE_FORCE]:"Dye brush",
@@ -262,6 +326,13 @@ function init_ui() {
             fluid.open_borders = v ? 0 : 1;
         }
     });
+    ui_toolbar.add_toggle({
+        tip: "Arrows: pressure push in the pressure view, flow elsewhere",
+        icon: ARROWS_ICON,
+        initial: fluid.display.arrows === 1,
+        separator: false,
+        onToggle: (v:boolean) => { fluid.display.arrows = v ? 1 : 0; ui_fluid_s.refresh(); },
+    });
 
     const display_obj = () => {
         switch (fluid.display_mode) {
@@ -301,10 +372,10 @@ function init_ui() {
     });
     const auto_on = () => fluid.display.auto_exposure === 1;
     ui_visualizer_s.toggle({label:"auto exposure", tooltip:"$Auto exposure$ {Scales the view by the field's own strength (its RMS over the fluid), eased over time, so it stays readable as the flow speeds up or calms down.} {Off: the fixed [ref] value is used.}", obj:fluid.display, key:"auto_exposure", int:true, persist:true});
-    ui_visualizer_s.slider({label:"exposure", tooltip:"$Exposure$ {Brightness under auto exposure. The field's RMS lands at 1 - e^-exposure of the palette.} $$Values$$ {[0.3]: dark, only peaks light up\n[0.6]: default\n[> 1.5]: bright, peaks saturate}", obj:fluid.display, key:"exposure", min:0.05, max:3, visible:auto_on, persist:true});
+    ui_visualizer_s.slider({label:"exposure", tooltip:`$Exposure$ {Brightness under auto exposure. The field's RMS lands at 1 - e^-exposure of the palette.} $$Values$$ {[0.3]: dark, only peaks light up\n[${DEF.exposure}]: default\n[> 1.5]: bright, peaks saturate}`, obj:fluid.display, key:"exposure", min:0.05, max:3, visible:auto_on, persist:true});
     ui_visualizer_s.slider({label:"adapt time", tooltip:"$Adaptation time$ {How quickly auto exposure follows changes in the field.} $$Values$$ {[0]: instant, can flicker\n[0.3 – 1]: smooth\n[> 2]: slow, lags behind bursts}", obj:fluid.display, key:"adapt_time", min:0, max:5, unit:{symbol:"s", name:"seconds"}, visible:auto_on, persist:true});
     ui_visualizer_s.slider({label:"ref", tooltip:"$Reference$ {Value that maps to about 63% of the palette. Everything is compressed smoothly above it.} $$Values$$ {Small: sensitive, detail in weak regions\nLarge: only strong regions light up}", obj:display_obj, key:"ref", min:0, max:display_max, visible:() => !auto_on()});
-    ui_visualizer_s.slider({label:"thresh", tooltip:"$Threshold$ {Palette position below which values are scaled by [k].} $$Values$$ {[0]: off\n[0.05 – 0.3]: lifts or hides weak values}", obj:display_obj, key:"thresh", min:0, max:1});
+    ui_visualizer_s.slider({label:"thresh", tooltip:"$Threshold$ {Palette position below which values are scaled by [k]. Values above it are stretched to meet them, so there's no jump at the threshold.} $$Values$$ {[0]: off\n[0.05 – 0.3]: lifts or hides weak values}", obj:display_obj, key:"thresh", min:0, max:1});
     ui_visualizer_s.slider({label:"k", tooltip:"$Low-end scale$ {Factor for values below the threshold.} $$Values$$ {[1]: no change\n[0 – 0.5]: compresses weak values toward the darkest color}", obj:display_obj, key:"k", min:0, max:1});
     
     if (!force.is_active)
@@ -323,6 +394,7 @@ function init_ui() {
     );
 
     ui_inspector.restore_all();
+    ui_ready = true;
 
     ui_container = $("hud");
     ui_update_bounds();

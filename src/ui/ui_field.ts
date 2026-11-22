@@ -1,6 +1,8 @@
 abstract class UI_FIELD<T> implements IUI_FIELD<T> {
     pid = "";
     track = true;
+    /** skipped by the inspector's reset-all. */
+    keep_on_reset = false;
 
     /** Root div container. */
     protected readonly root = document.createElement("div");

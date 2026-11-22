@@ -58,8 +58,8 @@ class UI_TOOLBAR<T extends number> {
         this.nav.hidden = !this.nav.hidden;
     }
 
-    add_toggle(o: { tip: string; icon: string; initial: boolean; onToggle: (on: boolean) => void }) {
-        this.nav.appendChild(document.createElement("hr"));
+    add_toggle(o: { tip: string; icon: string; initial: boolean; onToggle: (on: boolean) => void; separator?: boolean }) {
+        if (o.separator !== false) this.nav.appendChild(document.createElement("hr"));
         const b = document.createElement("button");
         b.className = "toggle";
         b.dataset.tip = o.tip;

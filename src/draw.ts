@@ -289,6 +289,8 @@ function draw(timestamp:number) {
     quad_p.use_program();
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, exposure.tex[exposure.read]);
+    gl.activeTexture(gl.TEXTURE3);                       // arrows read the raw velocity
+    gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, display_tex);
 

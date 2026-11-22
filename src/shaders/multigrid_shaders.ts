@@ -1,6 +1,9 @@
 /* Multigrid pressure solver, see multigrid.ts.
  *
- * Every level solves  sum_f w_f * (x_nb - x) = b  with one fragment per cell.
+ * Every level solves  sum_f w_f * (x_nb - x) - kappa * x = b  with one fragment
+ * per cell. kappa = (cell size / reach)² screens the pressure: its response to
+ * a stroke fades out beyond `reach` sim cells instead of spanning the whole
+ * domain (kappa 0 = the plain, unlimited Poisson solve).
  * w_f (RGBA8: left, right, bottom, top) is how open each cell face is: 1 open,
  * 0 wall or closed border, fractions on coarse levels where a face is partly
  * blocked. A cell with no open face is solid and holds 0.
@@ -23,6 +26,7 @@ out vec4 o;
 
 uniform vec2 extent;      // cells at or past this hold 0 (overhang past an open edge)
 uniform float ghost_lo;   // ghost factor at the left / bottom edge
+uniform float kappa;      // screening, see the header: added to the diagonal
 uniform vec2 ghost_hi;    // ghost factor at the right / top edge
 
 bool inactive(ivec2 p) { return any(greaterThanEqual(vec2(p), extent)); }
@@ -57,10 +61,10 @@ void main() {
     ivec2 p = ivec2(gl_FragCoord.xy), n = textureSize(tex_x, 0);
     if (inactive(p)) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
     vec2 s = neighbours(tex_x, tex_w, p, n, x_scale);
-    if (s.y == 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    if (s.y == 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }   // solid
     float C = x_scale * texelFetch(tex_x, p, 0).x;
     float b = texelFetch(tex_b, p, 0).x;
-    o = vec4(C + omega * ((s.x - b) / s.y - C), 0.0, 0.0, 1.0);
+    o = vec4(C + omega * ((s.x - b) / (s.y + kappa) - C), 0.0, 0.0, 1.0);
 }`;
 
 /** rendered at the coarse level (edge uniforms are the fine level's): the
@@ -80,7 +84,7 @@ void main() {
         vec2 s = neighbours(tex_x, tex_w, p, n, 1.0);
         if (s.y == 0.0) continue;
         float C = texelFetch(tex_x, p, 0).x;
-        acc += texelFetch(tex_b, p, 0).x - (s.x - s.y * C);
+        acc += texelFetch(tex_b, p, 0).x - (s.x - (s.y + kappa) * C);
     }
     o = vec4(acc, 0.0, 0.0, 1.0);
 }`;

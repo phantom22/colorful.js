@@ -9,13 +9,14 @@
 <body>
     <div id="container">
         <canvas id="screen"></canvas>
+        <!-- brush rings: outside #hud, so they stay visible when Esc hides the UI -->
+        <svg id="wall-overlay" aria-hidden="true">
+            <line id="wall-line"/>
+            <circle id="force-ring" class="ring force"/>
+            <circle id="wall-ring" class="ring"/>
+        </svg>
 
         <div id="hud" class="hidden">
-            <svg id="wall-overlay" aria-hidden="true">
-                <line id="wall-line"/>
-                <circle id="force-ring"/>
-                <circle id="wall-ring"/>
-            </svg>
             <!-- top: view selector -->
             <div id="view-select">
             <button id="view-btn" aria-haspopup="listbox">
@@ -52,7 +53,7 @@
             <div class="corner bl" id="c-bl"></div>
             <div class="corner br" id="c-br"></div>
 
-            <footer id="status"><span id="st-cursor">x — y —</span><span id="st-tool"></span><span id="st-fps"></span></footer>
+            <footer id="status"><span id="st-cursor">x — y —</span><span id="st-tool"></span><button id="st-fullscreen" type="button">enter fullscreen</button><span id="st-fps"></span></footer>
         </div>
     </div>
     

@@ -35,7 +35,8 @@ class UI_INSPECTOR {
     }
 
     reset_all() {
-        for (const s of this.sections.values()) for (const e of s.fields) e.reset();
+        for (const s of this.sections.values())
+            for (const e of s.fields) if (!e.keep_on_reset) e.reset();
         this.refresh();
     }
 

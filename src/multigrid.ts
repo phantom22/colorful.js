@@ -41,8 +41,8 @@ const mg = {
 };
 
 type mg_edge_uniforms = [uniform<"extent", 8>, uniform<"ghost_lo", 5>, uniform<"ghost_hi", 8>];
-let mg_smooth_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_b", 7>, uniform<"tex_w", 7>, uniform<"x_scale", 5>, uniform<"omega", 5>, ...mg_edge_uniforms]>,
-    mg_restrict_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_b", 7>, uniform<"tex_w", 7>, ...mg_edge_uniforms]>,
+let mg_smooth_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_b", 7>, uniform<"tex_w", 7>, uniform<"x_scale", 5>, uniform<"omega", 5>, uniform<"kappa", 5>, ...mg_edge_uniforms]>,
+    mg_restrict_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_b", 7>, uniform<"tex_w", 7>, uniform<"kappa", 5>, ...mg_edge_uniforms]>,
     mg_prolong_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_e", 7>, uniform<"tex_w", 7>, uniform<"tex_cw", 7>, uniform<"extent_f", 8>, ...mg_edge_uniforms]>,
     mg_weights_fine_p: shader_program<[uniform<"tex_mask", 7>]>,
     mg_weights_coarse_p: shader_program<[uniform<"tex_w", 7>]>;
@@ -60,12 +60,14 @@ function init_multigrid_programs() {
         new uniform("tex_w", GL_TEXTURE, U_INIT, 2),
         new uniform("x_scale", GL_FLOAT),
         new uniform("omega", GL_FLOAT, U_UPDATE, () => mg.omega),
+        new uniform("kappa", GL_FLOAT),
         ...mg_edge_uniforms(),
     ]);
     mg_restrict_p = new shader_program("mg_restrict", quad_vert, sh_mg_restrict, [
         new uniform("tex_x", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_b", GL_TEXTURE, U_INIT, 1),
         new uniform("tex_w", GL_TEXTURE, U_INIT, 2),
+        new uniform("kappa", GL_FLOAT),
         ...mg_edge_uniforms(),
     ]);
     mg_prolong_p = new shader_program("mg_prolong", quad_vert, sh_mg_prolong, [
@@ -118,6 +120,17 @@ function mg_set_edges(p:{uniforms:{extent:uniform<"extent",8>, ghost_lo:uniform<
     p.uniforms["extent"].set(l.active);
     p.uniforms["ghost_lo"].set(l.ghost_lo);
     p.uniforms["ghost_hi"].set(l.ghost_hi);
+}
+
+/** reach at or above this is unlimited: no screening, the plain Poisson solve. */
+const MG_REACH_UNLIMITED = 1000;
+
+/** screening term of a level, (cell size / reach)², see multigrid_shaders.ts.
+ * The coarse rhs is the sum of the fine residuals (scaled by size²), so the
+ * same continuous equation needs the term scaled by size² too. */
+function mg_kappa(l:mg_level) {
+    const r = fluid.pressure_reach;
+    return r >= MG_REACH_UNLIMITED ? 0 : (l.size / r) ** 2;
 }
 
 /** builds the level pyramid at the current N1,N2. Called by alloc_textures
@@ -187,6 +200,7 @@ function mg_bind(unit:number, tex:WebGLTexture) {
 function mg_smooth(l:mg_level, x_scale:number) {
     mg_smooth_p.use_program();
     mg_smooth_p.uniforms["x_scale"].set(x_scale);
+    mg_smooth_p.uniforms["kappa"].set(mg_kappa(l));
     mg_set_edges(mg_smooth_p, l);
     mg_bind(0, l.x_tex[l.read]);
     mg_bind(1, l.b_tex);
@@ -201,6 +215,7 @@ function mg_smooth(l:mg_level, x_scale:number) {
 function mg_restrict(f:mg_level, c:mg_level) {
     mg_restrict_p.use_program();
     mg_set_edges(mg_restrict_p, f);
+    mg_restrict_p.uniforms["kappa"].set(mg_kappa(f));
     mg_bind(0, f.x_tex[f.read]);
     mg_bind(1, f.b_tex);
     mg_bind(2, f.w_tex);

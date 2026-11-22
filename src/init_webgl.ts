@@ -86,6 +86,12 @@ function init_webgl() {
         new uniform("auto_exposure", GL_INT, U_UPDATE, () => fluid.display.auto_exposure),
         new uniform("tex_exposure", GL_TEXTURE, U_INIT, 2),
         new uniform("exposure", GL_FLOAT, U_UPDATE, () => fluid.display.exposure),
+        new uniform("arrows", GL_INT, U_UPDATE, () => fluid.display.arrows),
+        new uniform("arrow_rows", GL_FLOAT, U_UPDATE, () => fluid.display.arrow_rows),
+        new uniform("screen_px", GL_VEC2, U_UPDATE, () => [gl.drawingBufferWidth, gl.drawingBufferHeight]),
+        new uniform("tex_velocity", GL_TEXTURE, U_INIT, 3),
+        new uniform("arrow_ref", GL_FLOAT, U_UPDATE, () => fluid.display.velocity.ref),
+        new uniform("arrow_gradient", GL_INT, U_UPDATE, () => fluid.display_mode === DISPLAY_PRESSURE ? 1 : 0),
     ]);
 
     vao = create_vertex_array();

@@ -1,3 +1,6 @@
+/** the reset icon, also used by the inspector header button in index.html. */
+const RESET_ICON = '<svg viewBox="0 0 24 24"><path d="M15.5 5.94A7 7 0 1 1 8.5 5.94"/><path d="M7.02 9.11L8.5 5.94L5.01 5.64"/></svg>';
+
 class UI_SECTION {
     readonly el = document.createElement("section");
     readonly body = document.createElement("div");
@@ -8,6 +11,8 @@ class UI_SECTION {
     private mod_labels: string[] = [];
 
     readonly badge = document.createElement("span");
+    /** resets this section's fields, like the inspector's reset-all. */
+    private readonly reset_btn = document.createElement("button");
 
     constructor(readonly name: string, visible?: () => boolean|number, open = true) {
         const h3 = document.createElement("h3");
@@ -15,7 +20,19 @@ class UI_SECTION {
         h3.addEventListener("click", () => this.open(!this.is_open));
         this.badge.className = "mods";
         this.badge.hidden = true;
-        h3.appendChild(this.badge);
+        this.reset_btn.type = "button";
+        this.reset_btn.className = "sec-reset";
+        this.reset_btn.title = "Reset this section to defaults";
+        this.reset_btn.innerHTML = RESET_ICON;
+        this.reset_btn.addEventListener("click", e => {
+            e.stopPropagation();                 // don't toggle the section open / closed
+            this.reset();
+            (e.currentTarget as HTMLElement).blur();
+        });
+        const end = document.createElement("span");   // badge + button, pushed to the right
+        end.className = "h3-end";
+        end.append(this.badge, this.reset_btn);
+        h3.appendChild(end);
         
         UI_TOOLTIP.attach(this.badge, () => this.mod_tip());
         this.body.className = "body";
@@ -31,6 +48,12 @@ class UI_SECTION {
             `{[${n}] ${n === 1 ? "setting differs" : "settings differ"} from the default in this section.} ` +
             `{${this.mod_labels.join("\n")}} ` +
             `{Double-click a row to reset it.}`;
+    }
+
+    /** resets every field here except keep_on_reset ones (same rule as reset-all). */
+    reset() {
+        for (const e of this.fields) if (!e.keep_on_reset) e.reset();
+        this.refresh();
     }
 
     get is_open() { return this.el.classList.contains("open"); }
@@ -55,7 +78,10 @@ class UI_SECTION {
         this.mod_labels = mods.map(e => e.label);
         this.badge.hidden = mods.length === 0;
         this.badge.textContent = `● ${mods.length}`;
-        return mods.length;
+        // what a reset would change, for the reset buttons' highlight
+        const resettable = mods.filter(e => !e.keep_on_reset).length;
+        this.reset_btn.classList.toggle("dirty", resettable > 0);
+        return resettable;
     }
 
     slider<O extends object, K extends NumKey<O>>(d: SliderDef<O, K>) {
@@ -63,7 +89,7 @@ class UI_SECTION {
         return this.push(new UI_FIELD_SLIDER(this.body, d.label, String(d.key), {
             get: () => b.target()[d.key] as number,
             set: v => { b.target()[d.key] = v as O[K]; },
-            def: b.def, frozen: d.frozen, onChange: d.onChange,
+            def: d.def ?? b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
         }, { min: () => SrcVal(d.min), max: () => SrcVal(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false, unit: d.unit }), d);
     }
@@ -142,9 +168,10 @@ class UI_SECTION {
         return el;
     }
 
-    private push<E extends UI_FIELD<any>>(e: E, d: { label: string; obj: unknown; persist?: boolean; track?: boolean }) {
+    private push<E extends UI_FIELD<any>>(e: E, d: { label: string; obj: unknown; persist?: boolean; track?: boolean; keep_on_reset?: boolean }) {
         if (d.persist !== false && typeof d.obj !== "function") e.pid = `${this.name}.${d.label}`;
         e.track = d.track !==  false;
+        e.keep_on_reset = d.keep_on_reset === true;
         this.fields.push(e);
         return e;
     }

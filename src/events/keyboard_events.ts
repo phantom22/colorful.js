@@ -34,6 +34,8 @@ function w_keydown(e:KeyboardEvent) {
             renderer.request_color_clear(true, keyboard.ctrl_down);
             return;
         case "Escape":
+        case "h":       // same toggle: in fullscreen the browser may keep Esc for itself
+        case "H":
             ui_container.hidden = !ui_container.hidden;
             if (ui_field_glsl.is_open) ui_field_glsl.close();
             return;

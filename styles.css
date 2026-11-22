@@ -5,6 +5,7 @@
 :root {
   --bg: #24272c; --bg2: #2b2f35; --line: #3b4048; --sep: #151616;
   --text: #c9ced6; --dim: #7d848f;  --accent: #6ec1e4;
+  --dye-c: #fdba74; --force-c: #a78bfa;   /* dye (A) and force (B): tool glyphs and brush rings */
   --mono: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
   --lbl: 92px; --num: 52px;
 }
@@ -42,6 +43,9 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
   border-radius: 4px; cursor: pointer; color: var(--dim); position: relative; }
 #tools button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 #tools button:hover { background: var(--bg2); color: var(--text); }
+#tools .ic-dye { stroke: var(--dye-c); }
+#tools .ic-force { stroke: var(--force-c); }
+#tools button:not(.on) .ic-dye, #tools button:not(.on) .ic-force { opacity: .7; }
 #tools button.on { color: var(--accent); background: var(--bg2); border-color: var(--line); }
 #tools button.on::before { content: ""; position: absolute; left: -5px; top: 8px; bottom: 8px; width: 2px; background: var(--accent); border-radius: 2px; }
 #tools button[data-tip]:hover::after { content: attr(data-tip); position: absolute; left: 44px; white-space: nowrap; padding: 4px 8px;
@@ -117,6 +121,10 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
   display: flex; gap: 16px; padding: 3px 10px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
 #st-tool { color: var(--accent); }
+/* fullscreen toggle: a link-like button so it reads as clickable */
+#status #st-fullscreen { padding: 0; border: 0; background: none; cursor: pointer; color: var(--text);
+  text-decoration: underline dotted; text-underline-offset: 3px; }
+#status #st-fullscreen:hover, #status #st-fullscreen:focus-visible { color: var(--accent); text-decoration-style: solid; }
 
 #screen { cursor: none; display: block; width: 100%; height: 100%; touch-action: none; }
 
@@ -322,15 +330,22 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .save-snip:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
 
 #wall-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-#wall-ring { fill: none; stroke: #e6eaf0; stroke-opacity: .85; stroke-width: 1;
-  filter: drop-shadow(0 0 1px #000); }
+/* brush rings: a light core over a dark halo copy (see ring_halo in init_ui.ts),
+ * so they read on light and dark dye alike. Styled by class so the halo, a
+ * clone without the id, keeps the shape (e.g. the force ring's dashes). */
+.ring { fill: none; stroke: #f2f4f7; stroke-width: 1.5; }
+.ring.dye { stroke: var(--dye-c); }
+.ring.force { stroke: var(--force-c); stroke-width: 1.5; stroke-dasharray: 5 5; }
+.ring.erase { stroke: #ff7b7b; }
+/* wall tool: filled like the ctrl-line preview, so the ring shows the full painted width */
+.ring.wall { fill: var(--accent); fill-opacity: .35; }
+.ring.wall.erase { fill: #ff7b7b; }
+.ring.halo { stroke: #0b0c0e; stroke-opacity: .9; stroke-width: 4; }   /* after the colors: halos stay dark */
+.ring.force.halo { stroke-width: 4; }
 #wall-line { stroke: var(--accent); stroke-opacity: .35; stroke-linecap: round; }
-#wall-ring.erase { stroke: #ff7b7b; }
 /* wall tool in erase mode (picked again, or shift held), same red as active toggles */
 #tools button.on.erase { color: #ff7b7b; background: #ff7b7b1c; border-color: #ff7b7b55; }
 #tools button.on.erase::before { background: #ff7b7b; }
-/* force brush, see ui_update_mouse_overlay */
-#force-ring { fill: none; stroke: #e6eaf0; stroke-opacity: .35; stroke-width: 1; stroke-dasharray: 3 4; }
 
 #inspector header .hbtns { display: flex; align-items: center; gap: 2px; }
 #inspector header button { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0; }
@@ -342,8 +357,17 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row { position: relative; }
 .row.mod label { color: var(--text); }
 
-#insp-body h3 .mods { margin-left: auto; font-size: 9px; letter-spacing: .06em; color: var(--accent); }
+#insp-body h3 .h3-end { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+#insp-body h3 .mods { font-size: 9px; letter-spacing: .06em; color: var(--accent); }
 #insp-reset.dirty { color: var(--accent); }
+/* per-section reset: same look as the inspector's */
+#insp-body h3 .sec-reset { display: grid; place-items: center; width: 18px; height: 16px; padding: 0; border: 0;
+  background: none; color: var(--dim); cursor: pointer; opacity: .55; }
+#insp-body h3 .sec-reset svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform .3s; }
+#insp-body h3 .sec-reset.dirty { color: var(--accent); opacity: 1; }
+#insp-body h3 .sec-reset:hover { color: var(--accent); opacity: 1; }
+#insp-body h3 .sec-reset:hover svg { transform: rotate(-90deg); }
 
 .row.float { grid-template-columns: var(--lbl) 1fr; }
 
@@ -356,4 +380,4 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row .unit-wrap { position: relative; display: block; min-width: 0; }
 .row .unit-wrap input[type=number] { padding-right: calc(var(--uw) * 6px + 7px); }
 .row .unit-wrap i { position: absolute; right: 5px; top: 0; bottom: 0; display: grid; place-items: center;
-  font-style: normal; font-size: 9px; color: var(--accent); cursor: help; user-select: none; }
+  font-style: normal; font-size: 9px; color: var(--accent); cursor: default; user-select: none; }

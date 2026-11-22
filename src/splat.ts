@@ -2,9 +2,9 @@ const __dye_radius = 1.5;
 const splat = {
     point: new Float32Array(2),
     dye_radius: texel_radius(__dye_radius),
-    dye_strength: 0.45,
-    velocity_radius: texel_radius(__dye_radius+0.5),
-    velocity_strength: 0.6,
+    dye_strength: 1.0,
+    velocity_radius: texel_radius(__dye_radius+3.0),
+    velocity_strength: 0.4,
     force_scale: 0.3,
     prev: new Float32Array(2),
     next_is_start: true,
@@ -13,7 +13,7 @@ const splat = {
 
 const obstacle_splat = {    
     radius: texel(3),
-    outline_width: texel(1.5),
+    outline_width: texel(5.0),
     erase: 0,
     /** sticky erase, toggled by picking the wall tool again. */
     erase_mode: false,
@@ -21,6 +21,58 @@ const obstacle_splat = {
     queue: [] as { uv:Float32Array, erase:number, start:boolean }[],
     prev: new Float32Array(2)
 };
+
+/** brush sizes in sim texels, the unit the inspector edits. The splat values
+ * are in screen-height units: dye / force are r of exp(-d²/r), whose 1/e
+ * radius is √r; the wall radius is the contour distance. */
+const brushes = { dye_radius: 0, force_radius: 0, wall_radius: 0, wall_outline: 0 };
+
+/** one sim texel in screen-height units (splat distances are y-uv based). */
+const sim_texel = () => 1 / N2;
+
+/** brushes (texels) -> splat values. */
+function brushes_apply() {
+    const t = sim_texel();
+    // the default texel count maps to the exact default size, so rounding
+    // can't make a default brush drift across resolution changes
+    splat.dye_radius = brushes.dye_radius === brush_default.dye_radius()
+        ? BRUSH_DEFAULTS.dye : (brushes.dye_radius * t) ** 2;
+    splat.velocity_radius = brushes.force_radius === brush_default.force_radius()
+        ? BRUSH_DEFAULTS.force : (brushes.force_radius * t) ** 2;
+    obstacle_splat.radius = brushes.wall_radius === brush_default.wall_radius()
+        ? BRUSH_DEFAULTS.wall : brushes.wall_radius * t;
+    obstacle_splat.outline_width = brushes.wall_outline === brush_default.wall_outline()
+        ? BRUSH_DEFAULTS.outline : brushes.wall_outline * t;
+}
+
+/** startup splat values: the default brush sizes on screen. */
+const BRUSH_DEFAULTS = { dye: 0, force: 0, wall: 0, outline: 0 };
+function brushes_capture_defaults() {
+    BRUSH_DEFAULTS.dye = splat.dye_radius;
+    BRUSH_DEFAULTS.force = splat.velocity_radius;
+    BRUSH_DEFAULTS.wall = obstacle_splat.radius;
+    BRUSH_DEFAULTS.outline = obstacle_splat.outline_width;
+}
+
+/** a default brush size in texels of the current grid (so a reset restores
+ * the default screen size at any resolution). */
+const round_texels = (v:number) => Math.round(v * 10) / 10;
+const brush_default = {
+    dye_radius: () => round_texels(Math.sqrt(BRUSH_DEFAULTS.dye) / sim_texel()),
+    force_radius: () => round_texels(Math.sqrt(BRUSH_DEFAULTS.force) / sim_texel()),
+    wall_radius: () => round_texels(BRUSH_DEFAULTS.wall / sim_texel()),
+    wall_outline: () => round_texels(BRUSH_DEFAULTS.outline / sim_texel()),
+};
+
+/** splat values -> brushes (texels), e.g. after the sim grid changed: the
+ * brushes keep their screen size, their texel counts follow the grid. */
+function brushes_read() {
+    const t = sim_texel();
+    brushes.dye_radius = round_texels(Math.sqrt(splat.dye_radius) / t);
+    brushes.force_radius = round_texels(Math.sqrt(splat.velocity_radius) / t);
+    brushes.wall_radius = round_texels(obstacle_splat.radius / t);
+    brushes.wall_outline = round_texels(obstacle_splat.outline_width / t);
+}
 
 const stroke = {
     choosen_palette: palette_color_data,

@@ -21,8 +21,8 @@ type FieldIO<T> = {
     onChange?: (v: T) => void;
     /** Returns true if the field should be visible. */
     visible?: () => boolean|number;
-    /** Field tooltip. */
-    tooltip?: string;
+    /** Field tooltip; a function is evaluated each time it opens. */
+    tooltip?: string | (() => string);
 };
 
 interface IUI_FIELD<T> {
@@ -61,9 +61,12 @@ type Common<O, T> = {
     obj: Src<O>;
     frozen?: () => T | undefined;
     visible?: () => boolean;
-    tooltip?:string;
+    /** a function is evaluated each time the tooltip opens (e.g. defaults that depend on the grid). */
+    tooltip?: string | (() => string);
     persist?: boolean;
     track?: boolean;
+    /** the inspector's reset-all leaves this field alone (double-click still resets it). */
+    keep_on_reset?: boolean;
 };
 
 /** unit shown inside the right edge of a number input, `name` is its tooltip. */
@@ -72,6 +75,8 @@ type UnitDef = { symbol: string; name?: string };
 type SliderDef<O, K extends NumKey<O>> = Common<O, number> & {
     key: K; min: Src<number>; max: Src<number>;
     step?: number; log?: boolean; int?: boolean; unit?: UnitDef; onChange?: (v: number) => void;
+    /** default for reset / modified tracking, when it isn't the value at creation. */
+    def?: () => number;
 };
 
 type ToggleDef<O, K extends FlagKey<O>> = Common<O, number | boolean> & {

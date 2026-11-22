@@ -52,6 +52,9 @@ const fluid = {
     pressure_cycles: 2,
     /** Jacobi sweeps before and after each coarse correction. */
     pressure_smoothing: 2,
+    /** sim texels over which the pressure pushes back on a stroke; >= 1000 is
+     * unlimited (see MG_REACH_UNLIMITED). Small = punchy strokes that carry on. */
+    pressure_reach: 8,
     velocity_dissipation: 0.999,
     dye_dissipation: 1.0,
     curl_strength: 15,
@@ -78,6 +81,10 @@ const fluid = {
         exposure: 0.6,
         /** seconds for the auto exposure to settle after the field changes. */
         adapt_time: 0.5,
+        /** 1: velocity arrows over the non-dye views. */
+        arrows: 0,
+        /** arrows per screen height (the cells are square). */
+        arrow_rows: 20,
     },
     /** inspector resolutions (target texel area is res²), applied by apply_resolution. */
     sim_resolution: SIM_RESOLUTION,
