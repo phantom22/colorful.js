@@ -11,6 +11,9 @@
 
 html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background-color: black; }
 
+/* pinned to the viewport: without a definite box here, the canvas' height:100%
+ * falls back to its intrinsic 2:1 (300x150) shape and never fills a portrait screen */
+#container { position: fixed; inset: 0; overflow: hidden; }
 #hud { position: absolute; inset: 0; pointer-events: none; font: 11px/1.3 var(--mono); color: var(--text); user-select: none; }
 #hud button, #hud nav, #hud aside, #hud ul, #view-select, #status { pointer-events: auto; }
 #hud button { font: inherit; color: inherit; }
@@ -60,6 +63,22 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 #insp-resize::after { content: ""; position: absolute; left: 3px; top: 50%; width: 2px; height: 36px; margin-top: -18px;
   border-radius: 2px; background: var(--line); transition: background .15s, height .15s, margin-top .15s; }
 #insp-resize:hover::after, #insp-resize:active::after { background: var(--accent); height: 64px; margin-top: -32px; }
+#insp-tab { display: none; }
+
+/* small screens (phones): the inspector is a drawer that stows to the right,
+ * leaving only the tab on the screen edge. Keep the query in sync with
+ * INSPECTOR_SMALL_SCREEN in ui_inspector.ts. */
+@media (max-width: 640px), (max-height: 500px) {
+  #inspector { right: 0; width: min(378px, calc(100vw - 64px)) !important;   /* beats the desktop drag width */
+    border-right: 0; border-radius: 6px 0 0 6px; transition: transform .22s ease; }
+  #inspector.stowed { transform: translateX(100%); }
+  #insp-resize, #inspector header #insp-toggle { display: none; }   /* the tab replaces resizing and collapsing */
+  #inspector.min #insp-body { display: block; }      /* a desktop collapse can't be undone here */
+  #insp-tab { display: grid; place-items: center; position: absolute; left: -30px; top: 6px; width: 30px; height: 44px;
+    padding: 0; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; cursor: pointer;
+    background: var(--bg); color: var(--dim); font-size: 18px; line-height: 1; touch-action: manipulation; }
+  #insp-tab:hover, #insp-tab:active { color: var(--accent); }
+}
 
 #insp-body section { border-bottom: 1px solid var(--line); }
 #insp-body h3 { margin: 0; padding: 8px 10px; font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
@@ -99,7 +118,7 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
   border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
 #st-tool { color: var(--accent); }
 
-#screen { cursor: none; display: block; width: 100%; height: 100%; }
+#screen { cursor: none; display: block; width: 100%; height: 100%; touch-action: none; }
 
 .palette-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
@@ -123,6 +142,13 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
   content: ""; position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px;
   background: var(--accent); clip-path: polygon(100% 0, 100% 100%, 0 100%);
 }
+.palette-grid .sw .del {                        /* remove button on custom colors */
+  position: absolute; top: -6px; right: -6px; width: 14px; height: 14px; border-radius: 50%;
+  display: none; place-items: center; font: 11px/1 sans-serif; font-style: normal;
+  color: var(--fg, #e6eaf0); background: var(--bg2, #222); box-shadow: 0 0 0 1px var(--line, #444), 0 1px 3px #000a;
+}
+.palette-grid .sw:hover .del { display: grid; }
+.palette-grid .sw .del:hover { color: #fff; background: #b04850; }
 .palette-grid .sw.add {
   display: grid; place-items: center; background: transparent; color: var(--dim);
   box-shadow: inset 0 0 0 1px var(--line); border: 1px dashed var(--dim); font-size: 16px; line-height: 1;
@@ -299,6 +325,12 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 #wall-ring { fill: none; stroke: #e6eaf0; stroke-opacity: .85; stroke-width: 1;
   filter: drop-shadow(0 0 1px #000); }
 #wall-line { stroke: var(--accent); stroke-opacity: .35; stroke-linecap: round; }
+#wall-ring.erase { stroke: #ff7b7b; }
+/* wall tool in erase mode (picked again, or shift held), same red as active toggles */
+#tools button.on.erase { color: #ff7b7b; background: #ff7b7b1c; border-color: #ff7b7b55; }
+#tools button.on.erase::before { background: #ff7b7b; }
+/* force brush, see ui_update_mouse_overlay */
+#force-ring { fill: none; stroke: #e6eaf0; stroke-opacity: .35; stroke-width: 1; stroke-dasharray: 3 4; }
 
 #inspector header .hbtns { display: flex; align-items: center; gap: 2px; }
 #inspector header button { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0; }
@@ -315,7 +347,13 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 
 .row.float { grid-template-columns: var(--lbl) 1fr; }
 
-.row input[type=number]:not(:focus) { cursor: ns-resize; }
+.row input[type=number].scrub:not(:focus) { cursor: ns-resize; }   /* only inputs with drag scrubbing */
 
 .row.palette { height: auto; grid-template-columns: 1fr; }
 .row.palette label { display: none; }
+/* ---------- units inside number inputs ---------- */
+.row.has-unit:not(.float) { grid-template-columns: var(--lbl) 1fr calc(var(--num) + var(--uw) * 6px); }
+.row .unit-wrap { position: relative; display: block; min-width: 0; }
+.row .unit-wrap input[type=number] { padding-right: calc(var(--uw) * 6px + 7px); }
+.row .unit-wrap i { position: absolute; right: 5px; top: 0; bottom: 0; display: grid; place-items: center;
+  font-style: normal; font-size: 9px; color: var(--accent); cursor: help; user-select: none; }

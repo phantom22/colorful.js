@@ -25,7 +25,7 @@ Borders are solid by default. Toggle open borders to let the fluid flow out of t
 
 ### Full control
 The inspector exposes the solver and the visuals:
-- time step, time scale and pressure iterations
+- time step, time scale and pressure solve (multigrid V-cycles and smoothing sweeps)
 - vorticity confinement and velocity decay
 - dye diffusion
 - brush size and strength

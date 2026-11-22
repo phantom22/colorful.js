@@ -10,7 +10,9 @@ class UI_TOOLBAR<T extends number> {
 
     constructor(
         items: ToolItem<T>[], initial: T,
-        private readonly onPick: (id: T) => void
+        private readonly onPick: (id: T) => void,
+        /** called when the already selected tool is picked again (click, tap or key). */
+        private readonly onRepick?: (id: T) => void
     ) {
         isolate(this.nav);
         for (const it of items) {
@@ -18,7 +20,7 @@ class UI_TOOLBAR<T extends number> {
             const b = document.createElement("button");
             b.dataset.tip = it.key ? `${it.tip}  [${it.key.toUpperCase()}]` : it.tip;
             b.innerHTML = `<svg viewBox="0 0 24 24">${it.icon}</svg>`;
-            b.addEventListener("click", () => this.pick(it.id));
+            b.addEventListener("click", () => this.choose(it.id));
             this.nav.appendChild(b);
             this.buttons.set(it.id, b);
             if (it.key) this.keys.set(it.key.toLowerCase(), it.id);
@@ -26,7 +28,7 @@ class UI_TOOLBAR<T extends number> {
         addEventListener("keydown", e => {
             if (is_typing(e)) return;
             const id = this.keys.get(e.key.toLowerCase());
-            if (id !== undefined) this.pick(id);
+            if (id !== undefined) this.choose(id);
         });
         this.current = initial;
         this.pick(initial);
@@ -37,6 +39,17 @@ class UI_TOOLBAR<T extends number> {
         this.current = id;
         this.buttons.forEach((b, k) => b.classList.toggle("on", k === id));
         if (notify) this.onPick(id);
+    }
+
+    /** user pick: a repeat pick of the current tool also calls onRepick. */
+    private choose(id: T) {
+        if (id === this.current) this.onRepick?.(id);
+        this.pick(id);
+    }
+
+    /** toggles a class on one tool's button (e.g. "erase"). */
+    mark(id: T, cls: string, on: boolean) {
+        this.buttons.get(id)?.classList.toggle(cls, on);
     }
 
     get picked() { return this.current; }

@@ -9,14 +9,14 @@ class UI_FIELD_SLIDER extends UI_FIELD<number> {
 
     constructor(
         parent: HTMLElement, label: string, key: string, io: FieldIO<number>,
-        private readonly o: { min: () => number; max: () => number; step?: number; log: boolean; int: boolean }
+        private readonly o: { min: () => number; max: () => number; step?: number; log: boolean; int: boolean; unit?: UnitDef }
     ) {
         super(parent, label, key, io);
         this.range_input.type = "range";
         this.range_input.min = "0";
         this.range_input.max = "1000";
         this.number_input.type = "number";
-        this.root.append(this.range_input, this.number_input);
+        this.root.append(this.range_input, with_unit(this.root, this.number_input, o.unit));
 
         this.range_input.addEventListener("input", () => this.apply(this.from_t(+this.range_input.value / 1000)));
         // leave the slider after a mouse drag, so the global arrow hotkeys work again.

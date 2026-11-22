@@ -1,9 +1,13 @@
+/** small screens get a drawer inspector, see the matching @media in styles.css. */
+const INSPECTOR_SMALL_SCREEN = "(max-width: 640px), (max-height: 500px)";
+
 class UI_INSPECTOR {
     private readonly root = $("inspector");
     private readonly body = $("insp-body");
     private readonly toggle = $("insp-toggle");
     private readonly reset = $("insp-reset");
     private readonly resize = $("insp-resize");
+    private readonly tab = $("insp-tab");
     private readonly sections = new Map<string, UI_SECTION>();
 
     constructor() {
@@ -11,6 +15,23 @@ class UI_INSPECTOR {
         this.toggle.addEventListener("click", () => this.collapse(!this.collapsed));
         this.reset.addEventListener("click", e => { this.reset_all(); (e.currentTarget as HTMLElement).blur(); });
         this.init_resize();
+        this.init_drawer();
+    }
+
+    get stowed() { return this.root.classList.contains("stowed"); }
+    /** slides the inspector off the right edge (only takes effect on small screens). */
+    stow(v = true) {
+        this.root.classList.toggle("stowed", v);
+        this.tab.textContent = v ? "‹" : "›";
+        this.tab.title = v ? "Show inspector" : "Hide inspector";
+        try { localStorage.setItem("insp_stowed", v ? "1" : "0"); } catch {}
+    }
+
+    private init_drawer() {
+        this.tab.addEventListener("click", e => { this.stow(!this.stowed); (e.currentTarget as HTMLElement).blur(); });
+        // first visit on a phone: start stowed so the sim is visible
+        const saved = localStorage.getItem("insp_stowed");
+        this.stow(saved !== null ? saved === "1" : matchMedia(INSPECTOR_SMALL_SCREEN).matches);
     }
 
     reset_all() {
@@ -30,7 +51,7 @@ class UI_INSPECTOR {
     }
 
     /** returns the section, creating it on first use. */
-    section(name: string, visible?:() => boolean, open = true) {
+    section(name: string, visible?:() => boolean|number, open = true) {
         let s = this.sections.get(name);
         if (!s) {
             s = new UI_SECTION(name, visible, open);

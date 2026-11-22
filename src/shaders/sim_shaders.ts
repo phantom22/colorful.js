@@ -29,6 +29,68 @@ vec2 edge_valve(vec2 v, vec2 uv) {
     return v;
 }`;
 
+/** per-cell obstacle info baked by sh_obstacle_mask (see build_obstacle_mask).
+ * For passes that run one fragment per sim cell and only look at the 4 direct
+ * neighbours, a single texelFetch replaces up to 17 obstacle samples. */
+const mask_glsl = `
+uniform highp sampler2D tex_mask;
+uniform int open_borders;
+
+const uint M_SELF = 1u, M_L = 2u, M_R = 4u, M_B = 8u, M_T = 16u, M_NEAR = 32u;
+
+// r: the bit flags above, g: wall_fade for vorticity confinement
+vec4 mask_px() { return texelFetch(tex_mask, ivec2(gl_FragCoord.xy), 0); }
+uint mask_bits(vec4 m) { return uint(m.r * 255.0 + 0.5); }
+bool has(uint m, uint b) { return (m & b) != 0u; }
+
+// open borders only: remove inward-pointing velocity on the outermost texel
+vec2 edge_valve(vec2 v, vec2 uv) {
+    if (open_borders != 1) return v;
+    vec2 e = min(uv, 1.0 - uv) / TEXEL;
+    if (uv.x < 0.5 && e.x < 1.5 && v.x > 0.0) v.x = 0.0;
+    if (uv.x > 0.5 && e.x < 1.5 && v.x < 0.0) v.x = 0.0;
+    if (uv.y < 0.5 && e.y < 1.5 && v.y > 0.0) v.y = 0.0;
+    if (uv.y > 0.5 && e.y < 1.5 && v.y < 0.0) v.y = 0.0;
+    return v;
+}`;
+
+/** rebuilt only when the walls or open_borders change. */
+const sh_obstacle_mask = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 v_uv;
+uniform vec2 TEXEL;
+out vec4 o;
+
+${obst_glsl}
+
+float wall_fade(vec2 uv) {
+    vec2 e = min(uv, 1.0 - uv) / TEXEL;
+    float m = smoothstep(2.0, 6.0, min(e.x, e.y));
+    for (int i = 0; i < 8; ++i) {
+        float a = 0.78539816 * float(i);
+        vec2 d = vec2(cos(a), sin(a)) * TEXEL;
+        if (solid(uv + d * 3.0) > 0.5) m = 0.0;
+        else if (solid(uv + d * 5.0) > 0.5) m = min(m, 0.5);
+    }
+    return m;
+}
+
+void main() {
+    vec2 dx = vec2(TEXEL.x, 0.0), dy = vec2(0.0, TEXEL.y);
+    uint m = 0u;
+    if (solid(v_uv)      > 0.5) m |= 1u;
+    if (solid(v_uv - dx) > 0.5) m |= 2u;
+    if (solid(v_uv + dx) > 0.5) m |= 4u;
+    if (solid(v_uv - dy) > 0.5) m |= 8u;
+    if (solid(v_uv + dy) > 0.5) m |= 16u;
+    // curl is zeroed within 2 texels of the border or next to/inside a wall
+    vec2 e = min(v_uv, 1.0 - v_uv) / TEXEL;
+    if (min(e.x, e.y) < 2.0 || m != 0u) m |= 32u;
+    o = vec4(float(m) / 255.0, wall_fade(v_uv), 0.0, 1.0);
+}`;
+
 const quad_vert = `
 #version 300 es
 out vec2 v_uv;
@@ -59,7 +121,7 @@ precision highp float;
 in vec2 v_uv;
 out vec4 o;
 
-const float ASPECT = ${ASPECT};
+uniform float ASPECT;
 uniform float seed;
 uniform float scale;   // base frequency
 uniform float amp;     // texels/s
@@ -108,9 +170,9 @@ float solid(vec2 uv) {
     return step(0.5, texture(tex_obstacles, uv).x);
 }
 
-const float ASPECT = ${ASPECT};
+uniform float ASPECT;
 
-uniform sampler2D tex_source;
+// no texture read: the result is blended into the target, see run_splats
 uniform vec2 point;
 uniform vec2 prev;
 uniform vec4 value;         // color or velocity
@@ -125,8 +187,9 @@ void main() {
     float w = clamp(exp(-dot(d, d) / brush_radius) * brush_strength, 0.0, 1.0);
     w *= 1.0 - solid(v_uv);
     
-    vec4 old = texture(tex_source, v_uv);
-    o = additive > 0.5 ? old + w * value : mix(old, value, w);
+    // additive: blend ONE, ONE                  -> old + w * value
+    // mix:      blend ONE, ONE_MINUS_SRC_ALPHA  -> mix(old, value, w)
+    o = additive > 0.5 ? w * value : vec4(w * value.rgb, w);
 }`;
 
 const sh_obstacle_splat = `
@@ -135,7 +198,7 @@ precision highp float;
 in vec2 v_uv;
 out vec4 o;
 
-const float ASPECT = ${ASPECT};
+uniform float ASPECT;
 
 uniform vec2 point;
 uniform vec2 prev;
@@ -156,7 +219,7 @@ const sh_sim_velocity_advect = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
 ${obst_glsl}
@@ -204,8 +267,8 @@ precision highp sampler2D;
 in vec2 v_uv;
 out vec4 o;
 
-const vec2 TEXEL  = vec2(${TEXEL});
-const vec2 DTEXEL = vec2(${DYE_TEXEL});
+uniform vec2 TEXEL;
+uniform vec2 DTEXEL;
 
 ${obst_glsl}
 
@@ -216,6 +279,17 @@ uniform float dissipation;
 uniform vec3 bg_log;          // background in log encoding
 
 bool outside(vec2 p) { return p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0; }
+
+// Open borders: edge_valve blocks inflow in the outermost sim cell, so dye in
+// that band never refreshes and gets dragged inward as streaks. Treat the band
+// as outside fluid instead: samples fade to the background at the border.
+vec4 dye_at(vec2 p) {
+    vec4 c = texture(tex_dye, p);
+    if (open_borders != 1) return c;
+    vec2 band = max(TEXEL, DTEXEL);
+    vec2 k = clamp(1.0 - min(p, 1.0 - p) / band, 0.0, 1.0);
+    return mix(c, vec4(bg_log, 1.0), max(k.x, k.y));
+}
 
 void main() {
     if (solid(v_uv) > 0.5) {
@@ -233,21 +307,21 @@ void main() {
     vec2 back = trace(v_uv, disp);
     if (outside(back)) { o = vec4(bg_log, 1.0); return; }   // clean dye flows in
 
-    vec4 fwd = texture(tex_dye, back);
+    vec4 fwd = dye_at(back);
     vec4 mc = fwd;
     vec2 p = v_uv + disp;
     if (!outside(p) && solid(p) < 0.5) {
         vec2 q = trace(p, dt * texture(tex_velocity, p).xy * TEXEL);
         if (!outside(q))
-            mc = fwd + 0.5 * (texture(tex_dye, v_uv) - texture(tex_dye, q));
+            mc = fwd + 0.5 * (dye_at(v_uv) - dye_at(q));
     }
 
     vec2 st = back / DTEXEL - 0.5;
     vec2 c0 = (floor(st) + 0.5) * DTEXEL;
-    vec4 a = texture(tex_dye, c0);
-    vec4 b = texture(tex_dye, c0 + vec2(DTEXEL.x, 0.0));
-    vec4 c = texture(tex_dye, c0 + vec2(0.0, DTEXEL.y));
-    vec4 d = texture(tex_dye, c0 + DTEXEL);
+    vec4 a = dye_at(c0);
+    vec4 b = dye_at(c0 + vec2(DTEXEL.x, 0.0));
+    vec4 c = dye_at(c0 + vec2(0.0, DTEXEL.y));
+    vec4 d = dye_at(c0 + DTEXEL);
     mc = clamp(mc, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
 
     o = dissipation * mc;
@@ -260,8 +334,8 @@ precision highp sampler2D;
 in vec2 v_uv;
 out vec4 o;
 
-const float ASPECT = ${ASPECT};
-const vec2 TEXEL = vec2(${TEXEL});
+uniform float ASPECT;
+uniform vec2 TEXEL;
 
 ${obst_glsl}
 
@@ -292,10 +366,10 @@ const sh_sim_curl = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
-${obst_glsl}
+${mask_glsl}
 
 uniform sampler2D tex_velocity;
 
@@ -304,19 +378,13 @@ vec2 V(vec2 uv) {
 }
 
 void main() {
+    if (has(mask_bits(mask_px()), M_NEAR)) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
     float L = V(v_uv - vec2(TEXEL.x, 0.0)).y;
     float R = V(v_uv + vec2(TEXEL.x, 0.0)).y;
     float B = V(v_uv - vec2(0.0, TEXEL.y)).x;
     float T = V(v_uv + vec2(0.0, TEXEL.y)).x;
 
-    float c = 0.5 * (R - L - T + B);
-    vec2 edge = min(v_uv, 1.0 - v_uv) / TEXEL;
-    bool near_wall = min(edge.x, edge.y) < 2.0;
-    for (int i = -1; i <= 1 && !near_wall; ++i) {
-        if (solid(v_uv + vec2(float(i), 0.0) * TEXEL) > 0.5 ||
-            solid(v_uv + vec2(0.0, float(i)) * TEXEL) > 0.5) near_wall = true;
-    }
-    o = vec4(near_wall ? 0.0 : c, 0.0, 0.0, 1.0);
+    o = vec4(0.5 * (R - L - T + B), 0.0, 0.0, 1.0);
 }`;
 
 const sh_blur = `
@@ -324,7 +392,7 @@ const sh_blur = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
 uniform sampler2D tex_source;
@@ -343,22 +411,10 @@ const sh_sim_vorticity_confinement = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
-${obst_glsl}
-
-float wall_fade(vec2 uv) {
-    vec2 e = min(uv, 1.0 - uv) / TEXEL;
-    float m = smoothstep(2.0, 6.0, min(e.x, e.y));
-    for (int i = 0; i < 8; ++i) {
-        float a = 0.78539816 * float(i);
-        vec2 d = vec2(cos(a), sin(a)) * TEXEL;
-        if (solid(uv + d * 3.0) > 0.5) m = 0.0;
-        else if (solid(uv + d * 5.0) > 0.5) m = min(m, 0.5);
-    }
-    return m;
-}
+${mask_glsl}
 
 uniform sampler2D tex_velocity;
 uniform sampler2D tex_curl;
@@ -369,7 +425,8 @@ uniform float max_velocity;
 uniform float drag;
 
 void main() {
-    if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
+    vec4 mk = mask_px();
+    if (has(mask_bits(mk), M_SELF)) { o = texture(tex_velocity, v_uv); return; }
 
     float L = texture(tex_curl, v_uv - vec2(TEXEL.x, 0.0)).x;
     float R = texture(tex_curl, v_uv + vec2(TEXEL.x, 0.0)).x;
@@ -379,7 +436,7 @@ void main() {
 
     vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
     force /= max(length(force), 0.05);
-    force *= curl_strength * C * wall_fade(v_uv);           // <- C restored
+    force *= curl_strength * C * mk.g;           // <- C restored
     force.y *= -1.0;
 
     float fm = length(force);
@@ -401,10 +458,10 @@ const sh_sim_divergence = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
-${obst_glsl}
+${mask_glsl}
 
 uniform sampler2D tex_velocity;
 
@@ -413,49 +470,18 @@ vec2 V(vec2 uv) {
 }
 
 void main() {
-    if (solid(v_uv) > 0.5) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    uint m = mask_bits(mask_px());
+    if (has(m, M_SELF)) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
     vec2 C = V(v_uv);
     float L = V(v_uv - vec2(TEXEL.x, 0.0)).x;
     float R = V(v_uv + vec2(TEXEL.x, 0.0)).x;
     float B = V(v_uv - vec2(0.0, TEXEL.y)).y;
     float T = V(v_uv + vec2(0.0, TEXEL.y)).y;
-    if (solid(v_uv - vec2(TEXEL.x, 0.0)) > 0.5) L = -C.x;
-    if (solid(v_uv + vec2(TEXEL.x, 0.0)) > 0.5) R = -C.x;
-    if (solid(v_uv - vec2(0.0, TEXEL.y)) > 0.5) B = -C.y;
-    if (solid(v_uv + vec2(0.0, TEXEL.y)) > 0.5) T = -C.y;
+    if (has(m, M_L)) L = -C.x;
+    if (has(m, M_R)) R = -C.x;
+    if (has(m, M_B)) B = -C.y;
+    if (has(m, M_T)) T = -C.y;
     o = vec4(0.5 * (R - L + T - B), 0.0, 0.0, 1.0);
-}`;
-
-const sh_sim_pressure_jacobi = `
-#version 300 es
-precision highp float;
-precision highp sampler2D;
-in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
-out vec4 o;
-
-${obst_glsl}
-
-uniform sampler2D tex_pressure;
-uniform sampler2D tex_divergence;
-
-float P(vec2 uv) {
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
-    return texture(tex_pressure, uv).x;
-}
-
-void main() {
-    float C = texture(tex_pressure, v_uv).x;
-    vec2 uL = v_uv - vec2(TEXEL.x, 0.0), uR = v_uv + vec2(TEXEL.x, 0.0);
-    vec2 uB = v_uv - vec2(0.0, TEXEL.y), uT = v_uv + vec2(0.0, TEXEL.y);
-    float L = P(uL), R = P(uR), B = P(uB), T = P(uT);
-    if (solid(uL) > 0.5) L = C;   // walls reflect (Neumann)
-    if (solid(uR) > 0.5) R = C;
-    if (solid(uB) > 0.5) B = C;
-    if (solid(uT) > 0.5) T = C;
-    float div = texture(tex_divergence, v_uv).x;
-    float p = (L + R + B + T - div) * 0.25;
-    o = vec4(solid(v_uv) > 0.5 ? 0.0 : p, 0.0, 0.0, 1.0);
 }`;
 
 const sh_sim_gradient_subtract = `
@@ -463,10 +489,10 @@ const sh_sim_gradient_subtract = `
 precision highp float;
 precision highp sampler2D;
 in vec2 v_uv;
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 TEXEL;
 out vec4 o;
 
-${obst_glsl}
+${mask_glsl}
 
 uniform sampler2D tex_pressure;
 uniform sampler2D tex_velocity;
@@ -477,12 +503,14 @@ float P(vec2 uv) {
 }
 
 void main() {
-    if (solid(v_uv) > 0.5) {
+    uint m = mask_bits(mask_px());
+    if (has(m, M_SELF)) {
         const vec2 N[4] = vec2[4](vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));
+        const uint NB[4] = uint[4](M_R, M_L, M_T, M_B);
         vec2 acc = vec2(0.0); float n = 0.0;
         for (int i = 0; i < 4; ++i) {
             vec2 uv = v_uv + N[i] * TEXEL;
-            if (solid(uv) < 0.5) {
+            if (!has(m, NB[i])) {
                 vec2 u = texture(tex_velocity, uv).xy;
                 u -= 2.0 * dot(u, N[i]) * N[i];      // mirror the wall-normal part
                 acc += u; n += 1.0;
@@ -494,31 +522,14 @@ void main() {
     float C = texture(tex_pressure, v_uv).x;
     vec2 uL = v_uv - vec2(TEXEL.x, 0.0), uR = v_uv + vec2(TEXEL.x, 0.0);
     vec2 uB = v_uv - vec2(0.0, TEXEL.y), uT = v_uv + vec2(0.0, TEXEL.y);
-    float L = P(uL), R = P(uR), B = P(uB), T = P(uT);
-    float sL = solid(uL), sR = solid(uR), sB = solid(uB), sT = solid(uT);
-    if (sL > 0.5) L = C;
-    if (sR > 0.5) R = C;
-    if (sB > 0.5) B = C;
-    if (sT > 0.5) T = C;
+    bool sL = has(m, M_L), sR = has(m, M_R), sB = has(m, M_B), sT = has(m, M_T);
+    float L = sL ? C : P(uL), R = sR ? C : P(uR), B = sB ? C : P(uB), T = sT ? C : P(uT);
     vec2 v = texture(tex_velocity, v_uv).xy - 0.5 * vec2(R - L, T - B);
-    if (sL > 0.5 && v.x < 0.0) v.x = 0.0;     // only remove flow INTO the wall
-    if (sR > 0.5 && v.x > 0.0) v.x = 0.0;
-    if (sB > 0.5 && v.y < 0.0) v.y = 0.0;
-    if (sT > 0.5 && v.y > 0.0) v.y = 0.0;
+    if (sL && v.x < 0.0) v.x = 0.0;     // only remove flow INTO the wall
+    if (sR && v.x > 0.0) v.x = 0.0;
+    if (sB && v.y < 0.0) v.y = 0.0;
+    if (sT && v.y > 0.0) v.y = 0.0;
     o = vec4(edge_valve(v, v_uv), 0.0, 1.0);
-}`;
-
-const sh_scale = `
-#version 300 es
-precision highp float;
-precision highp sampler2D;
-in vec2 v_uv;
-out vec4 o;
-
-uniform sampler2D tex_source;
-uniform float value;
-void main() {
-    o = value * texture(tex_source, v_uv);
 }`;
 
 const sh_sim_diffusion_pass = `
@@ -528,8 +539,8 @@ precision highp sampler2D;
 in vec2 v_uv;
 out vec4 o;
 
-const vec2 DTEXEL = vec2(${DYE_TEXEL});
-const vec2 TEXEL = vec2(${TEXEL});
+uniform vec2 DTEXEL;
+uniform vec2 TEXEL;
 
 ${obst_glsl}
 
@@ -586,6 +597,9 @@ uniform int   blur_type;      // 0 none, 1 cross (5 taps), 2 3x3 binomial
 uniform float reference_value;       // value that maps to ~63% of the palette
 uniform float value_rescale_threshold;    // optional low-end boost: below this t is multiplied by rescale_factor
 uniform float rescale_factor;
+uniform int   auto_exposure;      // 1: reference = eased RMS of the field / exposure
+uniform sampler2D tex_exposure;   // 1x1, see exposure.ts
+uniform float exposure;
 
 const float border_size = 0.0025;
 
@@ -664,7 +678,10 @@ vec3 get_color() {
         hue = s.x < 0.0 ? 0.6 : 0.0;
     }
 
-    float t = 1.0 - exp(-mag / reference_value);
+    float ref = auto_exposure == 1
+        ? max(texelFetch(tex_exposure, ivec2(0), 0).x / max(exposure, 1e-6), 1e-6)
+        : reference_value;
+    float t = 1.0 - exp(-mag / ref);
     t = t < value_rescale_threshold ? t * rescale_factor : t;
 
     if (palette_type == 3 && source_kind == 2) {
@@ -699,3 +716,22 @@ void main() {
 //     vec2 grad = vec2(0.0);
 //     for (int i = 0; i < 8; ++i)
 //         grad += D[i] * ac(D[i] * brush_radius);
+/** copies an old sim texture into a resized one. Screen pixels are anchored at
+ * the center, so content stays where it was on screen; areas that weren't
+ * visible before get `fill`. */
+const sh_resample = `
+#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 v_uv;
+out vec4 o;
+
+uniform sampler2D tex_source;
+uniform vec2 uv_scale;      // new_size_px / old_size_px
+uniform vec4 value_scale;   // per channel, e.g. velocity in texels/s
+uniform vec4 fill;
+void main() {
+    vec2 uv = (v_uv - 0.5) * uv_scale + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { o = fill; return; }
+    o = value_scale * texture(tex_source, uv);
+}`;

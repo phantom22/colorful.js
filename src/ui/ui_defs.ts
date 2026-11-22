@@ -20,7 +20,7 @@ type FieldIO<T> = {
     /** Callback triggered by the setter. */
     onChange?: (v: T) => void;
     /** Returns true if the field should be visible. */
-    visible?: () => boolean;
+    visible?: () => boolean|number;
     /** Field tooltip. */
     tooltip?: string;
 };
@@ -66,9 +66,12 @@ type Common<O, T> = {
     track?: boolean;
 };
 
+/** unit shown inside the right edge of a number input, `name` is its tooltip. */
+type UnitDef = { symbol: string; name?: string };
+
 type SliderDef<O, K extends NumKey<O>> = Common<O, number> & {
     key: K; min: Src<number>; max: Src<number>;
-    step?: number; log?: boolean; int?: boolean; onChange?: (v: number) => void;
+    step?: number; log?: boolean; int?: boolean; unit?: UnitDef; onChange?: (v: number) => void;
 };
 
 type ToggleDef<O, K extends FlagKey<O>> = Common<O, number | boolean> & {
@@ -90,7 +93,9 @@ type ColorDef<O, K extends VecKey<O>> = Common<O, number[]> & {
 };
 
 type FloatDef<O, K extends NumKey<O>> = Common<O, number> & {
-    key: K; min?: number; max?: number; step?: number; int?: boolean; decimals?: number;
+    key: K; min?: number; max?: number; step?: number; int?: boolean; decimals?: number; unit?: UnitDef;
+    /** false: no drag / wheel scrubbing, the value only changes on commit (enter, blur, spinner). */
+    scrub?: boolean;
     onChange?: (v: number) => void;
 };
 
@@ -113,5 +118,8 @@ type PaletteDef<O, K extends NumKey<O>> = Common<O, number> & {
     key: K;
     colors: () => color_data[];
     onAdd?: (c: color_data) => void;
+    /** swatches for which this returns true get a remove button. */
+    removable?: (i: number) => boolean;
+    onRemove?: (i: number) => void;
     onChange?: (v: number) => void;
 };

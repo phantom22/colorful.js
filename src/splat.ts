@@ -13,8 +13,10 @@ const splat = {
 
 const obstacle_splat = {    
     radius: texel(3),
-    outline_width: texel(1),
+    outline_width: texel(1.5),
     erase: 0,
+    /** sticky erase, toggled by picking the wall tool again. */
+    erase_mode: false,
     next_is_start: true,
     queue: [] as { uv:Float32Array, erase:number, start:boolean }[],
     prev: new Float32Array(2)
@@ -53,76 +55,112 @@ function set_dye_splat(uv_pos:Float32Array, start:boolean, color_data?:color_dat
     splat.next_is_start = false;
 }
 
+/** wall brush erases: the sticky mode, inverted while shift is held. */
+function wall_erasing() {
+    return obstacle_splat.erase_mode !== keyboard.shift_down;
+}
+
 function set_obstacle_splat(uv_pos:Float32Array, start:boolean) {
     obstacle_splat.queue.push({
         uv: Float32Array.from(uv_pos),
-        erase: keyboard.shift_down ? 1.0 : 0.0,
+        erase: wall_erasing() ? 1.0 : 0.0,
         start: obstacle_splat.next_is_start || start
     });
 
     obstacle_splat.next_is_start = false;
 }
 
+/** a splat weight below this is treated as zero when bounding the brush. */
+const SPLAT_EPS = 1 / 1024;
+
+/** distance (y-uv units) at which exp(-d²/r) * strength drops to `eps`. */
+function gaussian_extent(r:number, strength:number, eps = SPLAT_EPS) {
+    return Math.sqrt(r * Math.max(Math.log(strength / eps), 0));
+}
+
+/** scissors the next draws to the pixels within `e` (y-uv units, x is scaled
+ * by ASPECT like in the shaders) of the segment a-b on a w*h target.
+ * Returns false if nothing is covered. */
+function scissor_segment(a:ArrayLike<number>, b:ArrayLike<number>, e:number, w:number, h:number) {
+    const ex = e / ASPECT_NUM,
+          x0 = Math.max(0, Math.floor((Math.min(a[0], b[0]) - ex) * w)),
+          x1 = Math.min(w, Math.ceil((Math.max(a[0], b[0]) + ex) * w)),
+          y0 = Math.max(0, Math.floor((Math.min(a[1], b[1]) - e) * h)),
+          y1 = Math.min(h, Math.ceil((Math.max(a[1], b[1]) + e) * h));
+    if (x1 <= x0 || y1 <= y0) return false;
+    gl.scissor(x0, y0, x1 - x0, y1 - y0);
+    return true;
+}
+
+/** splats are blended straight into the current texture (no ping-pong), so
+ * each draw can be scissored to the brush footprint. */
 function run_splats() {
     if (splat.queue.length === 0) return;
 
     splat_p.use_program();
 
     const _k1 = N1 * splat.force_scale / renderer.fixed_delta_time,
-          _k2 = N2 * splat.force_scale / renderer.fixed_delta_time;
+          _k2 = N2 * splat.force_scale / renderer.fixed_delta_time,
+          vel_extent = gaussian_extent(splat.velocity_radius, splat.velocity_strength),
+          dye_extent = gaussian_extent(splat.dye_radius, splat.dye_strength);
 
-    gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.enable(gl.BLEND);
+    gl.enable(gl.SCISSOR_TEST);
+
     for (const s of splat.queue) {
         if (s.start) splat.prev.set(s.uv);
-        
+
         splat_p.uniforms["point"].set(s.uv);
         splat_p.uniforms["prev"].set(splat.prev);
 
-        const [u,v] = s.uv;
+        const [u,v] = s.uv,
+              du = u - splat.prev[0],
+              dv = v - splat.prev[1];
 
-        // velocity run
-        if (!s.no_force) {
-            const k1 = !s.start ? _k1 : 0,
-                  k2 = !s.start ? _k2 : 0;
-            splat_p.uniforms["value"].set([(u - splat.prev[0]) * k1, (v - splat.prev[1]) * k2, 0, 0]);
-
-            gl.viewport(0, 0, N1, N2);
-
+        // velocity run, old + w * value. A zero-length segment adds nothing.
+        if (!s.no_force && !s.start && (du !== 0 || dv !== 0) &&
+            scissor_segment(s.uv, splat.prev, vel_extent, N1, N2)) {
+            splat_p.uniforms["value"].set([du * _k1, dv * _k2, 0, 0]);
             splat_p.uniforms["brush_radius"].set(splat.velocity_radius);
             splat_p.uniforms["brush_strength"].set(splat.velocity_strength);
             splat_p.uniforms["additive"].set(1.0);
 
-            gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1 - velocity_read]);
+            gl.blendFunc(gl.ONE, gl.ONE);
+            gl.viewport(0, 0, N1, N2);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[velocity_read]);
             gl.drawArrays(gl.TRIANGLES, 0, 3);
-            velocity_read = 1 - velocity_read;
         }
 
-        // dye run
-        if (!s.no_dye) {
+        // dye run, mix(old, value, w). rgb via src alpha = w, alpha via the constant
+        if (!s.no_dye && scissor_segment(s.uv, splat.prev, dye_extent, M1, M2)) {
             splat_p.uniforms["value"].set(s.rgba);
-
-            gl.viewport(0, 0, M1, M2);
-
             splat_p.uniforms["brush_radius"].set(splat.dye_radius);
             splat_p.uniforms["brush_strength"].set(splat.dye_strength);
             splat_p.uniforms["additive"].set(0.0);
 
-            gl.bindTexture(gl.TEXTURE_2D, dye_tex[dye_read]);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1 - dye_read]);
+            gl.blendColor(0, 0, 0, s.rgba[3]);
+            gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.CONSTANT_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.viewport(0, 0, M1, M2);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[dye_read]);
             gl.drawArrays(gl.TRIANGLES, 0, 3);
-            dye_read = 1 - dye_read;
         }
 
         splat.prev.set(s.uv);
     }
     splat.queue.length = 0;
+
+    gl.disable(gl.SCISSOR_TEST);
+    gl.blendFunc(gl.ONE, gl.ZERO);
+    gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
 function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
     const rgba16fv = new Float32Array([0.0,0.0,0.0,0.0]);
     texture_fill(obstacles_fbo, rgba16fv);
+    obstacle_mask_dirty = true;
 
     if (only_walls) return;
 
@@ -152,22 +190,29 @@ function run_obstacle_splats() {
     if (obstacle_splat.queue.length === 0) return;
 
     obstacle_splat_p.use_program();
+    obstacle_mask_dirty = true;
     
     gl.viewport(0, 0, N1, N2);
     gl.bindFramebuffer(gl.FRAMEBUFFER, obstacles_fbo);
 
+    gl.enable(gl.SCISSOR_TEST);
     for (const s of obstacle_splat.queue) {
         if (s.start) obstacle_splat.prev.set(s.uv);
-        obstacle_splat_p.uniforms["point"].set(s.uv);
-        obstacle_splat_p.uniforms["erase"].set(s.erase);
-        obstacle_splat_p.uniforms["brush_radius"].set(s.erase ? obstacle_splat.radius + 0.045 : obstacle_splat.radius);
-        obstacle_splat_p.uniforms["prev"].set(obstacle_splat.prev);
+        const r = s.erase ? obstacle_splat.radius + 0.045 : obstacle_splat.radius;
 
-        gl.blendEquation(s.erase ? gl.MIN : gl.MAX);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        if (scissor_segment(s.uv, obstacle_splat.prev, r + obstacle_splat.outline_width, N1, N2)) {
+            obstacle_splat_p.uniforms["point"].set(s.uv);
+            obstacle_splat_p.uniforms["erase"].set(s.erase);
+            obstacle_splat_p.uniforms["brush_radius"].set(r);
+            obstacle_splat_p.uniforms["prev"].set(obstacle_splat.prev);
+
+            gl.blendEquation(s.erase ? gl.MIN : gl.MAX);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
 
         obstacle_splat.prev.set(s.uv);
     }
+    gl.disable(gl.SCISSOR_TEST);
 
     gl.blendEquation(gl.FUNC_ADD);
     gl.disable(gl.BLEND);

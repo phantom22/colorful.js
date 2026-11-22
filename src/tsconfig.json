@@ -11,11 +11,14 @@
         "helpers/webgl_helpers.ts",
         "shaders/shader_program.ts",
         "shaders/sim_shaders.ts",
+        "shaders/multigrid_shaders.ts",
+        "shaders/exposure_shaders.ts",
         "events/update_viewport.ts",
         "splat.ts",
         "draw.ts",
         "events/keyboard_events.ts",
         "events/mouse_events.ts",
+        "events/touch_events.ts",
         "events/window_events.ts",
         "ui/glsl_lint.ts",
         "ui/store.ts",
@@ -39,6 +42,8 @@
         "ui/ui_bounds.ts",
         "init_webgl.ts",
         "init_textures.ts",
+        "multigrid.ts",
+        "exposure.ts",
         "init_ui.ts",
         "main.ts"
     ]

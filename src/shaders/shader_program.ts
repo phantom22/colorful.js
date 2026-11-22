@@ -131,6 +131,13 @@ type uniform_map<Us extends readonly uniform[]> = {
     [U in Us[number] as U["name"]]: U;
 };
 
+/** uniforms every program gets automatically if its shader declares them. */
+const shared_uniforms = () => [
+    new uniform("TEXEL", GL_VEC2, U_UPDATE, () => TEXEL),
+    new uniform("DTEXEL", GL_VEC2, U_UPDATE, () => DYE_TEXEL),
+    new uniform("ASPECT", GL_FLOAT, U_UPDATE, () => ASPECT_NUM),
+];
+
 class shader_program<Us extends readonly uniform[] = readonly uniform[]> {
     readonly vertex: WebGLShader;
     readonly fragment: WebGLShader;
@@ -176,6 +183,14 @@ class shader_program<Us extends readonly uniform[] = readonly uniform[]> {
                 if (u.init) u.update_value();
             }
         }
+        // sim grid geometry, bound to every program that declares it
+        for (const u of shared_uniforms()) {
+            if (map[u.name] !== undefined) continue;
+            u.owner = id;
+            u.loc = gl.getUniformLocation(p, u.name);
+            if (u.loc !== null) this.to_update.push(u);
+        }
+
         this.uniforms = map as unknown as uniform_map<Us>;
         shaders[id] = this;
     }

@@ -1,70 +1,10 @@
-const searchParams = new (class {
-    url:URL;
-    constructor() {
-        this.url = new URL(window.location.href);
-    }
-    getNumber(p:string,fallback=0,lower=-Infinity,upper=Infinity) {
-        const v = this.url.searchParams.get(p),
-              nv = Number(v);
-        // @ts-ignore
-        return v === null || isNaN(v) ? fallback : Math.min(Math.max(nv, lower), upper);
-    }
-    getFloat32Color(p:string,out_arr:number[]) {
-        const fallback = new Float32Array([0.0,0.0,0.0,1.0]);
-        out_arr[0] = 0;
-        out_arr[1] = 0;
-        out_arr[2] = 0;
+/** default sim / dye resolution: target texel area N1*N2 (M1*M2) is res², shaped to the window. */
+const SIM_RESOLUTION = 1024,
+      DYE_RESOLUTION = 2048;
+let window_ar = window.innerHeight / window.innerWidth;
 
-        const v = this.url.searchParams.get(p);
-        if (v === null) return fallback;
-        try {
-            const av = JSON.parse(v),
-                  o = new Float32Array(4);
-            if (!Array.isArray(av))
-                return fallback;
-
-            const l = av.length;
-            if (l < 3 || l > 4)
-                return fallback;
-
-            for (let i=0; i<3; ++i) {
-                const val = av[i];
-                if (val < 0.0 || val > 1.0 || val === undefined)
-                    return fallback;
-
-                o[i] = val;
-                out_arr[i] = val;
-            }
-
-            if (l === 3)
-                o[3] = 1.0;
-            else if (av[3] !== undefined && av[3] >= 0.0 && av[3] <= 1.0)
-                o[3] = av[3];
-            else
-                return fallback;
-
-            o[4] = 1.0;
-
-            return Float32Array.from(av)
-        }
-        catch (e) {
-            return fallback;
-        }
-    }
-    getBoolean(p:string) {
-        return this.url.searchParams.get(p) === "true";
-    }
-    getString(p:string,fallback="") {
-        return this.url.searchParams.get(p) || fallback;
-    }
-});
-
-const sim_resolution = Math.floor(searchParams.getNumber("sim_res", 512, 16)),
-      dye_resolution = Math.floor(searchParams.getNumber("dye_res", 2048, sim_resolution)),
-      window_ar = window.innerHeight / window.innerWidth;
-
-const bg_arr = [] as number[],
-      bg = searchParams.getFloat32Color("bg", bg_arr);
+const bg_arr = [0, 0, 0],
+      bg = new Float32Array([0, 0, 0, 1]);
 
 const DISPLAY_DYE = 0,
       DISPLAY_VELOCITY = 1,
@@ -92,26 +32,30 @@ type fluid_display_kind_t = typeof KIND_DYE | typeof KIND_VECTOR |
 type fluid_diplay_blur_t = typeof BLUR_NONE | typeof BLUR_CROSS |
     typeof BLUR_3x3_BINOMIAL;
 
-const DISPLAY2STR = {} as Record<fluid_display_t, string>;
-DISPLAY2STR[DISPLAY_DYE] = "dye";
-DISPLAY2STR[DISPLAY_VELOCITY] = "velocity";
-DISPLAY2STR[DISPLAY_PRESSURE] = "pressure";
-DISPLAY2STR[DISPLAY_CURL] = "curl";
-DISPLAY2STR[DISPLAY_DIVERGENCE] = "divergence";
+const DISPLAY2STR = {
+    [DISPLAY_DYE]: "dye",
+    [DISPLAY_VELOCITY]: "velocity",
+    [DISPLAY_PRESSURE]: "pressure",
+    [DISPLAY_CURL]: "curl",
+    [DISPLAY_DIVERGENCE]: "divergence"
+} as Record<fluid_display_t, string>;
 
 function resolution(size:number, ar:number) {
     const A = size**2;
     const height = Math.ceil(Math.sqrt(A * ar));
     const width = Math.ceil(Math.sqrt(A / ar));
-    return { dims:[width,height] as [number,number], texel:[(1/width).toFixed(6), (1/height).toFixed(6)]}
+    return { dims:[width,height] as [number,number], texel:[1/width, 1/height] as [number,number]}
 }
 
 const fluid = {
-    jacobi_iterations: Math.floor(searchParams.getNumber("jacobi_iterations", 30, 0, 60)),
+    /** multigrid V-cycles per step, see multigrid.ts. */
+    pressure_cycles: 2,
+    /** Jacobi sweeps before and after each coarse correction. */
+    pressure_smoothing: 2,
     velocity_dissipation: 0.999,
     dye_dissipation: 1.0,
-    curl_strength: searchParams.getNumber("curl_strength", 15, 0.0),
-    jacobi_scale: searchParams.getNumber("jacobi_scale", 0.8, 0.0, 1.0),
+    curl_strength: 15,
+    jacobi_scale: 0.8,
     base_diffusion: 0.25,
     curl_diffusion: 0.5,
     velocity_diffusion: 0.3,
@@ -128,22 +72,38 @@ const fluid = {
         curl: {ref: 60, thresh: 0.5, k: 0.5},
         pressure: {ref: 100, thresh: 0.35, k: 0.3},
         divergence: {ref: 1.5, thresh: 0.2, k: 0.8},
+        /** 1: non-dye views normalize by the field's eased RMS instead of `ref`. */
+        auto_exposure: 1,
+        /** auto exposure brightness, the RMS maps to 1 - exp(-exposure). */
+        exposure: 0.6,
+        /** seconds for the auto exposure to settle after the field changes. */
+        adapt_time: 0.5,
     },
-    sim_res: resolution(sim_resolution, window_ar),
-    dye_res: resolution(dye_resolution, window_ar),
+    /** inspector resolutions (target texel area is res²), applied by apply_resolution. */
+    sim_resolution: SIM_RESOLUTION,
+    dye_resolution: DYE_RESOLUTION,
+    sim_res: resolution(SIM_RESOLUTION, window_ar),
+    dye_res: resolution(DYE_RESOLUTION, window_ar),
     open_borders: 0,
     drag: 0.05
 };
 color_logarithm(fluid.bg, bg);
 
-const TEXEL = fluid.sim_res.texel.toString(),
-      DYE_TEXEL = fluid.dye_res.texel.toString(),
-      [N1,N2] = fluid.sim_res.dims,
-      [M1,M2] = fluid.dye_res.dims,
-      ASPECT_NUM = N1/N2,
-      ASPECT = ASPECT_NUM.toFixed(6);
+/** shader uniforms TEXEL / DTEXEL / ASPECT, see shared_uniforms. */
+const TEXEL = new Float32Array(fluid.sim_res.texel),
+      DYE_TEXEL = new Float32Array(fluid.dye_res.texel);
+let [N1,N2] = fluid.sim_res.dims,
+    [M1,M2] = fluid.dye_res.dims,
+    ASPECT_NUM = N1/N2;
 
-const texel = (t:number) => N1 < N2 ? t/N1 : t/N2,
+/** default brush sizes are given in texels of this reference grid (the old
+ * default sim resolution), so they keep their screen size whatever sim
+ * resolution is chosen. */
+const BRUSH_REF_RESOLUTION = 512;
+const texel = (t:number) => {
+          const [w, h] = resolution(BRUSH_REF_RESOLUTION, window_ar).dims;
+          return t / Math.min(w, h);
+      },
       texel_radius = (t:number) => texel(t) * 0.5;
 
 const force = {
@@ -171,19 +131,4 @@ const force = {
 function rate_from_ms(wave_delay_ms:number, convergence_fraction = 0.95) {
     const t_seconds = wave_delay_ms * 0.001;
     return -Math.log(1 - convergence_fraction) / t_seconds;
-}
-
-{
-    let params = new URLSearchParams([
-        ["sim_res", `${sim_resolution}`],
-        ["dye_res", `${dye_resolution}`],
-        ["curl_strength", `${fluid.curl_strength}`],
-        ["jacobi_scale", `${fluid.jacobi_scale}`],
-        ["jacobi_iterations", `${fluid.jacobi_iterations}`],
-    ]);
-
-    const updated_search_params = `?${params.toString()}&bg=[${bg_arr}]`;
-
-    if (window.location.search !== updated_search_params)
-        window.history.replaceState({}, '', updated_search_params);
 }

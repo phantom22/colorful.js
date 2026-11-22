@@ -40,31 +40,60 @@ const BORDERS_ICON =
     '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
     '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
 
-let wall_ring: HTMLElement, wall_line: HTMLElement;   // assign in init_ui: $("wall-ring"), $("wall-line")
+/** splat weight the brush ring is drawn at. */
+const RING_WEIGHT = 0.1;
+let wall_ring: HTMLElement, wall_line: HTMLElement, force_ring: HTMLElement,
+    /** erase highlight currently shown on the wall tool / ring. */
+    _shown_erasing = false;
+/** shows the wall tool's effective mode (sticky erase, inverted by shift) on
+ * its button, the brush ring and the status bar. Returns whether it erases. */
+function ui_sync_tool(force = false) {
+    const erasing = mouse.mode === MOUSE_MODE_WALL && wall_erasing();
+    if (force || erasing !== _shown_erasing) {
+        _shown_erasing = erasing;
+        ui_toolbar?.mark(MOUSE_MODE_WALL, "erase", erasing);   // unset while the toolbar constructor picks
+        wall_ring.classList.toggle("erase", erasing);
+        ui_status.tool(erasing ? "Wall (erase)" : MODE2STR[mouse.mode]);
+    }
+    return erasing;
+}
+
+/** solid ring: dye or wall brush. dashed ring: force brush. */
 function ui_update_mouse_overlay() {
     const wall = mouse.mode === MOUSE_MODE_WALL;
+    const erasing = ui_sync_tool();
     const on = mouse.over_canvas && !mouse.m2_down;
     const line_on = on && wall && mouse.m1_down && keyboard.ctrl_down;
-    wall_ring.style.display = on ? "" : "none";
+    const solid_on = on && mouse.mode !== MOUSE_MODE_FORCE;
+    const force_on = on && (mouse.mode & MOUSE_MODE_FORCE) !== 0;
+    wall_ring.style.display = solid_on ? "" : "none";
     wall_line.style.display = line_on ? "" : "none";
+    force_ring.style.display = force_on ? "" : "none";
     if (!on) return;
 
     const h = canvas_rect.height;
     const px = (u: Float32Array) => [canvas_rect.left + u[0] * canvas_rect.width,
                                      canvas_rect.bottom - u[1] * h];
-
-    // radius in screen-height units
-    const unit = wall
-        ? obstacle_splat.radius + (keyboard.shift_down ? 0.045 : 0)
-        : Math.sqrt(mouse.mode === MOUSE_MODE_DYE_FORCE ? Math.max(splat.dye_radius, splat.velocity_radius)
-                  : mouse.mode === MOUSE_MODE_DYE       ? splat.dye_radius
-                  :                                       splat.velocity_radius);
-    const r = Math.max(0.5, unit * h);
     const [x, y] = px(mouse.uv_pos);
 
-    wall_ring.setAttribute("cx", String(x));
-    wall_ring.setAttribute("cy", String(y));
-    wall_ring.setAttribute("r", String(r));
+    // radii in screen-height units. Splats are exp(-d²/r) * strength, the rings
+    // sit where one splat's weight drops to RING_WEIGHT.
+    const r = Math.max(0.5, h * (wall
+        ? obstacle_splat.radius + (erasing ? 0.045 : 0)
+        : gaussian_extent(splat.dye_radius, splat.dye_strength, RING_WEIGHT)));
+
+    if (solid_on) {
+        wall_ring.setAttribute("cx", String(x));
+        wall_ring.setAttribute("cy", String(y));
+        wall_ring.setAttribute("r", String(r));
+    }
+
+    if (force_on) {
+        const fr = gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) * h;
+        force_ring.setAttribute("cx", String(x));
+        force_ring.setAttribute("cy", String(y));
+        force_ring.setAttribute("r", String(Math.max(0.5, fr)));
+    }
 
     if (line_on) {
         const [ax, ay] = px(mouse.wall_anchor);
@@ -89,29 +118,54 @@ function ui_set_force_active(on: boolean) {
 function init_ui() {
     wall_ring = $("wall-ring");
     wall_line = $("wall-line");
+    force_ring = $("force-ring");
     
     ui_bounds    = new UI_BOUNDS();
     ui_status    = new UI_STATUS();
     ui_inspector = new UI_INSPECTOR();
 
     const sim = ui_inspector.section("precision");
-    sim.float({label:"elapsed time", tooltip:"$elapsed time$", obj:renderer, key:"time", min:0.0, step:0.15, persist:false, track:false});
+    sim.float({label:"elapsed time", tooltip:"$Elapsed time$ {Elapsed time in seconds.}", obj:renderer, key:"time", min:0.0, step:0.15, unit:{symbol:"s", name:"seconds"}, persist:false, track:false});
     sim.slider({label:"time scale", tooltip:"$Time scale$ {Multiplies the simulated time that passes per frame.} $$Values$$ {[0]: paused\n[0.1 – 0.9]: slow motion\n[1]: real time\n[1 – 2]: fast forward, less stable}", obj:renderer, key:"time_scale", min:0.0, max:2.0});
-    sim.slider({label:"dt", tooltip:"$Time step$ {Seconds simulated per step. Smaller steps are more accurate and stable, larger ones are faster but smear and can blow up.} $$Values$$ {[0.004 – 0.008]: very accurate (120–240 Hz)\n[0.0167]: default (60 Hz)\n[> 0.025]: visibly unstable with strong forces}", obj:renderer, key:"fixed_delta_time", min:0.0, max:1/30});
-    sim.slider({label:"iterations", tooltip:"$Pressure iterations$ {Jacobi passes per step. Pressure travels one texel per pass, so more passes make the fluid more incompressible and let flow reach far through thin tubes.} $$Values$$ {[0]: no projection, the fluid compresses\n[20 – 40]: fast, mushy\n[60 – 150]: good quality\n[> 200]: only for long thin channels}", obj:fluid, key:"jacobi_iterations", min:0, max:300, int:true});
+    sim.slider({label:"dt", tooltip:"$Time step$ {Seconds simulated per step. Smaller steps are more accurate and stable, larger ones are faster but smear and can blow up.} $$Values$$ {[0.004 – 0.008]: very accurate (120–240 Hz)\n[0.0167]: default (60 Hz)\n[> 0.025]: visibly unstable with strong forces}", obj:renderer, key:"fixed_delta_time", min:0.0, max:1/30, unit:{symbol:"s", name:"seconds"}});
+    sim.float({label:"sim resolution", tooltip:"$Simulation resolution$ {Velocity / pressure grid size. The grid has about res² cells, shaped to the window. Applied on enter, rebuilding the textures (the flow is carried over).} $$Values$$ {[128 – 256]: fast, coarse eddies\n[512]: default\n[> 768]: fine detail, heavy}", obj:fluid, key:"sim_resolution", min:32, max:2048, int:true, scrub:false, onChange:apply_resolution});
+    sim.float({label:"dye resolution", tooltip:"$Dye resolution$ {Dye texture size, about res² texels shaped to the window. Applied on enter, rebuilding the textures (the dye is carried over).} $$Values$$ {[512 – 1024]: fast, softer\n[2048]: default, sharp\n[4096]: very sharp, heavy}", obj:fluid, key:"dye_resolution", min:64, max:4096, int:true, scrub:false, onChange:apply_resolution});
+    sim.slider({label:"v-cycles", tooltip:"$Pressure solve$ {Multigrid V-cycles per step. Each cycle fixes pressure at every scale at once, so few are needed. One costs about 9 Jacobi passes.} $$Values$$ {[0]: no projection, the fluid compresses\n[1]: fast, slightly soft\n[2 – 3]: good quality\n[> 4]: little visible gain}", obj:fluid, key:"pressure_cycles", min:0, max:8, int:true});
+    sim.slider({label:"smoothing", tooltip:"$Smoothing sweeps$ {Jacobi sweeps on every level before and after each coarse correction. More sweeps make each cycle stronger but slower.} $$Values$$ {[1]: cheapest\n[2]: default\n[3 – 6]: helps around thin walls}", obj:fluid, key:"pressure_smoothing", min:1, max:6, int:true});
 
-    ui_palette_s = ui_inspector.section("palette", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE);
+    // colors added with "+" are stored too, the saved index alone would point
+    // past the end of the default palette after a reload
+    const CUSTOM_COLORS = "palette.custom";
+    const custom_colors = (): string[] => {
+        const v = store.get(CUSTOM_COLORS);
+        return Array.isArray(v) ? v.filter(h => typeof h === "string" && /^#[0-9a-f]{6}$/i.test(h)) : [];
+    };
+    const hex_rgb = (h:string) => { const n = parseInt(h.slice(1), 16); return new Uint8Array([(n >> 16) & 255, (n >> 8) & 255, n & 255, 255]); };
+    const rgb_hex = (c:ArrayLike<number>) => "#" + [c[0], c[1], c[2]].map(v => v.toString(16).padStart(2, "0")).join("");
+    for (const h of custom_colors())
+        stroke.choosen_palette.push(get_color_data(hex_rgb(h)));
+
+    ui_palette_s = ui_inspector.section("palette", () => mouse.mode & MOUSE_MODE_DYE);
     ui_palette_s.palette({
         label: "color", obj: stroke, key: "palette_color",
         colors: () => palette_color_data,
-        onAdd: c => stroke.choosen_palette.push(c),
+        onAdd: c => {
+            stroke.choosen_palette.push(c);
+            store.set(CUSTOM_COLORS, [...custom_colors(), rgb_hex(c.color)]);
+        },
+        // the built-in colors come first, the stored ones follow
+        removable: i => i >= palette.length,
+        onRemove: i => {
+            stroke.choosen_palette.splice(i, 1);
+            store.set(CUSTOM_COLORS, custom_colors().filter((_, k) => k !== i - palette.length));
+        },
     });
 
-    ui_dye_brush_s = ui_inspector.section("dye brush", () => mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE);
+    ui_dye_brush_s = ui_inspector.section("dye brush", () => mouse.mode & MOUSE_MODE_DYE);
     ui_dye_brush_s.slider({label:"radius", tooltip:"$Dye radius$ {Size of the dye brush, as the 1/e radius of a Gaussian in sim texels.} $$Values$$ {[1 – 5]: thin lines\n[10 – 25]: normal\n[> 40]: big soft blobs}"   , obj:splat, key:"dye_radius", min:1e-4, max:0.01, log:true, persist:true});
     ui_dye_brush_s.slider({label:"strength", tooltip:"$Dye strength$ {How strongly the brush replaces the existing dye per frame. It blends, it never adds, so slow strokes can't saturate.} $$Values$$ {[0 – 0.2]: faint, builds up slowly\n[0.3 – 0.6]: normal\n[0.8 – 1]: opaque, overrides what is there}", obj:splat, key:"dye_strength", min:0, max:1, persist:true});
 
-    ui_force_brush_s = ui_inspector.section("force brush", () => mouse.mode === MOUSE_MODE_DYE_FORCE || mouse.mode === MOUSE_MODE_FORCE);
+    ui_force_brush_s = ui_inspector.section("force brush", () => mouse.mode & MOUSE_MODE_FORCE);
     ui_force_brush_s.slider({label:"radius", tooltip:"$Force radius$ {Size of the push applied by the brush, in sim texels (1/e radius). Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 8]: sharp, dies quickly\n[15 – 30]: normal\n[> 40]: broad, slow currents}", obj:splat, key:"velocity_radius", min:1e-4, max:0.02, log:true, persist:true});
     ui_force_brush_s.slider({label:"strength", tooltip:"$Force strength$ {Opacity of the push at the center of the brush.} $$Values$$ {[0 – 0.3]: gentle\n[0.4 – 0.7]: normal\n[0.8 – 1]: full push}", obj:splat, key:"velocity_strength", min:0, max:1, persist:true});
     ui_force_brush_s.slider({label:"speed sensitivity", tooltip:"$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", obj:splat, key:"force_scale", min:0, max:2, persist:true});
@@ -178,15 +232,18 @@ function init_ui() {
         { id:MOUSE_MODE_DYE_FORCE, tip:"Dye + Force", icon:TOOL_ICONS[0], key:"q" },
         { id:MOUSE_MODE_DYE, tip:"Dye", icon:TOOL_ICONS[1], key:"w" },
         { id:MOUSE_MODE_FORCE, tip:"Force", icon:TOOL_ICONS[2], key:"e" },
-        { id:MOUSE_MODE_WALL, tip:"Wall", icon:TOOL_ICONS[3], key:"r", separator:true },
+        { id:MOUSE_MODE_WALL, tip:"Wall · pick again: erase · Shift: invert · Ctrl: straight line", icon:TOOL_ICONS[3], key:"r", separator:true },
     ], mouse.mode, id => {
-        ui_status.tool(MODE2STR[id]);
+        if (id !== MOUSE_MODE_WALL) obstacle_splat.erase_mode = false;   // leaving the wall tool ends erasing
         ui_inspector.focus(SECTION_OF_TOOL[id]);
-        if (mouse.mode === id) return;
+        if (mouse.mode === id) { ui_sync_tool(true); return; }
         const prev = mouse.mode;
         mouse.mode = id;
+        ui_sync_tool(true);
         ui_fluid_bg.refresh();
         ui_visualizer_s.refresh();
+    }, id => {
+        if (id === MOUSE_MODE_WALL) obstacle_splat.erase_mode = !obstacle_splat.erase_mode;
     });
 
     ui_force_btn = ui_toolbar.add_toggle({
@@ -242,7 +299,11 @@ function init_ui() {
         frozen: () => fluid.display_mode === DISPLAY_DIVERGENCE ? PALETTE_DIVERGING
              : undefined
     });
-    ui_visualizer_s.slider({label:"ref", tooltip:"$Reference$ {Value that maps to about 63% of the palette. Everything is compressed smoothly above it.} $$Values$$ {Small: sensitive, detail in weak regions\nLarge: only strong regions light up}", obj:display_obj, key:"ref", min:0, max:display_max});
+    const auto_on = () => fluid.display.auto_exposure === 1;
+    ui_visualizer_s.toggle({label:"auto exposure", tooltip:"$Auto exposure$ {Scales the view by the field's own strength (its RMS over the fluid), eased over time, so it stays readable as the flow speeds up or calms down.} {Off: the fixed [ref] value is used.}", obj:fluid.display, key:"auto_exposure", int:true, persist:true});
+    ui_visualizer_s.slider({label:"exposure", tooltip:"$Exposure$ {Brightness under auto exposure. The field's RMS lands at 1 - e^-exposure of the palette.} $$Values$$ {[0.3]: dark, only peaks light up\n[0.6]: default\n[> 1.5]: bright, peaks saturate}", obj:fluid.display, key:"exposure", min:0.05, max:3, visible:auto_on, persist:true});
+    ui_visualizer_s.slider({label:"adapt time", tooltip:"$Adaptation time$ {How quickly auto exposure follows changes in the field.} $$Values$$ {[0]: instant, can flicker\n[0.3 – 1]: smooth\n[> 2]: slow, lags behind bursts}", obj:fluid.display, key:"adapt_time", min:0, max:5, unit:{symbol:"s", name:"seconds"}, visible:auto_on, persist:true});
+    ui_visualizer_s.slider({label:"ref", tooltip:"$Reference$ {Value that maps to about 63% of the palette. Everything is compressed smoothly above it.} $$Values$$ {Small: sensitive, detail in weak regions\nLarge: only strong regions light up}", obj:display_obj, key:"ref", min:0, max:display_max, visible:() => !auto_on()});
     ui_visualizer_s.slider({label:"thresh", tooltip:"$Threshold$ {Palette position below which values are scaled by [k].} $$Values$$ {[0]: off\n[0.05 – 0.3]: lifts or hides weak values}", obj:display_obj, key:"thresh", min:0, max:1});
     ui_visualizer_s.slider({label:"k", tooltip:"$Low-end scale$ {Factor for values below the threshold.} $$Values$$ {[1]: no change\n[0 – 0.5]: compresses weak values toward the darkest color}", obj:display_obj, key:"k", min:0, max:1});
     

@@ -40,6 +40,7 @@ function scrub_number(input: HTMLInputElement, o: {
     text: () => string;          // formatted current value
     log?: boolean;               // multiplicative steps for log sliders
 }) {
+    input.classList.add("scrub");   // gets the drag cursor, see styles.css
     let active = false, moved = false, y0 = 0, v0 = 0;
     const mult = (e: { shiftKey: boolean; altKey: boolean }) => e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
 
@@ -78,4 +79,22 @@ function scrub_number(input: HTMLInputElement, o: {
         input.value = o.text();
         input.select();
     }, { passive: false });
+}
+/** wraps a number input so `unit` sits inside its right edge (like the axis
+ * letters of a vector field). Returns the element to append. */
+function with_unit(row: HTMLElement, input: HTMLInputElement, unit?: UnitDef): HTMLElement {
+    if (!unit) return input;
+    const wrap = document.createElement("span");
+    wrap.className = "unit-wrap";
+    wrap.style.setProperty("--uw", String(unit.symbol.length));
+    row.classList.add("has-unit");
+    row.style.setProperty("--uw", String(unit.symbol.length));
+
+    const u = document.createElement("i");
+    u.textContent = unit.symbol;
+    u.addEventListener("click", () => input.focus());
+    if (unit.name) UI_TOOLTIP.attach(u, `{${unit.name}}`);
+
+    wrap.append(input, u);
+    return wrap;
 }

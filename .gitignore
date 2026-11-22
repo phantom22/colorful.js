@@ -1,2 +1,3 @@
-/js/snapshots
+/js/
 /node_modules/
+/bundle/index.js

@@ -4,7 +4,9 @@ class UI_FIELD_PALETTE extends UI_FIELD<number> {
     constructor(
         parent: HTMLElement, label: string, key: string, io: FieldIO<number>,
         private readonly colors: () => color_data[],
-        private readonly onAdd?: (c: color_data) => void
+        private readonly onAdd?: (c: color_data) => void,
+        private readonly removable?: (i: number) => boolean,
+        private readonly onRemove?: (i: number) => void
     ) {
         super(parent, label, key, io, "palette");
         this.grid.className = "palette-grid";
@@ -26,6 +28,22 @@ class UI_FIELD_PALETTE extends UI_FIELD<number> {
             b.style.setProperty("--c", UI_FIELD_PALETTE.hex(c.color));
             b.title = UI_FIELD_PALETTE.hex(c.color);
             b.addEventListener("click", () => this.apply(i));
+            if (this.onRemove && this.removable?.(i)) {
+                const del = document.createElement("i");
+                del.className = "del";
+                del.textContent = "×";
+                del.title = "Remove color";
+                del.addEventListener("click", e => {
+                    e.stopPropagation();
+                    if (this.is_frozen) return;
+                    const cur = this.io.get();
+                    this.onRemove!(i);
+                    this.render();
+                    // keep the same color picked; removing the picked one picks its successor
+                    this.apply(cur > i ? cur - 1 : Math.min(cur, this.colors().length - 1));
+                });
+                b.appendChild(del);
+            }
             this.grid.appendChild(b);
         });
 

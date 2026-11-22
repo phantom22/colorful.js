@@ -5,18 +5,18 @@ let vao:WebGLVertexArrayObject;
 let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"source_kind", 4>, uniform<"palette_type", 4>, uniform<"blur_type", 4>, uniform<"reference_value", 5>, uniform<"value_rescale_threshold", 5>, uniform<"rescale_factor", 5>]>,
     checkboard_fill_p: shader_program<[uniform<"color_a", 9>, uniform<"color_b", 9>, uniform<"dims", 8>]>,
     curl_velocity_fill_p: shader_program<[uniform<"scale", 5>, uniform<"amp", 5>, uniform<"div_mix", 5>, uniform<"seed", 5>]>,
-    splat_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>]>,
+    splat_p: shader_program<[uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>]>,
     obstacle_splat_p: shader_program<[uniform<"point", 8>, uniform<"prev", 8>, uniform<"brush_radius", 5>, uniform<"outline_width", 5>, uniform<"erase", 5>]>,
     forcefield_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"center_worldpos", 8>, uniform<"window_width", 5>, uniform<"force_strength", 5>, uniform<"dt", 5>]>,
     velocity_advect_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"dissipation", 5>]>,
     dye_advect_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_dye", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"dissipation", 5>]>,
-    curl_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>]>,
+    curl_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
     blur_p: shader_program<[uniform<"tex_source", 7>]>,
-    vorticity_confinement_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_curl", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"curl_strength", 5>, uniform<"max_velocity", 5>, uniform<"max_force", 5>]>,
-    divergence_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>]>,
-    pressure_jacobi_p: shader_program<[uniform<"tex_pressure", 7>, uniform<"tex_divergence", 7>, uniform<"tex_obstacles", 7>]>,
-    gradient_subtract_p: shader_program<[uniform<"tex_pressure", 7>, uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>]>,
-    rescale_p: shader_program<[uniform<"tex_source", 7>, uniform<"value", 5>]>,
+    vorticity_confinement_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_curl", 7>, uniform<"tex_mask", 7>, uniform<"dt", 5>, uniform<"curl_strength", 5>, uniform<"max_velocity", 5>, uniform<"max_force", 5>]>,
+    divergence_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
+    gradient_subtract_p: shader_program<[uniform<"tex_pressure", 7>, uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
+    obstacle_mask_p: shader_program<[uniform<"tex_obstacles", 7>]>,
+    resample_p: shader_program<[uniform<"tex_source", 7>, uniform<"uv_scale", 8>, uniform<"value_scale", 10>, uniform<"fill", 10>]>,
     // reduction_pass_p: shader_program,
     diffusion_pass_p: shader_program<[uniform<"tex_dye", 7>, uniform<"tex_curl", 7>, uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"base_diffusion", 5>, uniform<"curl_diffusion", 5>, uniform<"velocity_diffusion", 5>, uniform<"max_diffusion", 5>, uniform<"diffusion_radius", 5>]>;
 
@@ -68,7 +68,7 @@ function init_webgl() {
     const ext1 = gl.getExtension("EXT_color_buffer_float");
     if (!ext1) throw "EXT_color_buffer_float is not supported on this hardware";
 
-    update_viewport();
+    apply_canvas_size();
     const quad = new Float32Array([
         0, 1, 1, 0, 0, 0,
         0, 1, 1, 1, 1, 0,
@@ -83,6 +83,9 @@ function init_webgl() {
         new uniform("reference_value", GL_FLOAT),
         new uniform("value_rescale_threshold", GL_FLOAT),
         new uniform("rescale_factor", GL_FLOAT),
+        new uniform("auto_exposure", GL_INT, U_UPDATE, () => fluid.display.auto_exposure),
+        new uniform("tex_exposure", GL_TEXTURE, U_INIT, 2),
+        new uniform("exposure", GL_FLOAT, U_UPDATE, () => fluid.display.exposure),
     ]);
 
     vao = create_vertex_array();
@@ -102,7 +105,6 @@ function init_webgl() {
     ]);
 
     splat_p = new shader_program("splat", quad_vert, sh_splat, [
-        new uniform("tex_source", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("point", GL_VEC2),
@@ -154,8 +156,7 @@ function init_webgl() {
 
     curl_p = new shader_program("curl", quad_vert, sh_sim_curl, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
-        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
+        new uniform("tex_mask", GL_TEXTURE, U_INIT, 1),
     ]);
 
     blur_p = new shader_program("blur", quad_vert, sh_blur, [
@@ -165,7 +166,7 @@ function init_webgl() {
     vorticity_confinement_p = new shader_program("vorticity_confinement", quad_vert, sh_sim_vorticity_confinement, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_curl", GL_TEXTURE, U_INIT, 1),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
+        new uniform("tex_mask", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
         new uniform("curl_strength", GL_FLOAT, U_UPDATE, () => fluid.curl_strength),
@@ -176,27 +177,26 @@ function init_webgl() {
 
     divergence_p = new shader_program("divergence", quad_vert, sh_sim_divergence, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
-        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders)
-    ]);
-
-    pressure_jacobi_p = new shader_program("pressure_jacobi", quad_vert, sh_sim_pressure_jacobi, [
-        new uniform("tex_pressure", GL_TEXTURE, U_INIT, 0),
-        new uniform("tex_divergence", GL_TEXTURE, U_INIT, 1),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
-        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders)
+        new uniform("tex_mask", GL_TEXTURE, U_INIT, 1),
     ]);
 
     gradient_subtract_p = new shader_program("gradient_subtract", quad_vert, sh_sim_gradient_subtract, [
         new uniform("tex_pressure", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 1),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
+        new uniform("tex_mask", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
     ]);
 
-    rescale_p = new shader_program("rescale", quad_vert, sh_scale, [
+    obstacle_mask_p = new shader_program("obstacle_mask", quad_vert, sh_obstacle_mask, [
+        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 0),
+        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
+    ]);
+
+    resample_p = new shader_program("resample", quad_vert, sh_resample, [
         new uniform("tex_source", GL_TEXTURE, U_INIT, 0),
-        new uniform("value", GL_FLOAT, U_UPDATE, () => fluid.jacobi_scale),
+        new uniform("uv_scale", GL_VEC2),
+        new uniform("value_scale", GL_VEC4),
+        new uniform("fill", GL_VEC4),
     ]);
 
     // reduction_pass_p = new shader_program("reduction_pass", quad_vert, sh_reduction_pass, [
@@ -219,4 +219,7 @@ function init_webgl() {
         new uniform("max_diffusion", GL_FLOAT, U_UPDATE, () => fluid.max_diffusion),
         new uniform("diffusion_radius", GL_FLOAT, U_UPDATE, () => fluid.diffusion_texel_radius)
     ]);
+
+    init_multigrid_programs();
+    init_exposure_programs();
 }

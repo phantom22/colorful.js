@@ -47,7 +47,7 @@ abstract class UI_FIELD<T> implements IUI_FIELD<T> {
 
     /** Sets visibility to io.visible(). */
     protected refresh_visibility() {
-        this.io.visible && this.set_visible(this.io.visible());
+        this.io.visible && this.set_visible(Boolean(this.io.visible()));
     }
 
     refresh() {

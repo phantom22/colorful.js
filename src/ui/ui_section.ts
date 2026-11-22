@@ -2,14 +2,14 @@ class UI_SECTION {
     readonly el = document.createElement("section");
     readonly body = document.createElement("div");
     readonly fields: UI_FIELD<any>[] = [];
-    readonly visible?: () => boolean;
+    readonly visible?: () => boolean|number;
 
     /** Collection of all the modified field labels. */
     private mod_labels: string[] = [];
 
     readonly badge = document.createElement("span");
 
-    constructor(readonly name: string, visible?: () => boolean, open = true) {
+    constructor(readonly name: string, visible?: () => boolean|number, open = true) {
         const h3 = document.createElement("h3");
         h3.textContent = name;
         h3.addEventListener("click", () => this.open(!this.is_open));
@@ -45,7 +45,7 @@ class UI_SECTION {
     toggle_visibility() { this.set_visible(this.el.hidden as boolean); }
 
     refresh_visibility() {
-        if (this.visible) this.set_visible(this.visible());
+        if (this.visible) this.set_visible(Boolean(this.visible()));
     }
 
     refresh() {
@@ -65,7 +65,7 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v as O[K]; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, { min: () => SrcVal(d.min), max: () => SrcVal(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false }), d);
+        }, { min: () => SrcVal(d.min), max: () => SrcVal(d.max), step: d.step, log: d.log ?? false, int: d.int ?? false, unit: d.unit }), d);
     }
 
     toggle<O extends object, K extends FlagKey<O>>(d: ToggleDef<O, K>) {
@@ -157,7 +157,7 @@ class UI_SECTION {
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
         }, { min: d.min ?? -Infinity, max: d.max ?? Infinity, step: d.step,
-            int: d.int ?? false, decimals: d.decimals }), d);
+            int: d.int ?? false, decimals: d.decimals, unit: d.unit, scrub: d.scrub }), d);
     }
 
     palette<O extends object, K extends NumKey<O>>(d: PaletteDef<O, K>) {
@@ -167,6 +167,6 @@ class UI_SECTION {
             set: v => { b.target()[d.key] = v as O[K]; },
             def: b.def, frozen: d.frozen, onChange: d.onChange,
             visible: d.visible, tooltip: d.tooltip
-        }, d.colors, d.onAdd), d);
+        }, d.colors, d.onAdd, d.removable, d.onRemove), d);
     }
 }

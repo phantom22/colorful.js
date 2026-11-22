@@ -9,6 +9,8 @@ const renderer = {
     delta_time: 0,
     fixed_delta_time: 1 / 60,
     window_hidden: false,
+    /** true from the first resize event until the sim is rebuilt; the loop idles. */
+    resizing: false,
     dt_getter: () => renderer.delta_time,
     fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
     checkboard_fill: false,
@@ -24,7 +26,7 @@ const renderer = {
 function draw(timestamp:number) {
     renderer.delta_time = (timestamp - renderer.prev_timestamp) * 0.001;
     renderer.prev_timestamp = timestamp;
-    if (renderer.window_hidden) {
+    if (renderer.window_hidden || renderer.resizing) {
         requestAnimationFrame(draw);
         return;
     }
@@ -52,8 +54,7 @@ function draw(timestamp:number) {
     run_obstacle_splats();
 
     gl.disable(gl.BLEND);
-    if (mouse.m1_down &&
-        (mouse.mode === MOUSE_MODE_DYE || mouse.mode === MOUSE_MODE_DYE_FORCE))
+    if (mouse.m1_down && mouse.mode & MOUSE_MODE_DYE)
         set_dye_splat(mouse.uv_pos, false);
     run_splats();
 
@@ -62,6 +63,7 @@ function draw(timestamp:number) {
     //////////////////////////////////
 
     gl.viewport(0, 0, N1, N2);
+    build_obstacle_mask();
 
     if (force.is_active) {
         forcefield_p.use_program();
@@ -99,7 +101,7 @@ function draw(timestamp:number) {
     gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
 
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.bindTexture(gl.TEXTURE_2D, obstacle_mask_tex);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, curl_fbo);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -123,7 +125,7 @@ function draw(timestamp:number) {
     gl.bindTexture(gl.TEXTURE_2D, curl_smooth_tex);
 
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.bindTexture(gl.TEXTURE_2D, obstacle_mask_tex);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -137,40 +139,13 @@ function draw(timestamp:number) {
     gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
 
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.bindTexture(gl.TEXTURE_2D, obstacle_mask_tex);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, divergence_fbo);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    // 4. decay the pressure warm start
-    rescale_p.use_program();
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, pressure_fbo[1-pressure_read]);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-    pressure_read = 1 - pressure_read;
-
-    // 5. pressure jacobi iterations
-    pressure_jacobi_p.use_program();
-    
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, divergence_tex);
-
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
-
-    for (let i=0; i<fluid.jacobi_iterations; ++i) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, pressure_tex[pressure_read]);
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, pressure_fbo[1-pressure_read]);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        pressure_read = 1 - pressure_read;
-    }
+    // 4-5. pressure solve (multigrid, warm started from last frame)
+    solve_pressure();
 
     // 6. gradient subtract
     gradient_subtract_p.use_program();
@@ -182,7 +157,7 @@ function draw(timestamp:number) {
     gl.bindTexture(gl.TEXTURE_2D, velocity_tex[velocity_read]);
 
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.bindTexture(gl.TEXTURE_2D, obstacle_mask_tex);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[1-velocity_read]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -256,8 +231,6 @@ function draw(timestamp:number) {
     //         MAIN SHADER          //
     //////////////////////////////////
 
-    quad_p.use_program();
-
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.enable(gl.BLEND);
     
@@ -305,6 +278,18 @@ function draw(timestamp:number) {
             palette = PALETTE_DIVERGING;
             break;
     }
+    if (fluid.display.auto_exposure && kind !== KIND_DYE) {
+        run_exposure(display_tex, kind);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.enable(gl.BLEND);
+    } else {
+        exposure.last_mode = -1;   // stale once paused, snap when it resumes
+    }
+
+    quad_p.use_program();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, exposure.tex[exposure.read]);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, display_tex);
 
     gl.activeTexture(gl.TEXTURE1);
