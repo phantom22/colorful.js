@@ -98,6 +98,16 @@ function create_vertex_array() {
     return o;
 }
 
+/** framebuffer writing to several textures at once (layout locations 0, 1, ...). */
+function frame_buffer_mrt(texs:WebGLTexture[]) {
+    const o = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, o);
+    texs.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+    gl.drawBuffers(texs.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return o;
+}
+
 function frame_buffer(tex:WebGLTexture) {
     const o = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, o);
@@ -122,6 +132,13 @@ function create_texture(m:number, n:number, int_fmt:number, fmt:number, type:num
 
 function RGBA16F_texture(m:number, n:number,) {
     return create_texture(m, n, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
+}
+
+/** two half floats per texel, for the velocity (only .xy is used). Half the
+ * bytes of RGBA16F: 33–43% faster velocity passes at sim 1024 on every phone
+ * tested, never slower on desktop. */
+function RG16F_texture(m:number, n:number,) {
+    return create_texture(m, n, gl.RG16F, gl.RG, gl.HALF_FLOAT, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
 }
 
 function R16F_texture(m:number, n:number,) {

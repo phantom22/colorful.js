@@ -21,7 +21,7 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 
 /* ---------- view selector: trapezoid with curved diagonals ---------- */
 #view-select { position: absolute; top: 0; left: 50%; transform: translateX(-50%); }
-#view-btn { position: relative; width: 240px; height: 38px; background: none; border: 0; cursor: pointer; padding: 0; }
+#view-btn { position: relative; width: 240px; height: 38px; background: none; border: 0; cursor: pointer; padding: 0; touch-action: none; user-select: none; -webkit-touch-callout: none; }
 #view-btn svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 #view-btn path { fill: var(--bg); stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; transition: fill .15s; }
 #view-btn:hover path { fill: var(--bg2); }

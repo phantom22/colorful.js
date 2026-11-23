@@ -11,14 +11,22 @@ let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7
     velocity_advect_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"dissipation", 5>]>,
     dye_advect_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_dye", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"dissipation", 5>]>,
     curl_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
-    blur_p: shader_program<[uniform<"tex_source", 7>]>,
+    curl_smooth_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"half_size", 5>]>,
     vorticity_confinement_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_curl", 7>, uniform<"tex_mask", 7>, uniform<"dt", 5>, uniform<"curl_strength", 5>, uniform<"max_velocity", 5>, uniform<"max_force", 5>]>,
     divergence_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
     gradient_subtract_p: shader_program<[uniform<"tex_pressure", 7>, uniform<"tex_velocity", 7>, uniform<"tex_mask", 7>]>,
     obstacle_mask_p: shader_program<[uniform<"tex_obstacles", 7>]>,
-    resample_p: shader_program<[uniform<"tex_source", 7>, uniform<"uv_scale", 8>, uniform<"value_scale", 10>, uniform<"fill", 10>]>,
+    wall_dist_h_p: shader_program<[uniform<"tex_obstacles", 7>]>,
+    wall_dist_v_p: shader_program<[uniform<"tex_h", 7>]>,
+    resample_p: shader_program<[uniform<"tex_source", 7>, uniform<"uv_scale", 8>, uniform<"value_scale", 10>, uniform<"fill", 10>]>;
     // reduction_pass_p: shader_program,
-    diffusion_pass_p: shader_program<[uniform<"tex_dye", 7>, uniform<"tex_curl", 7>, uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"base_diffusion", 5>, uniform<"curl_diffusion", 5>, uniform<"velocity_diffusion", 5>, uniform<"max_diffusion", 5>, uniform<"diffusion_radius", 5>]>;
+
+/** vorticity confinement works at the reference grid's scale: the curl is
+ * smoothed and its slope measured over one reference texel (never less than a
+ * real one), so eddies keep their size on screen at any sim resolution. */
+const vc_spacing = () => Math.max(1, res_scale.sim);
+/** half side of the curl averaging square, in vc_spacing units. */
+let CURL_BOX = 1.25;
 
 let canvas_el: HTMLCanvasElement,
     /** updated in update_viewport */
@@ -28,11 +36,13 @@ function recompile_forcefield(get_velocity:string): null | string {
     try {
         let t = new shader_program("forcefield_tmp", quad_vert, sh_forcefield(get_velocity).trim(), [
             new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
-            new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
+            new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
+        new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
+            new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.velocity_dissipation),
             new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
             new uniform("center_worldpos", GL_VEC2, U_UPDATE, () => force.center),
             new uniform("window_width", GL_FLOAT, U_UPDATE, () => force.span),
-            new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength),
+            new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength * res_scale.sim),
             new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
             new uniform("replace", GL_FLOAT, U_UPDATE, () => mouse.m2_down ? 1.0 : 0.0),
             new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0),
@@ -61,7 +71,11 @@ function init_webgl() {
     if (!(canvas_el instanceof HTMLCanvasElement))
         throw "Colorful.js: couldn't find 'canvas#screen' element.";
 
-    gl = canvas_el.getContext("webgl2") as WebGL2RenderingContext;
+    // one opaque full-screen quad per frame: MSAA, alpha, depth and stencil
+    // would only add work (the MSAA resolve alone cost ~1/3 of the frame)
+    gl = canvas_el.getContext("webgl2", {
+        antialias: false, alpha: false, depth: false, stencil: false,
+    }) as WebGL2RenderingContext;
     if (gl === null)
         throw "Colorful.js: couldn't get WebGL2RenderingContext.";
 
@@ -90,7 +104,7 @@ function init_webgl() {
         new uniform("arrow_rows", GL_FLOAT, U_UPDATE, () => fluid.display.arrow_rows),
         new uniform("screen_px", GL_VEC2, U_UPDATE, () => [gl.drawingBufferWidth, gl.drawingBufferHeight]),
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 3),
-        new uniform("arrow_ref", GL_FLOAT, U_UPDATE, () => fluid.display.velocity.ref),
+        new uniform("arrow_ref", GL_FLOAT, U_UPDATE, () => fluid.display.velocity.ref * res_scale.sim),
         new uniform("arrow_gradient", GL_INT, U_UPDATE, () => fluid.display_mode === DISPLAY_PRESSURE ? 1 : 0),
     ]);
 
@@ -129,13 +143,16 @@ function init_webgl() {
         new uniform("erase", GL_FLOAT)
     ]);
 
+    // the force field runs inside the velocity advection, see sh_forcefield
     forcefield_p = new shader_program("forcefield", quad_vert, sh_forcefield(force.glsl.src), [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
+        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
+        new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
+        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.velocity_dissipation),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("center_worldpos", GL_VEC2, U_UPDATE, () => force.center),
         new uniform("window_width", GL_FLOAT, U_UPDATE, () => force.span),
-        new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength),
+        new uniform("force_strength", GL_FLOAT, U_UPDATE, () => force.strength * res_scale.sim),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
         new uniform("replace", GL_FLOAT, U_UPDATE, () => mouse.m2_down ? 1.0 : 0.0),
         new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0),
@@ -144,6 +161,7 @@ function init_webgl() {
 
     velocity_advect_p = new shader_program("velocity_advect", quad_vert, sh_sim_velocity_advect, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
+        new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
@@ -152,12 +170,20 @@ function init_webgl() {
 
     dye_advect_p = new shader_program("dye_advect", quad_vert, sh_sim_dye_advect, [
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
+        new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
         new uniform("tex_dye", GL_TEXTURE, U_INIT, 1),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
         new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.dye_dissipation),
-        new uniform("bg_log", GL_VEC3, U_UPDATE, () => fluid.bg.subarray(0, 3))
+        new uniform("bg_log", GL_VEC3, U_UPDATE, () => fluid.bg.subarray(0, 3)),
+        new uniform("tex_curl", GL_TEXTURE, U_INIT, 3),
+        new uniform("diffuse", GL_INT, U_UPDATE, () => diffusion_active() ? 1 : 0),
+        new uniform("base_diffusion", GL_FLOAT, U_UPDATE, () => fluid.base_diffusion),
+        new uniform("curl_diffusion", GL_FLOAT, U_UPDATE, () => fluid.curl_diffusion),
+        new uniform("velocity_diffusion", GL_FLOAT, U_UPDATE, () => fluid.velocity_diffusion / res_scale.sim),
+        new uniform("max_diffusion", GL_FLOAT, U_UPDATE, () => fluid.max_diffusion),
+        new uniform("diffusion_radius", GL_FLOAT, U_UPDATE, () => fluid.diffusion_texel_radius * res_scale.dye)
     ]);
 
     curl_p = new shader_program("curl", quad_vert, sh_sim_curl, [
@@ -165,8 +191,11 @@ function init_webgl() {
         new uniform("tex_mask", GL_TEXTURE, U_INIT, 1),
     ]);
 
-    blur_p = new shader_program("blur", quad_vert, sh_blur, [
-        new uniform("tex_source", GL_TEXTURE, U_INIT, 0),
+    curl_smooth_p = new shader_program("curl_smooth", quad_vert, sh_sim_curl_smooth, [
+        new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
+        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
+        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
+        new uniform("half_size", GL_FLOAT, U_UPDATE, () => CURL_BOX * vc_spacing()),
     ]);
 
     vorticity_confinement_p = new shader_program("vorticity_confinement", quad_vert, sh_sim_vorticity_confinement, [
@@ -176,9 +205,10 @@ function init_webgl() {
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
         new uniform("curl_strength", GL_FLOAT, U_UPDATE, () => fluid.curl_strength),
-        new uniform("max_velocity", GL_FLOAT, U_UPDATE, () => fluid.max_velocity),
-        new uniform("max_force", GL_FLOAT, U_UPDATE, () => fluid.max_force),
-        new uniform("drag", GL_FLOAT, U_UPDATE, () => fluid.drag)
+        new uniform("max_velocity", GL_FLOAT, U_UPDATE, () => fluid.max_velocity * res_scale.sim),
+        new uniform("max_force", GL_FLOAT, U_UPDATE, () => fluid.max_force * res_scale.sim),
+        new uniform("drag", GL_FLOAT, U_UPDATE, () => fluid.drag),
+        new uniform("spacing", GL_FLOAT, U_UPDATE, vc_spacing)
     ]);
 
     divergence_p = new shader_program("divergence", quad_vert, sh_sim_divergence, [
@@ -197,6 +227,14 @@ function init_webgl() {
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 0),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
     ]);
+    wall_dist_h_p = new shader_program("wall_dist_h", quad_vert, sh_wall_dist_h, [
+        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 0),
+        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
+    ]);
+    wall_dist_v_p = new shader_program("wall_dist_v", quad_vert, sh_wall_dist_v, [
+        new uniform("tex_h", GL_TEXTURE, U_INIT, 0),
+        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
+    ]);
 
     resample_p = new shader_program("resample", quad_vert, sh_resample, [
         new uniform("tex_source", GL_TEXTURE, U_INIT, 0),
@@ -211,20 +249,6 @@ function init_webgl() {
     //     new uniform("block_size", GL_INT, U_INIT, 8),
     //     new uniform("first_pass", GL_INT)
     // ]);
-
-    diffusion_pass_p = new shader_program("diffusion_pass", quad_vert, sh_sim_diffusion_pass, [
-        new uniform("tex_dye", GL_TEXTURE, U_INIT, 0),
-        new uniform("tex_curl", GL_TEXTURE, U_INIT, 1),
-        new uniform("tex_velocity", GL_TEXTURE, U_INIT, 2),
-        new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 3),
-        new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
-        new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
-        new uniform("base_diffusion", GL_FLOAT, U_UPDATE, () => fluid.base_diffusion),
-        new uniform("curl_diffusion", GL_FLOAT, U_UPDATE, () => fluid.curl_diffusion),
-        new uniform("velocity_diffusion", GL_FLOAT, U_UPDATE, () => fluid.velocity_diffusion),
-        new uniform("max_diffusion", GL_FLOAT, U_UPDATE, () => fluid.max_diffusion),
-        new uniform("diffusion_radius", GL_FLOAT, U_UPDATE, () => fluid.diffusion_texel_radius)
-    ]);
 
     init_multigrid_programs();
     init_exposure_programs();

@@ -83,10 +83,12 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
         this.win.hidden = false;
         this.errors = [];
         this.$err.textContent = "";
-        this.render();                  // no autofocus: click / tap into the code to edit
+        this.render();
         this.set_btn("idle");
         this.$lib.hidden = true;
         this.update_unsaved();
+        // desktop: ready to type. Touch: no autofocus, it would pop the keyboard
+        if (!is_touch()) { this.ta.focus(); this.ta.setSelectionRange(0, 0); this.ta.scrollTop = 0; }
     }
 
     close() {
@@ -336,7 +338,7 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
         this.$lib.append(search, this.$list);
         this.$lib.hidden = false;
         this.render_lib();
-        search.focus();
+        if (!is_touch()) search.focus();     // touch: no keyboard until the search is tapped
     }
 
     private render_lib() {
@@ -428,3 +430,6 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
         if (!this.$lib.hidden) this.render_lib();
     }
 }
+
+/** primary input is touch (phones / tablets): skip autofocus, it opens the keyboard. */
+function is_touch() { return matchMedia("(pointer: coarse)").matches; }

@@ -3,6 +3,16 @@ const SIM_RESOLUTION = 256,
       DYE_RESOLUTION = 512;
 let window_ar = window.innerHeight / window.innerWidth;
 
+/** grids the physics / dye defaults are tuned at. Settings measured in texels
+ * (speeds, distances, the force field) are given at these grids and scaled by
+ * res_scale, so changing the resolution keeps the same feel on screen. */
+const SIM_REF_RESOLUTION = 256,
+      DYE_REF_RESOLUTION = 512;
+/** current resolution over the reference one, set by update_sim_dims.
+ * sim: texel lengths and speeds (texels/s) scale by it, pressure by its square.
+ * Rates (1/s), curl, divergence and per-step factors don't depend on it. */
+const res_scale = { sim: SIM_RESOLUTION / SIM_REF_RESOLUTION, dye: DYE_RESOLUTION / DYE_REF_RESOLUTION };
+
 const bg_arr = [0, 0, 0],
       bg = new Float32Array([0, 0, 0, 1]);
 
@@ -59,11 +69,11 @@ const fluid = {
     dye_dissipation: 1.0,
     curl_strength: 15,
     jacobi_scale: 0.8,
-    base_diffusion: 0.25,
-    curl_diffusion: 0.5,
-    velocity_diffusion: 0.3,
-    max_diffusion: 15,
-    diffusion_texel_radius: 50,
+    base_diffusion: 0,
+    curl_diffusion: 0.05,
+    velocity_diffusion: 0.005,
+    max_diffusion: 1,
+    diffusion_texel_radius: 2,
     max_velocity: 2500,
     max_force: 5000,
     bg: new Float32Array(4),
@@ -92,6 +102,9 @@ const fluid = {
     sim_res: resolution(SIM_RESOLUTION, window_ar),
     dye_res: resolution(DYE_RESOLUTION, window_ar),
     open_borders: 0,
+    /** 1: lower the sim and dye resolution while the target fps isn't met
+     * (see pacing in draw.ts). The inspector resolutions are the ceiling. */
+    dynamic_resolution: 0,
     drag: 0.05
 };
 color_logarithm(fluid.bg, bg);

@@ -209,6 +209,9 @@ function run_splats() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+/** curl noise speed at the reference grid, texels/s. */
+const CURL_NOISE_AMP = 50;
+
 function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
     const rgba16fv = new Float32Array([0.0,0.0,0.0,0.0]);
     texture_fill(obstacles_fbo, rgba16fv);
@@ -229,6 +232,7 @@ function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
     if (add_noise) {
         curl_velocity_fill_p.use_program();
         curl_velocity_fill_p.uniforms["seed"].set(Math.random());
+        curl_velocity_fill_p.uniforms["amp"].set(CURL_NOISE_AMP * res_scale.sim);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, velocity_fbo[velocity_read]);
         gl.drawArrays(gl.TRIANGLES, 0, 3);

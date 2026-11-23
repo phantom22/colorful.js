@@ -45,9 +45,19 @@ class UI_STATUS {
     }
     tool(name: string) { this.$tool.textContent = name; }
 
-    /** pass the frame time in seconds, the display is smoothed. */
-    fps(dt: number) {
-        if (dt > 0 && dt < 1) this.fps_smooth += (1 / dt - this.fps_smooth) * 0.05;
+    private fps_shown = 0;
+
+    /** pass the sim steps of the last second. The text is only rewritten 4
+     * times a second (a DOM write per frame costs layout). */
+    fps(rate: number) {
+        this.fps_smooth = rate;
+        const now = performance.now();
+        if (now - this.fps_shown < 250) return;
+        this.fps_shown = now;
+        this.show_fps();
+    }
+
+    private show_fps() {
         this.$fps.textContent = `${this.fps_smooth.toFixed(0)} fps`;
     }
 

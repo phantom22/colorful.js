@@ -38,6 +38,20 @@ const mg = {
     coarse_sweeps: 8,
     /** coarsening stops once both sides are at most this many cells. */
     min_size: 2,
+    /** a V-cycle goes no deeper than the first level whose screening term
+     * (mg_kappa) reaches this: there the screening dominates, plain Jacobi
+     * converges in a few sweeps and coarser levels add next to nothing.
+     * Depends on the reach, an unlimited reach (kappa 0) uses every level. */
+    trim_kappa: 4,
+    /** Jacobi sweeps on such a trimmed bottom level. */
+    trim_sweeps: 4,
+    /** deepest level of the current solve, see mg_bottom. */
+    bottom: 0,
+    /** level 0 framebuffers writing pressure_tex[i] + divergence_tex, see
+     * sh_mg_smooth_div. */
+    div_fbo: [] as WebGLFramebuffer[],
+    /** true until the frame's first level-0 sweep has computed the divergence. */
+    div_pending: false,
 };
 
 type mg_edge_uniforms = [uniform<"extent", 8>, uniform<"ghost_lo", 5>, uniform<"ghost_hi", 8>];
@@ -53,7 +67,19 @@ const mg_edge_uniforms = () => [
     new uniform("ghost_hi", GL_VEC2),
 ] as [uniform<"extent", 8>, uniform<"ghost_lo", 5>, uniform<"ghost_hi", 8>];
 
+let mg_smooth_div_p: shader_program<[uniform<"tex_x", 7>, uniform<"tex_velocity", 7>, uniform<"tex_w", 7>, uniform<"tex_mask", 7>, uniform<"x_scale", 5>, uniform<"omega", 5>, uniform<"kappa", 5>, ...mg_edge_uniforms]>;
+
 function init_multigrid_programs() {
+    mg_smooth_div_p = new shader_program("mg_smooth_div", quad_vert, sh_mg_smooth_div, [
+        new uniform("tex_x", GL_TEXTURE, U_INIT, 0),
+        new uniform("tex_velocity", GL_TEXTURE, U_INIT, 1),
+        new uniform("tex_w", GL_TEXTURE, U_INIT, 2),
+        new uniform("tex_mask", GL_TEXTURE, U_INIT, 3),
+        new uniform("x_scale", GL_FLOAT),
+        new uniform("omega", GL_FLOAT, U_UPDATE, () => mg.omega),
+        new uniform("kappa", GL_FLOAT),
+        ...mg_edge_uniforms(),
+    ]);
     mg_smooth_p = new shader_program("mg_smooth", quad_vert, sh_mg_smooth, [
         new uniform("tex_x", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_b", GL_TEXTURE, U_INIT, 1),
@@ -129,8 +155,8 @@ const MG_REACH_UNLIMITED = 1000;
  * The coarse rhs is the sum of the fine residuals (scaled by size²), so the
  * same continuous equation needs the term scaled by size² too. */
 function mg_kappa(l:mg_level) {
-    const r = fluid.pressure_reach;
-    return r >= MG_REACH_UNLIMITED ? 0 : (l.size / r) ** 2;
+    const r = fluid.pressure_reach;   // at the reference grid
+    return r >= MG_REACH_UNLIMITED ? 0 : (l.size / (r * res_scale.sim)) ** 2;
 }
 
 /** builds the level pyramid at the current N1,N2. Called by alloc_textures
@@ -144,6 +170,12 @@ function alloc_multigrid() {
     const own_fbo = (t:WebGLTexture) => { const f = frame_buffer(t); mg.fbos.push(f); return f; };
     const weights = (w:number, h:number) => own_tex(create_texture(w, h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST, gl.CLAMP_TO_EDGE));
     const r32f = (w:number, h:number) => own_tex(create_texture(w, h, gl.R32F, gl.RED, gl.FLOAT, null, gl.NEAREST, gl.CLAMP_TO_EDGE));
+
+    mg.div_fbo = pressure_tex.map(t => {
+        const f = frame_buffer_mrt([t, divergence_tex]);
+        mg.fbos.push(f);
+        return f;
+    });
 
     const w0 = weights(N1, N2);
     const edges = () => ({ active: new Float32Array(2), ghost_lo: 0, ghost_hi: new Float32Array(2) });
@@ -198,6 +230,7 @@ function mg_bind(unit:number, tex:WebGLTexture) {
 
 /** one damped Jacobi sweep on level l; x_scale multiplies the old solution. */
 function mg_smooth(l:mg_level, x_scale:number) {
+    if (mg.div_pending && l === mg.levels[0]) { mg_smooth_div(l, x_scale); return; }
     mg_smooth_p.use_program();
     mg_smooth_p.uniforms["x_scale"].set(x_scale);
     mg_smooth_p.uniforms["kappa"].set(mg_kappa(l));
@@ -209,6 +242,23 @@ function mg_smooth(l:mg_level, x_scale:number) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, l.x_fbo[1 - l.read]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     l.read = 1 - l.read;
+}
+
+/** level 0 sweep that also computes divergence_tex, see sh_mg_smooth_div. */
+function mg_smooth_div(l:mg_level, x_scale:number) {
+    mg_smooth_div_p.use_program();
+    mg_smooth_div_p.uniforms["x_scale"].set(x_scale);
+    mg_smooth_div_p.uniforms["kappa"].set(mg_kappa(l));
+    mg_set_edges(mg_smooth_div_p, l);
+    mg_bind(0, l.x_tex[l.read]);
+    mg_bind(1, velocity_tex[velocity_read]);
+    mg_bind(2, l.w_tex);
+    mg_bind(3, obstacle_mask_tex);
+    gl.viewport(0, 0, l.w, l.h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mg.div_fbo[1 - l.read]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    l.read = 1 - l.read;
+    mg.div_pending = false;
 }
 
 /** coarse rhs = fine residual summed over each 2x2 block. */
@@ -243,8 +293,9 @@ function mg_prolong(f:mg_level, c:mg_level) {
  * solves for a fresh correction), jacobi_scale for the warm start. */
 function mg_vcycle(i:number, x_scale:number) {
     const L = mg.levels, l = L[i];
-    if (i === L.length - 1) {
-        for (let k = 0; k < mg.coarse_sweeps; ++k)
+    if (i === mg.bottom) {
+        const n = i === L.length - 1 ? mg.coarse_sweeps : mg.trim_sweeps;
+        for (let k = 0; k < n; ++k)
             mg_smooth(l, k === 0 ? x_scale : 1);
         return;
     }
@@ -258,7 +309,17 @@ function mg_vcycle(i:number, x_scale:number) {
         mg_smooth(l, 1);
 }
 
-/** solves for pressure_tex[pressure_read] from divergence_tex. Leaves the
+/** first level whose screening reaches mg.trim_kappa, else the coarsest. */
+function mg_bottom() {
+    const L = mg.levels;
+    for (let i = 0; i < L.length; ++i)
+        if (mg_kappa(L[i]) >= mg.trim_kappa) return i;
+    return L.length - 1;
+}
+
+/** computes divergence_tex from the velocity, then solves for
+ * pressure_tex[pressure_read]. The divergence is computed by the first sweep
+ * (sh_mg_smooth_div), or by its own pass when the solve is off. Leaves the
  * sim viewport set and texture unit 3 bound to a solver texture. */
 function solve_pressure() {
     const l0 = mg.levels[0];
@@ -269,11 +330,14 @@ function solve_pressure() {
     l0.read = pressure_read;
 
     if (fluid.pressure_cycles <= 0) {
+        run_divergence();           // still shown by the divergence view
         texture_fill(pressure_fbo[pressure_read], [0, 0, 0, 0]);
         return;
     }
 
     for (const l of mg.levels) mg_edges(l);
+    mg.bottom = mg_bottom();
+    mg.div_pending = true;
 
     for (let c = 0; c < fluid.pressure_cycles; ++c)
         mg_vcycle(0, c === 0 ? fluid.jacobi_scale : 1);

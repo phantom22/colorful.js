@@ -91,6 +91,51 @@ void main() {
     o = vec4(float(m) / 255.0, wall_fade(v_uv), 0.0, 1.0);
 }`;
 
+/** distance to the nearest wall, part 1: for each cell, the distance in x to
+ * the nearest solid cell on its row (WALL_DIST_MAX + 1 when none is that
+ * close). Closed borders count as solid. R8, value in texels / 255. */
+const WALL_DIST_MAX = 16;
+const sh_wall_dist_h = `
+#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform vec2 TEXEL;
+out vec4 o;
+
+${obst_glsl}
+
+void main() {
+    float d = ${WALL_DIST_MAX + 1}.0;
+    for (int i = -${WALL_DIST_MAX}; i <= ${WALL_DIST_MAX}; ++i) {
+        float a = abs(float(i));
+        if (a < d && solid(v_uv + vec2(float(i) * TEXEL.x, 0.0)) > 0.5) d = a;
+    }
+    o = vec4(d / 255.0, 0.0, 0.0, 1.0);
+}`;
+
+/** part 2: Chebyshev distance = min over the column of max(|dy|, row
+ * distance). Written into obstacle_mask_tex .b only (color mask). */
+const sh_wall_dist_v = `
+#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform vec2 TEXEL;
+uniform sampler2D tex_h;
+uniform int open_borders;
+out vec4 o;
+
+void main() {
+    float d = ${WALL_DIST_MAX + 1}.0;
+    for (int i = -${WALL_DIST_MAX}; i <= ${WALL_DIST_MAX}; ++i) {
+        vec2 uv = v_uv + vec2(0.0, float(i) * TEXEL.y);
+        float h = (uv.y < 0.0 || uv.y > 1.0)
+            ? (open_borders == 1 ? ${WALL_DIST_MAX + 1}.0 : 0.0)
+            : floor(texture(tex_h, uv).x * 255.0 + 0.5);
+        d = min(d, max(abs(float(i)), h));
+    }
+    o = vec4(0.0, 0.0, d / 255.0, 1.0);
+}`;
+
 const quad_vert = `
 #version 300 es
 out vec2 v_uv;
@@ -214,6 +259,72 @@ void main() {
     o = vec4(erase > 0.5 ? 1.0 - w : w);
 }`;
 
+/** semi-Lagrangian + MacCormack self-advection of the velocity, as a function
+ * so the force field shader can run it in the same pass. Expects TEXEL,
+ * obst_glsl, tex_velocity and dt to be declared before it. */
+/** wall checks only where a wall is in reach. obstacle_mask_tex .b holds the
+ * Chebyshev distance (sim texels) from each cell to the nearest wall or closed
+ * border, up to WALL_DIST_MAX (see sh_wall_dist_*). A sample point can only
+ * read as solid within 1 texel of a solid cell, so a fragment whose samples all
+ * stay closer than that distance sets walls = false and S / T skip the
+ * obstacle reads: the result is the same, minus ~10 texture reads. Expects
+ * obst_glsl before it. */
+const wall_skip_glsl = `
+uniform sampler2D tex_wall;   // obstacle_mask_tex
+float wall_dist(vec2 uv) { return floor(texture(tex_wall, uv).b * 255.0 + 0.5); }
+bool walls = true;
+float S(vec2 uv) { return walls ? solid(uv) : 0.0; }
+// trace() without the wall stops, same arithmetic
+vec2 T(vec2 uv, vec2 d) {
+    if (walls) return trace(uv, d);
+    vec2 p = uv;
+    for (int i = 0; i < 4; ++i) p = p - d * 0.25;
+    return p;
+}`;
+
+const velocity_advect_glsl = `
+${wall_skip_glsl}
+uniform float dissipation;   // exp(-rate * dt), 1.0 = none
+vec4 advect_velocity() {
+    vec2 vel = texture(tex_velocity, v_uv).xy;
+    float dl = length(dt * vel);              // displacement, texels
+    float wd = wall_dist(v_uv);
+    // samples stay within dl + 1 of the cell (footprint around 'back')
+    walls = wd <= dl + 2.0;
+    if (S(v_uv) > 0.5) return texture(tex_velocity, v_uv);
+
+    vec2 lo = 0.5 * TEXEL, hi = 1.0 - 0.5 * TEXEL;
+    vec2 disp = dt * vel * TEXEL;
+
+    vec2 back = clamp(T(v_uv, disp), lo, hi);
+    vec4 fwd  = texture(tex_velocity, back);
+
+    // footprint of the 4 texels around 'back'
+    vec2 c0 = (floor(back / TEXEL - 0.5) + 0.5) * TEXEL;
+    vec2 f[4] = vec2[4](c0, c0 + vec2(TEXEL.x, 0.0), c0 + vec2(0.0, TEXEL.y), c0 + TEXEL);
+
+    bool near_wall = S(v_uv + disp) > 0.5 || S(v_uv - disp) > 0.5;
+    vec4 mn = vec4(1e9), mx = vec4(-1e9);
+    for (int i = 0; i < 4; ++i) {
+        if (S(f[i]) > 0.5) { near_wall = true; continue; }
+        vec4 s = texture(tex_velocity, f[i]);
+        mn = min(mn, s);
+        mx = max(mx, s);
+    }
+
+    vec4 mc = fwd;
+    if (!near_wall) {
+        vec2 p = clamp(v_uv + disp, lo, hi);                       // plain forward point, no wall stop
+        vec2 vp = texture(tex_velocity, p).xy;
+        vec2 q = clamp(p - dt * vp * TEXEL, lo, hi);
+        // q is up to dl + |dt vp| away
+        if ((!walls && wd > dl + length(dt * vp) + 2.0) || solid(q) < 0.5)
+            mc = clamp(fwd + 0.5 * (texture(tex_velocity, v_uv) - texture(tex_velocity, q)), mn, mx);
+    }
+
+    return dissipation * mc;
+}`;
+
 const sh_sim_velocity_advect = `
 #version 300 es
 precision highp float;
@@ -226,39 +337,9 @@ ${obst_glsl}
 
 uniform sampler2D tex_velocity;
 uniform float dt;
-uniform float dissipation;   // exp(-rate * dt), 1.0 = none
-void main() {
-    if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
+${velocity_advect_glsl}
 
-    vec2 lo = 0.5 * TEXEL, hi = 1.0 - 0.5 * TEXEL;
-    vec2 disp = dt * texture(tex_velocity, v_uv).xy * TEXEL;
-
-    vec2 back = clamp(trace(v_uv, disp), lo, hi);
-    vec4 fwd  = texture(tex_velocity, back);
-
-    // footprint of the 4 texels around 'back'
-    vec2 c0 = (floor(back / TEXEL - 0.5) + 0.5) * TEXEL;
-    vec2 f[4] = vec2[4](c0, c0 + vec2(TEXEL.x, 0.0), c0 + vec2(0.0, TEXEL.y), c0 + TEXEL);
-
-    bool near_wall = solid(v_uv + disp) > 0.5 || solid(v_uv - disp) > 0.5;
-    vec4 mn = vec4(1e9), mx = vec4(-1e9);
-    for (int i = 0; i < 4; ++i) {
-        if (solid(f[i]) > 0.5) { near_wall = true; continue; }
-        vec4 s = texture(tex_velocity, f[i]);
-        mn = min(mn, s);
-        mx = max(mx, s);
-    }
-
-    vec4 mc = fwd;
-    if (!near_wall) {
-        vec2 p = clamp(v_uv + disp, lo, hi);                       // plain forward point, no wall stop
-        vec2 q = clamp(p - dt * texture(tex_velocity, p).xy * TEXEL, lo, hi);
-        if (solid(q) < 0.5)
-            mc = clamp(fwd + 0.5 * (texture(tex_velocity, v_uv) - texture(tex_velocity, q)), mn, mx);
-    }
-
-    o = dissipation * mc;
-}`;
+void main() { o = advect_velocity(); }`;
 
 const sh_sim_dye_advect = `
 #version 300 es
@@ -278,6 +359,17 @@ uniform float dt;
 uniform float dissipation;
 uniform vec3 bg_log;          // background in log encoding
 
+// vorticity-driven diffusion, merged into the advection (see diffuse())
+uniform sampler2D tex_curl;   // curl_smooth_tex
+uniform int   diffuse;        // 0: every rate is 0, skip it
+uniform float base_diffusion;
+uniform float curl_diffusion;
+uniform float velocity_diffusion;
+uniform float max_diffusion;
+uniform float diffusion_radius;   // dye texels
+
+${wall_skip_glsl}
+
 bool outside(vec2 p) { return p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0; }
 
 // Open borders: edge_valve blocks inflow in the outermost sim cell, so dye in
@@ -291,8 +383,39 @@ vec4 dye_at(vec2 p) {
     return mix(c, vec4(bg_log, 1.0), max(k.x, k.y));
 }
 
+// Blends the old dye around the departure point toward the average of 8
+// samples on a ring, at a rate set by the local curl and speed. Diffusing
+// before advecting instead of after saves a full pass over the dye; the two
+// steps nearly commute, so the result is the same to within a frame's motion.
+// c: plain bilinear dye at 'back'. Returns the change to add.
+vec4 diffuse_at(vec2 back, vec4 c, float speed) {
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 8; ++i) {
+        float a = 0.78539816 * float(i);
+        vec2 tuv = back + vec2(cos(a), sin(a)) * diffusion_radius * DTEXEL;
+        acc += S(tuv) > 0.5 ? c : texture(tex_dye, tuv);
+    }
+    vec4 avg = acc * 0.125;
+
+    // tex_curl is already blurred (curl_smooth_tex), one tap is enough
+    float curl = abs(texture(tex_curl, v_uv).x);
+
+    float rate = min(base_diffusion + curl_diffusion * curl + velocity_diffusion * speed, max_diffusion);
+    return (1.0 - exp(-rate * dt)) * (avg - c);
+}
+
 void main() {
-    if (solid(v_uv) > 0.5) {
+    vec2 vel = texture(tex_velocity, v_uv).xy;
+    float dl = length(dt * vel);                               // sim texels
+    // a dye texel in sim texels; the mask is read at the sim cell holding
+    // v_uv, up to a texel off, hence the extra 1
+    vec2 kt = DTEXEL / TEXEL;
+    float k = max(kt.x, kt.y);
+    float ring = diffuse == 1 ? diffusion_radius * k : 0.0;
+    float wd = wall_dist(v_uv);
+    walls = wd <= dl + max(ring, k) + 3.0;
+
+    if (S(v_uv) > 0.5) {
         vec4 acc = vec4(0.0); float n = 0.0;
         for (int i = 0; i < 8; ++i) {
             float a = 0.7853982 * float(i);
@@ -303,15 +426,18 @@ void main() {
         return;
     }
 
-    vec2 disp = dt * texture(tex_velocity, v_uv).xy * TEXEL;
-    vec2 back = trace(v_uv, disp);
+    vec2 disp = dt * vel * TEXEL;
+    vec2 back = T(v_uv, disp);
     if (outside(back)) { o = vec4(bg_log, 1.0); return; }   // clean dye flows in
 
     vec4 fwd = dye_at(back);
     vec4 mc = fwd;
     vec2 p = v_uv + disp;
-    if (!outside(p) && solid(p) < 0.5) {
-        vec2 q = trace(p, dt * texture(tex_velocity, p).xy * TEXEL);
+    if (!outside(p) && S(p) < 0.5) {
+        vec2 vp = texture(tex_velocity, p).xy;
+        // q is up to dl + |dt vp| away
+        walls = walls || wd <= dl + length(dt * vp) + 3.0;
+        vec2 q = T(p, dt * vp * TEXEL);
         if (!outside(q))
             mc = fwd + 0.5 * (dye_at(v_uv) - dye_at(q));
     }
@@ -323,6 +449,8 @@ void main() {
     vec4 c = dye_at(c0 + vec2(0.0, DTEXEL.y));
     vec4 d = dye_at(c0 + DTEXEL);
     mc = clamp(mc, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
+
+    if (diffuse == 1) mc += diffuse_at(back, texture(tex_dye, back), length(vel));
 
     o = dissipation * mc;
 }`;
@@ -349,16 +477,19 @@ uniform float relax;
 uniform float time;
 
 ${user || FORCE_FIELD_DEFAULT.src}
+${velocity_advect_glsl}
 
+// velocity advection with the field applied to its result: one pass instead of
+// a field pass then an advect pass. Everything above the user code must stay
+// as is, the editor maps compile errors with a fixed line offset.
 void main() {
-    if (solid(v_uv) > 0.5) { o = texture(tex_velocity, v_uv); return; }
+    vec4 adv = advect_velocity();
+    if (solid(v_uv) > 0.5) { o = adv; return; }
     vec2 p = ((v_uv - vec2(0.5)) * window_width * 0.5) * vec2(ASPECT, 1.0) + center_worldpos;
 
     vec2 F = get_velocity(p) * force_strength;
-    vec4 old = texture(tex_velocity, v_uv);
-    float k = 1.0 - exp(-relax * dt);
-    vec2 v = replace > 0.5 ? F : (relax < 0.0 ?  old.xy + F * dt : mix(old.xy, F, 1.0 - exp(-relax * dt)));
-    o = vec4(edge_valve(v, v_uv), old.zw);
+    vec2 v = replace > 0.5 ? F : (relax < 0.0 ? adv.xy + F * dt : mix(adv.xy, F, 1.0 - exp(-relax * dt)));
+    o = vec4(edge_valve(v, v_uv), adv.zw);
 }`;
 
 const sh_sim_curl = `
@@ -387,7 +518,14 @@ void main() {
     o = vec4(0.5 * (R - L - T + B), 0.0, 0.0, 1.0);
 }`;
 
-const sh_blur = `
+/** curl averaged over a square of side 2·half_size texels, in one pass: by
+ * Stokes, that average is the circulation around the square over its area.
+ * Each edge is integrated with Simpson's rule over 3 bilinear velocity taps
+ * (8 taps total). Replaces curl + 3x3 blur for the vorticity confinement and
+ * the dye diffusion; the raw curl is only computed for the curl view. Zero
+ * where the square touches a wall or comes within 2 texels of the border,
+ * like the raw curl. */
+const sh_sim_curl_smooth = `
 #version 300 es
 precision highp float;
 precision highp sampler2D;
@@ -395,15 +533,33 @@ in vec2 v_uv;
 uniform vec2 TEXEL;
 out vec4 o;
 
-uniform sampler2D tex_source;
+${obst_glsl}
+
+uniform sampler2D tex_velocity;
+uniform float half_size;    // texels
+
 void main() {
-    float s = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x) {
-            float w = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
-            s += w * texture(tex_source, v_uv + vec2(x, y) * TEXEL).x;
-        }
-    o = vec4(s / 16.0, 0.0, 0.0, 1.0);
+    vec2 e = min(v_uv, 1.0 - v_uv) / TEXEL;
+    vec2 d = half_size * TEXEL;
+    if (min(e.x, e.y) < max(2.0, half_size + 1.0)) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+
+    const vec2 P[8] = vec2[8](vec2(-1, -1), vec2(0, -1), vec2(1, -1), vec2(1, 0),
+                              vec2(1, 1), vec2(0, 1), vec2(-1, 1), vec2(-1, 0));
+    vec2 v[8];
+    for (int i = 0; i < 8; ++i) {
+        vec2 uv = v_uv + P[i] * d;
+        if (solid(uv) > 0.5) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+        v[i] = texture(tex_velocity, uv).xy;
+    }
+    if (solid(v_uv) > 0.5) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+
+    // counter-clockwise: bottom (+x), right (+y), top (-x), left (-y)
+    float circ = (v[0].x + 4.0 * v[1].x + v[2].x)
+               + (v[2].y + 4.0 * v[3].y + v[4].y)
+               - (v[6].x + 4.0 * v[5].x + v[4].x)
+               - (v[0].y + 4.0 * v[7].y + v[6].y);
+    // edges are 2h long, Simpson weights sum to 6, area is (2h)²
+    o = vec4(circ / (12.0 * half_size), 0.0, 0.0, 1.0);
 }`;
 
 const sh_sim_vorticity_confinement = `
@@ -423,20 +579,24 @@ uniform float dt;
 uniform float max_force;
 uniform float max_velocity;
 uniform float drag;
+uniform float spacing;      // texels between the curl taps, see vc_spacing
 
 void main() {
     vec4 mk = mask_px();
     if (has(mask_bits(mk), M_SELF)) { o = texture(tex_velocity, v_uv); return; }
 
-    float L = texture(tex_curl, v_uv - vec2(TEXEL.x, 0.0)).x;
-    float R = texture(tex_curl, v_uv + vec2(TEXEL.x, 0.0)).x;
-    float B = texture(tex_curl, v_uv - vec2(0.0, TEXEL.y)).x;
-    float T = texture(tex_curl, v_uv + vec2(0.0, TEXEL.y)).x;
+    vec2 dx = vec2(TEXEL.x, 0.0) * spacing, dy = vec2(0.0, TEXEL.y) * spacing;
+    float L = texture(tex_curl, v_uv - dx).x;
+    float R = texture(tex_curl, v_uv + dx).x;
+    float B = texture(tex_curl, v_uv - dy).x;
+    float T = texture(tex_curl, v_uv + dy).x;
     float C = texture(tex_curl, v_uv).x;                    // <- this was missing
 
     vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
     force /= max(length(force), 0.05);
-    force *= curl_strength * C * mk.g;           // <- C restored
+    // no res_scale factor: the finer grid's curl is already larger by about
+    // that much, measured: scaling it again shreds the dye at high resolution
+    force *= curl_strength * C * mk.g;
     force.y *= -1.0;
 
     float fm = length(force);
@@ -530,56 +690,6 @@ void main() {
     if (sB && v.y < 0.0) v.y = 0.0;
     if (sT && v.y > 0.0) v.y = 0.0;
     o = vec4(edge_valve(v, v_uv), 0.0, 1.0);
-}`;
-
-const sh_sim_diffusion_pass = `
-#version 300 es
-precision highp float;
-precision highp sampler2D;
-in vec2 v_uv;
-out vec4 o;
-
-uniform vec2 DTEXEL;
-uniform vec2 TEXEL;
-
-${obst_glsl}
-
-uniform sampler2D tex_dye;
-uniform sampler2D tex_curl;
-uniform sampler2D tex_velocity;
-uniform float dt;
-uniform float base_diffusion;
-uniform float curl_diffusion;
-uniform float velocity_diffusion;
-uniform float max_diffusion;
-uniform float diffusion_radius;
-void main() {
-    vec4 c = texture(tex_dye, v_uv);
-
-    if (solid(v_uv) > 0.5) { o = c; return; }
-    vec4 acc = vec4(0.0);
-    for (int i = 0; i < 8; ++i) {
-        float a = 0.78539816 * float(i);
-        vec2 tuv = v_uv + vec2(cos(a), sin(a)) * diffusion_radius * DTEXEL;
-        acc += solid(tuv) > 0.5 ? c : texture(tex_dye, tuv);
-    }
-    vec4 avg = acc * 0.125;
-
-    float curl = 0.0;
-    const float R = 1.5;
-    curl += abs(texture(tex_curl, v_uv).x);
-    for (int i = 0; i < 8; ++i) {
-        float a = 0.78539816 * float(i);
-        curl += abs(texture(tex_curl, v_uv + vec2(cos(a), sin(a)) * R * TEXEL).x);
-    }
-    curl /= 9.0;
-
-    float speed = length(texture(tex_velocity, v_uv).xy);
-
-    float rate = min(base_diffusion + curl_diffusion * curl + velocity_diffusion * speed, max_diffusion);
-    float k = 1.0 - exp(-rate * dt);
-
-    o = mix(c, avg, k);
 }`;
 
 const quad_frag = `
@@ -744,15 +854,31 @@ vec3 draw_arrows(vec3 col) {
     vec2 v; float t;
     if (arrow_gradient == 1) {
         // downhill across the cell: f differences over half a cell each way
+        // near a wall a blocked side falls back to the center value (one-sided)
         vec2 h = 0.5 * cell / screen_px;
-        v = -vec2(texture(tex_source, cuv + vec2(h.x, 0.0)).x - texture(tex_source, cuv - vec2(h.x, 0.0)).x,
-                  texture(tex_source, cuv + vec2(0.0, h.y)).x - texture(tex_source, cuv - vec2(0.0, h.y)).x);
+        float f0 = texture(tex_source, cuv).x;
+        vec2 o[4] = vec2[4](vec2(h.x, 0.0), vec2(-h.x, 0.0), vec2(0.0, h.y), vec2(0.0, -h.y));
+        float f[4]; float sp[2] = float[2](0.0, 0.0);
+        for (int i = 0; i < 4; ++i) {
+            bool open = texture(tex_obstacles, cuv + o[i]).x < 0.5;
+            f[i] = open ? texture(tex_source, cuv + o[i]).x : f0;
+            sp[i / 2] += open ? 0.5 : 0.0;
+        }
+        v = -vec2(sp[0] > 0.0 ? (f[0] - f[1]) / sp[0] : 0.0,
+                  sp[1] > 0.0 ? (f[2] - f[3]) / sp[1] : 0.0);
         // a change of about the view's ref across one cell is a full-length arrow
         t = 1.0 - exp(-4.0 * length(v) / max(view_ref, 1e-6));
     } else {
         vec2 q = 0.25 * cell / screen_px;        // 4 bilinear taps = the cell's average
-        v = 0.25 * (texture(tex_velocity, cuv + vec2(-q.x, -q.y)).xy + texture(tex_velocity, cuv + vec2(q.x, -q.y)).xy
-                  + texture(tex_velocity, cuv + vec2(-q.x,  q.y)).xy + texture(tex_velocity, cuv + vec2(q.x,  q.y)).xy);
+        // taps that land in a wall are left out (and partly blocked ones count less)
+        vec2 o[4] = vec2[4](vec2(-q.x, -q.y), vec2(q.x, -q.y), vec2(-q.x, q.y), vec2(q.x, q.y));
+        v = vec2(0.0); float wsum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            float w = 1.0 - smoothstep(0.0, 0.5, texture(tex_obstacles, cuv + o[i]).x);
+            v += w * texture(tex_velocity, cuv + o[i]).xy;
+            wsum += w;
+        }
+        v = wsum > 0.0 ? v / wsum : vec2(0.0);
         // velocity view: its own scale; other views: the velocity view's ref
         float ref = source_kind == 1 ? view_ref : arrow_ref;
         t = 1.0 - exp(-length(v) / max(ref, 1e-6));

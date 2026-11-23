@@ -67,6 +67,49 @@ void main() {
     o = vec4(C + omega * ((s.x - b) / (s.y + kappa) - C), 0.0, 0.0, 1.0);
 }`;
 
+/** the frame's first sweep on the sim grid, with the divergence pass merged
+ * in: b is computed here from the velocity (same stencil as sh_sim_divergence)
+ * and also written to divergence_tex (second render target) for the rest of
+ * the solve and the divergence view. Saves a full pass over the sim grid. */
+const sh_mg_smooth_div = mg_glsl.replace("out vec4 o;",
+    "layout(location = 0) out vec4 o;\nlayout(location = 1) out vec4 o_div;\nuniform vec2 TEXEL;") + mask_glsl + `
+uniform sampler2D tex_x;
+uniform sampler2D tex_velocity;
+uniform sampler2D tex_w;
+uniform float x_scale;
+uniform float omega;
+
+vec2 V(vec2 uv) {
+    return texture(tex_velocity, clamp(uv, 0.5 * TEXEL, 1.0 - 0.5 * TEXEL)).xy;
+}
+
+float divergence(ivec2 p) {
+    uint m = mask_bits(mask_px());
+    if (has(m, M_SELF)) return 0.0;
+    vec2 uv = (vec2(p) + 0.5) * TEXEL;
+    vec2 C = V(uv);
+    float L = V(uv - vec2(TEXEL.x, 0.0)).x;
+    float R = V(uv + vec2(TEXEL.x, 0.0)).x;
+    float B = V(uv - vec2(0.0, TEXEL.y)).y;
+    float T = V(uv + vec2(0.0, TEXEL.y)).y;
+    if (has(m, M_L)) L = -C.x;
+    if (has(m, M_R)) R = -C.x;
+    if (has(m, M_B)) B = -C.y;
+    if (has(m, M_T)) T = -C.y;
+    return 0.5 * (R - L + T - B);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy), n = textureSize(tex_x, 0);
+    float b = divergence(p);
+    o_div = vec4(b, 0.0, 0.0, 1.0);
+    if (inactive(p)) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    vec2 s = neighbours(tex_x, tex_w, p, n, x_scale);
+    if (s.y == 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }   // solid
+    float C = x_scale * texelFetch(tex_x, p, 0).x;
+    o = vec4(C + omega * ((s.x - b) / (s.y + kappa) - C), 0.0, 0.0, 1.0);
+}`;
+
 /** rendered at the coarse level (edge uniforms are the fine level's): the
  * fine residual of the 2x2 children, summed. A coarse cell spans 4x the area,
  * so the sum is the coarse rhs. */

@@ -12,12 +12,17 @@ let velocity_tex: [WebGLTexture, WebGLTexture],
     curl_smooth_fbo: WebGLFramebuffer,
     obstacles_tex: WebGLTexture,
     obstacles_fbo: WebGLFramebuffer,
+    /** sim-res R8 scratch for the wall distance (see sh_wall_dist_h). */
+    wall_dist_h_tex: WebGLTexture,
+    wall_dist_h_fbo: WebGLFramebuffer,
     /** sim-res RGBA8: per-cell wall bit flags + wall_fade, see mask_glsl. */
     obstacle_mask_tex: WebGLTexture,
     obstacle_mask_fbo: WebGLFramebuffer,
     /** set whenever obstacles_tex changes; the mask is rebuilt before the sim. */
     obstacle_mask_dirty = true,
     obstacle_mask_borders = -1,
+    /** the walls changed since the wall distance was last baked. */
+    wall_dist_pending = true,
 
     velocity_read: number,
     pressure_read: number,
@@ -35,11 +40,19 @@ let velocity_tex: [WebGLTexture, WebGLTexture],
     // reduction_dye_1x1_fbo = [] as WebGLTexture[],
     // reduction_dye_read: number;
 
+/** sim / dye resolution in use: the inspector values, times the dynamic
+ * resolution scale (pacing.scale, 1 when it's off). */
+const eff_sim_resolution = () => Math.max(32, Math.round(fluid.sim_resolution * pacing.scale));
+const eff_dye_resolution = () => Math.max(64, Math.round(fluid.dye_resolution * pacing.scale));
+
 /** recomputes sim/dye dims and the texel constants from the window size. */
 function update_sim_dims() {
     window_ar = canvas_el.height / canvas_el.width;
-    fluid.sim_res = resolution(fluid.sim_resolution, window_ar);
-    fluid.dye_res = resolution(fluid.dye_resolution, window_ar);
+    const sr = eff_sim_resolution(), dr = eff_dye_resolution();
+    fluid.sim_res = resolution(sr, window_ar);
+    fluid.dye_res = resolution(dr, window_ar);
+    res_scale.sim = sr / SIM_REF_RESOLUTION;
+    res_scale.dye = dr / DYE_REF_RESOLUTION;
     TEXEL.set(fluid.sim_res.texel);
     DYE_TEXEL.set(fluid.dye_res.texel);
     [N1,N2] = fluid.sim_res.dims;
@@ -50,8 +63,8 @@ function update_sim_dims() {
 /** creates every sim texture/framebuffer at the current N1,N2 / M1,M2 and
  * clears the ones that hold no state worth carrying over. */
 function alloc_textures() {
-    const vel_0 = RGBA16F_texture(N1, N2),
-          vel_1 = RGBA16F_texture(N1, N2),
+    const vel_0 = RG16F_texture(N1, N2),
+          vel_1 = RG16F_texture(N1, N2),
           dye_0 = RGBA16F_texture(M1, M2),
           dye_1 = RGBA16F_texture(M1, M2),
           press_0 = R16F_texture(N1, N2),
@@ -65,6 +78,7 @@ function alloc_textures() {
     curl_smooth_tex = create_texture(N1, N2, gl.R16F, gl.RED, gl.HALF_FLOAT, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
     obstacles_tex = create_texture(N1, N2, gl.R8, gl.RED, gl.UNSIGNED_BYTE, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
     obstacle_mask_tex = create_texture(N1, N2, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.NEAREST, gl.CLAMP_TO_EDGE);
+    wall_dist_h_tex = create_texture(N1, N2, gl.R8, gl.RED, gl.UNSIGNED_BYTE, null, gl.NEAREST, gl.CLAMP_TO_EDGE);
 
     velocity_fbo = [frame_buffer(vel_0), frame_buffer(vel_1)];
     dye_fbo = [frame_buffer(dye_0), frame_buffer(dye_1)];
@@ -74,6 +88,7 @@ function alloc_textures() {
     curl_smooth_fbo = frame_buffer(curl_smooth_tex);
     obstacles_fbo = frame_buffer(obstacles_tex);
     obstacle_mask_fbo = frame_buffer(obstacle_mask_tex);
+    wall_dist_h_fbo = frame_buffer(wall_dist_h_tex);
     obstacle_mask_dirty = true;
 
     const zero = new Float32Array([0.0,0.0,0.0,0.0]);
@@ -91,18 +106,23 @@ function alloc_textures() {
 
 function all_textures() {
     return [...velocity_tex, ...dye_tex, ...pressure_tex, divergence_tex,
-        curl_tex, curl_smooth_tex, obstacles_tex, obstacle_mask_tex, ...mg.textures, ...exposure.textures];
+        curl_tex, curl_smooth_tex, obstacles_tex, obstacle_mask_tex, wall_dist_h_tex, ...mg.textures, ...exposure.textures];
 }
 
 function all_fbos() {
     return [...velocity_fbo, ...dye_fbo, ...pressure_fbo, divergence_fbo,
-        curl_fbo, curl_smooth_fbo, obstacles_fbo, obstacle_mask_fbo, ...mg.fbos, ...exposure.fbos];
+        curl_fbo, curl_smooth_fbo, obstacles_fbo, obstacle_mask_fbo, wall_dist_h_fbo, ...mg.fbos, ...exposure.fbos];
 }
 
 /** re-bakes obstacle_mask_tex (and the multigrid face weights) if the walls or the border mode changed.
  * Expects the sim viewport (N1,N2) and blending off. */
 function build_obstacle_mask() {
-    if (!obstacle_mask_dirty && obstacle_mask_borders === fluid.open_borders) return;
+    if (!obstacle_mask_dirty && obstacle_mask_borders === fluid.open_borders) {
+        if (wall_dist_pending) bake_wall_dist();
+        return;
+    }
+    // the mask pass writes .b = 0 (no wall distance: every wall check runs),
+    // the distance is baked once the walls stop changing (bake_wall_dist)
     obstacle_mask_p.use_program();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
@@ -111,6 +131,26 @@ function build_obstacle_mask() {
     build_multigrid_weights();
     obstacle_mask_dirty = false;
     obstacle_mask_borders = fluid.open_borders;
+    wall_dist_pending = true;
+}
+
+/** distance to the nearest wall into obstacle_mask_tex .b, for the advect
+ * passes' wall skip (see wall_skip_glsl). Runs on the first frame without wall
+ * edits: while a wall is being drawn the distance stays 0, so the skip is off
+ * and the bake (~4 ms at sim 1024) isn't paid on every frame of the stroke. */
+function bake_wall_dist() {
+    wall_dist_h_p.use_program();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, obstacles_tex);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, wall_dist_h_fbo);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    wall_dist_v_p.use_program();
+    gl.bindTexture(gl.TEXTURE_2D, wall_dist_h_tex);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, obstacle_mask_fbo);
+    gl.colorMask(false, false, true, false);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.colorMask(true, true, true, true);
+    wall_dist_pending = false;
 }
 
 function init_textures() {
@@ -142,7 +182,7 @@ function init_textures() {
     gl.enable(gl.BLEND);
     curl_velocity_fill_p.use_program();
     curl_velocity_fill_p.uniforms["scale"].set(5.0);
-    curl_velocity_fill_p.uniforms["amp"].set(50.0);
+    curl_velocity_fill_p.uniforms["amp"].set(CURL_NOISE_AMP * res_scale.sim);
     curl_velocity_fill_p.uniforms["div_mix"].set(0.1);
     curl_velocity_fill_p.uniforms["seed"].set(Math.random());
 
@@ -171,8 +211,8 @@ function resample(dst:WebGLFramebuffer, w:number, h:number, src:WebGLTexture,
 function apply_resolution() {
     if (!velocity_tex) return;   // before init_textures
     const ar = canvas_el.height / canvas_el.width,
-          s = resolution(fluid.sim_resolution, ar).dims,
-          d = resolution(fluid.dye_resolution, ar).dims;
+          s = resolution(eff_sim_resolution(), ar).dims,
+          d = resolution(eff_dye_resolution(), ar).dims;
     if (s[0] === N1 && s[1] === N2 && d[0] === M1 && d[1] === M2) return;
     const w = canvas_el.width, h = canvas_el.height;
     resize_simulation(w, h, w, h);
