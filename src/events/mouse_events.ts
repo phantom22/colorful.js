@@ -30,6 +30,11 @@ let _mouse_never_processed = true;
 function process_client_pos(clientX:number, clientY:number) {
     mouse.uv_pos[0] = (clientX - canvas_rect.left) / canvas_rect.width;
     mouse.uv_pos[1] = (canvas_rect.bottom - clientY) / canvas_rect.height;
+    // a straight wall line dragged past the canvas ends exactly on its edge
+    if (wall_line_pending()) {
+        mouse.uv_pos[0] = Math.min(1, Math.max(0, mouse.uv_pos[0]));
+        mouse.uv_pos[1] = Math.min(1, Math.max(0, mouse.uv_pos[1]));
+    }
     const f = force.span * 0.5;
     ui_status.cursor(
         force.center[0] + (mouse.uv_pos[0] - 0.5) * f * ASPECT_NUM,
@@ -39,7 +44,9 @@ function process_client_pos(clientX:number, clientY:number) {
 
 /** event called on canvas.onmouseleave */
 function c_mouseleave() {
-    splat.next_is_start = obstacle_splat.next_is_start = true;
+    splat.next_is_start = true;
+    // a straight wall line keeps its anchor: its end can be dragged past the edge
+    if (!wall_line_pending()) obstacle_splat.next_is_start = true;
     mouse.over_canvas = false;
 }
 
@@ -60,6 +67,12 @@ function c_mousedown(e:MouseEvent) {
 
 /** shared by mouse and touch: 0 draws, 2 pans the force field. */
 function press(button:number) {
+    if (button === 0 && geysers_active()) {     // geyser mode: place / edit / erase
+        mouse.m1_down = true;
+        mouse.m2_down = false;
+        geyser_press(mouse.uv_pos);
+        return;
+    }
     if (button === 0) {
         mouse.wall_anchor.set(mouse.uv_pos);
         mouse.m1_down = true;
@@ -77,16 +90,17 @@ function press(button:number) {
 /** drops a pending press without drawing anything (a ctrl-line is discarded). */
 function cancel_press() {
     mouse.m1_down = false;
+    geysers.drag = null;
     splat.next_is_start = obstacle_splat.next_is_start = true;
 }
 
 /** event called on document.documentElement.onmouseleave: the pointer left
- * the page. A pending ctrl-line is dropped there, otherwise its anchor would
- * stay armed if the release happens outside and never reaches the page. */
+ * the page. A pending straight line is kept, so it can be drawn up to an edge:
+ * browsers keep sending the drag's moves and its release while the button is
+ * held, and a release that is lost anyway is caught by w_mousemove (no button
+ * down on the next move drops the press). */
 function d_mouseleave() {
     mouse.over_canvas = false;
-    if (mouse.m1_down && mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
-        cancel_press();
 }
 
 /** event called on window.onmousemove */
@@ -120,11 +134,13 @@ function move() {
         return;
     }
 
+    if (geysers.drag) { geyser_move(mouse.uv_pos); return; }
+
     const frame = renderer.frame;
     if (mouse.last_processed_frame === frame) return;
     mouse.last_processed_frame = frame;
     
-    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down) return;
+    if (mouse.mode === MOUSE_MODE_WALL && wall_line_mode()) return;
     dispatch_splat(mouse.uv_pos, false);
     mouse.wall_anchor.set(mouse.uv_pos);
 }
@@ -147,7 +163,13 @@ function release(button:number) {
     if (button !== 0 || !mouse.m1_down)   // nothing pending (e.g. dropped by d_mouseleave)
         return;
 
-    if (mouse.mode === MOUSE_MODE_WALL && keyboard.ctrl_down)
+    if (geysers.drag) {
+        geyser_release(mouse.uv_pos);
+        mouse.m1_down = false;
+        return;
+    }
+
+    if (mouse.mode === MOUSE_MODE_WALL && wall_line_mode())
         dispatch_splat(mouse.uv_pos, false);
     
     splat.next_is_start = obstacle_splat.next_is_start = true;

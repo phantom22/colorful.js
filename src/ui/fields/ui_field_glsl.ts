@@ -431,5 +431,3 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
     }
 }
 
-/** primary input is touch (phones / tablets): skip autofocus, it opens the keyboard. */
-function is_touch() { return matchMedia("(pointer: coarse)").matches; }

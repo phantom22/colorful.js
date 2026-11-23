@@ -187,9 +187,10 @@ function sim_step() {
     run_obstacle_splats();
 
     gl.disable(gl.BLEND);
-    if (mouse.m1_down && mouse.mode & MOUSE_MODE_DYE)
+    if (mouse.m1_down && mouse.mode & MOUSE_MODE_DYE && !geysers.drag)
         set_dye_splat(mouse.uv_pos, false);
     run_splats();
+    run_geysers();
 
     //////////////////////////////////
     //          FLUID SIM           //

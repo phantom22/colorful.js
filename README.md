@@ -58,7 +58,8 @@ Hover any label for an explanation and a guide to useful value ranges. Double-cl
 | `Space`            | Fill the dye with a checkerboard                              |
 | `Backspace`        | Clear the simulation (`Ctrl+Backspace`: clear only the walls) |
 | `I`                | Toggle the inspector                                          |
-| `Escape` / `H`     | Toggle the UI (in fullscreen use `H`: Esc usually exits it)   |
+| `H`                | Toggle the UI                                                 |
+| `Escape`           | Close an open editor (geyser, force field)                    |
 
 ### Buttons
 - Toolbar: brushes, force field, open borders and the arrow overlay.

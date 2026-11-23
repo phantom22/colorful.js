@@ -30,7 +30,7 @@ function update_viewport() {
 
     if (!renderer.resizing) {
         renderer.resizing = true;
-        state_cleanup();
+        state_cleanup(true);
     }
     clearTimeout(_resize_timer);
     _resize_timer = setTimeout(finish_resize, RESIZE_SETTLE_MS);

@@ -25,18 +25,74 @@ let ui_toolbar: UI_TOOLBAR<mouse_mode_t>,
     ui_field_glsl: UI_FIELD_GLSL;
 
 /** tool glyphs: the droplet is always the dye color, the wind the force color
- * (--dye-c / --force-c in styles.css, also used by the brush rings). */
-const DYE_GLYPH = '<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z" vector-effect="non-scaling-stroke"/>',
-      // a push: arrow with two speed lines
-      FORCE_GLYPH = '<path d="M3 12h14" vector-effect="non-scaling-stroke"/><path d="M13 7l5 5-5 5" vector-effect="non-scaling-stroke"/><path d="M3 7.5h5M3 16.5h5" vector-effect="non-scaling-stroke"/>';
+ * (--dye-c / --force-c in styles.css, also used by the brush rings). Kept
+ * simple: they are drawn at 20 px. */
+const NS = ' vector-effect="non-scaling-stroke"';
+const DYE_GLYPH = `<path d="M12 3c3 4 5 6.5 5 9.5a5 5 0 0 1-10 0C7 9.5 9 7 12 3z"${NS}/>`,
+      // wind: two lines with curled ends
+      FORCE_GLYPH = `<path d="M3 9h11a3 3 0 1 0-3-3"${NS}/><path d="M3 15h14a3 3 0 1 1-3 3"${NS}/>`;
+const WALL_GLYPH = '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16M10 5v7M15 12v7"/>';
 const TOOL_ICONS = [
-    // dye + force: both glyphs side by side, scaled down (non-scaling strokes keep the line width)
-    `<g class="ic-dye" transform="translate(-2.3 5.2) scale(.66)">${DYE_GLYPH}</g>` +
-    `<g class="ic-force" transform="translate(11 4.8) scale(.6)">${FORCE_GLYPH}</g>`,
+    // dye + force: the droplet with two speed lines behind it
+    `<g class="ic-dye" transform="translate(3.6 1.6) scale(.86)">${DYE_GLYPH}</g>` +
+    `<g class="ic-force"><path d="M2.5 11.5h5M3.5 15.5h4.5"/></g>`,
     `<g class="ic-dye">${DYE_GLYPH}</g>`,
     `<g class="ic-force">${FORCE_GLYPH}</g>`,
-    '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16M10 5v7M15 12v7"/>',
+    WALL_GLYPH,
 ];
+
+/** tool variant icons: a glyph shrunk toward the top left, with a solid badge
+ * in the bottom right corner, outlined in the background color so it reads
+ * on top of the glyph. */
+const with_badge = (base:string, b:string) => `<g transform="scale(.8)">${base}</g>${b}`;
+/** a small marker-style eraser (body + lighter tip), for every erase mode. */
+const BADGE_ERASER = '<g class="eraser" transform="translate(18.2 18.4) rotate(-40)">' +
+    '<rect class="er-body" x="-5.4" y="-2.7" width="10.8" height="5.4" rx="1.3"/>' +
+    '<rect class="er-tip" x="-5.4" y="-2.7" width="3.6" height="5.4" rx="1.3"/></g>';
+/** a map pin: a geyser is a source placed on the canvas. */
+const PIN = (x:number, y:number, s:number, cls:string) =>
+    `<g class="pin ${cls}" transform="translate(${x} ${y}) scale(${s})"><path d="M0 7.5S-4.2 3.2-4.2 0a4.2 4.2 0 0 1 8.4 0C4.2 3.2 0 7.5 0 7.5z"/><circle cy="0" r="1.5"/></g>`;
+const BADGE_PIN = PIN(18.4, 15.6, 1, "badge-pin");
+/** straight wall line: a segment with its two ends. */
+const LINE_GLYPH = (cls:string) => `<g class="${cls}"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/></g>`;
+const BADGE_LINE = '<g class="line-badge"><path class="halo" d="M14 22l7.5-7.5"/><path d="M14 22l7.5-7.5"/>' +
+    '<circle cx="14" cy="22" r="1.7"/><circle cx="21.5" cy="14.5" r="1.7"/></g>';
+
+/** brush / geysers / erase geysers, for the dye, force and dye + force tools. */
+function geyser_variants(id:mouse_mode_t, icon:string, name:string, key:string, push:boolean): ToolVariant[] {
+    const place = push ? "drag to place and aim, click one to edit" : "click to place, click one to edit";
+    return [
+        { icon, tip:`${name} brush  [${key}]`, tip_touch:`${name} brush`, pick:() => ui_select_tool(id, 0) },
+        { icon:with_badge(icon, BADGE_PIN), tip:`${name} geysers: ${place}  [${key} again]`,
+          tip_touch:`${name} geysers: ${place.replace(/click/g, "tap")}`, pick:() => ui_select_tool(id, 1) },
+        // erasing geysers: a big pin (in the tool's color) with the eraser
+        { icon:with_badge(PIN(12, 9.5, 1.35, push ? "pin-force" : "pin-dye"), BADGE_ERASER), tip:`Erase ${name.toLowerCase()} geysers  [${key} twice more · or Shift]`,
+          tip_touch:`Erase ${name.toLowerCase()} geysers`, pick:() => ui_select_tool(id, 2) },
+    ];
+}
+
+/** picks a tool in one of its modes (the flyout buttons). Wall: 0 draw,
+ * 1 erase, 2 straight lines, 3 straight erase. Others: 0 brush, 1 geysers,
+ * 2 erase geysers. */
+function ui_select_tool(id:mouse_mode_t, variant:number) {
+    if (mouse.mode !== id) ui_toolbar.pick(id);
+    if (id === MOUSE_MODE_WALL) {
+        obstacle_splat.erase_mode = variant % 2 === 1;
+        obstacle_splat.line_mode = variant >= 2;
+    } else {
+        geysers.mode = variant;
+        geysers.drag = null;
+        if (variant !== 1) ui_geyser_editor_close();
+    }
+    ui_sync_tool(true);
+}
+
+/** the mode a tool is in, as its variant index (see ui_select_tool). */
+function tool_variant(id:mouse_mode_t) {
+    if (id !== mouse.mode) return 0;
+    if (id === MOUSE_MODE_WALL) return (obstacle_splat.line_mode ? 2 : 0) + (obstacle_splat.erase_mode ? 1 : 0);
+    return geysers.mode;
+}
 
 const FORCE_ICON =
     '<path d="M13 5.5c-1.8-1-3.4 0-3.7 2L8 19c-.3 1.6-1.4 2.300-2.800 1.600"/>' +
@@ -44,7 +100,26 @@ const FORCE_ICON =
     '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>';
 
 /** a vector field arrow. */
-const ARROWS_ICON = '<path d="M6 18L18 6M18 6h-7.5M18 6v7.5"/>';
+/** velocity arrows toggle: arrows from the center out to the edge of an
+ * invisible slanted ellipse, so they are longer along its long axis. */
+const ARROWS_ICON = (() => {
+    const N = 8, A = 11, B = 7, tilt = -35 * Math.PI / 180;    // semi-axes, long axis up-right
+    const START = 1.2, H = 2.1, HA = 0.6;                       // gap at the center, head length / half angle
+    const f = (v:number) => v.toFixed(2);
+    let d = "";
+    for (let k = 0; k < N; k++) {
+        const phi = (k + 0.5) * 2 * Math.PI / N;
+        const c = Math.cos(phi - tilt), s = Math.sin(phi - tilt);
+        const r = 1 / Math.hypot(c / A, s / B);                  // center to the ellipse along phi
+        const tx = Math.cos(phi), ty = Math.sin(phi);
+        const hx = 12 + tx * r, hy = 12 + ty * r;
+        const ca = Math.cos(HA), sa = Math.sin(HA);
+        d += `M${f(12 + tx * START)} ${f(12 + ty * START)}L${f(hx)} ${f(hy)}` +
+             `M${f(hx - H * (tx * ca - ty * sa))} ${f(hy - H * (ty * ca + tx * sa))}L${f(hx)} ${f(hy)}` +
+             `L${f(hx - H * (tx * ca + ty * sa))} ${f(hy - H * (ty * ca - tx * sa))}`;
+    }
+    return `<path d="${d}" stroke-width="1.4"/>`;
+})();
 
 const BORDERS_ICON =
     '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
@@ -69,19 +144,154 @@ let wall_ring: HTMLElement, wall_line: HTMLElement, force_ring: HTMLElement,
     wall_ring_halo: HTMLElement, force_ring_halo: HTMLElement,
     /** erase highlight currently shown on the wall tool / ring. */
     _shown_erasing = false;
-/** shows the wall tool's effective mode (sticky erase, inverted by shift) on
- * its button, the brush ring and the status bar. Returns whether it erases. */
+/** shows the tool's effective mode on its button, the brush ring and the
+ * status bar: the wall tool's sticky erase (inverted by shift), and the
+ * geyser modes of the force / dye + force tools (shift: erase geysers).
+ * Returns whether the brush erases. */
+let _shown_tool = "";
 function ui_sync_tool(force = false) {
-    const erasing = mouse.mode === MOUSE_MODE_WALL && wall_erasing();
-    if (force || erasing !== _shown_erasing) {
+    const geyser = geysers_active();
+    const erasing = mouse.mode === MOUSE_MODE_WALL ? wall_erasing() : geysers_erasing();
+    const lines = mouse.mode === MOUSE_MODE_WALL && obstacle_splat.line_mode;
+    const key = `${mouse.mode}|${erasing}|${geyser}|${lines}|${geysers.mode}|${obstacle_splat.erase_mode}`;
+    if (force || key !== _shown_tool) {
+        _shown_tool = key;
         _shown_erasing = erasing;
-        ui_toolbar?.mark(MOUSE_MODE_WALL, "erase", erasing);   // unset while the toolbar constructor picks
+        // unset while the toolbar constructor picks
+        ui_toolbar?.mark(MOUSE_MODE_WALL, "erase", mouse.mode === MOUSE_MODE_WALL && erasing);
+        ui_toolbar?.mark(MOUSE_MODE_WALL, "line", lines);
+        for (const id of [MOUSE_MODE_DYE_FORCE, MOUSE_MODE_DYE, MOUSE_MODE_FORCE, MOUSE_MODE_WALL] as mouse_mode_t[])
+            ui_toolbar?.show_variant(id, tool_variant(id));
+        for (const id of [MOUSE_MODE_DYE, MOUSE_MODE_FORCE, MOUSE_MODE_DYE_FORCE] as mouse_mode_t[]) {
+            ui_toolbar?.mark(id, "geyser", geyser && mouse.mode === id && !erasing);
+            ui_toolbar?.mark(id, "erase", geyser && mouse.mode === id && erasing);
+        }
         wall_ring.classList.toggle("erase", erasing);
+        force_ring.classList.toggle("erase", erasing);
         wall_ring.classList.toggle("dye", mouse.mode !== MOUSE_MODE_WALL);
         wall_ring.classList.toggle("wall", mouse.mode === MOUSE_MODE_WALL);
-        ui_status.tool(erasing ? "Wall (erase)" : MODE2STR[mouse.mode]);
+        document.getElementById("geysers")?.classList.toggle("active", geyser);
+        ui_status.tool(mouse.mode === MOUSE_MODE_WALL
+            ? `Wall${erasing || lines ? ` (${[erasing ? "erase" : "", lines ? "lines" : ""].filter(Boolean).join(", ")})` : ""}`
+            : geyser ? `${MODE2STR[mouse.mode]} (${erasing ? "erase geysers" : "geysers"})` : MODE2STR[mouse.mode]);
     }
     return erasing;
+}
+
+/** screen pixel position of a uv point. */
+function uv_screen(uv:ArrayLike<number>): [number, number] {
+    return [canvas_rect.left + uv[0] * canvas_rect.width, canvas_rect.bottom - uv[1] * canvas_rect.height];
+}
+
+/** geyser marker tick: points where it pushes, longer when it pushes harder. */
+function geyser_tick(x:number, y:number, angle:number, strength:number) {
+    const a = angle * Math.PI / 180, len = 8 + 32 * Math.min(1, strength / GEYSER_MAX_STRENGTH * 2);
+    return [x + Math.cos(a) * len, y - Math.sin(a) * len];
+}
+
+/** geyser markers (a dot and a tick along its push) and the aim arrow of a
+ * drag in progress. Markers are rebuilt only when something changed. */
+let _geyser_marks = "";
+function ui_update_geysers() {
+    const d = geysers.drag, aim = !!d && d.moved && !d.erase && mouse.mode !== MOUSE_MODE_DYE;
+    const key = `${geysers.version}|${canvas_rect.width}|${canvas_rect.height}|${canvas_rect.left}|${canvas_rect.top}|${geysers.editing ? geysers.list.indexOf(geysers.editing) : -1}`;
+    const g = document.getElementById("geysers"), arrow = document.getElementById("geyser-aim");
+    if (arrow) {
+        arrow.style.display = aim ? "" : "none";
+        if (aim) {
+            const [x1, y1] = uv_screen(d!.from), [x2, y2] = uv_screen(mouse.uv_pos);
+            const [, strength] = geyser_aim(d!.from, mouse.uv_pos);
+            for (const l of arrow.querySelectorAll("line")) {
+                l.setAttribute("x1", String(x1)); l.setAttribute("y1", String(y1));
+                l.setAttribute("x2", String(x2)); l.setAttribute("y2", String(y2));
+            }
+            const t = arrow.querySelector("text")!;
+            t.setAttribute("x", String(x2 + 10)); t.setAttribute("y", String(y2 - 10));
+            t.textContent = `${strength.toFixed(2)} h/s`;
+        }
+    }
+    if (key === _geyser_marks || !g) return;
+    _geyser_marks = key;
+    g.innerHTML = geysers.list.map(q => {
+        const [x, y] = uv_screen(q.uv), [tx, ty] = geyser_tick(x, y, q.angle, q.strength);
+        const line = (c:string) => q.force ? `<line class="${c}" x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}"/>` : "";
+        const fill = q.dye ? ` style="fill:${css_color(q.color)}"` : "";
+        const sel = q === geysers.editing ? " selected" : "";
+        return line("geyser-tick") + line("geyser-tick in") +
+               `<circle class="geyser-dot${sel}"${fill} cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${sel ? 5 : 3.5}"/>`;
+    }).join("");
+}
+
+/** 0..1 rgb -> css rgb(). */
+function css_color(c:ArrayLike<number>) {
+    const v = (x:number) => Math.round(255 * Math.min(1, Math.max(0, x)));
+    return `rgb(${v(c[0])},${v(c[1])},${v(c[2])})`;
+}
+
+/** the geyser editor: a small panel next to the clicked geyser, built from the
+ * inspector's rows (not saved). Dye + force geysers show the color row too. */
+let geyser_editor: HTMLElement, geyser_section: UI_SECTION, geyser_dye_title: HTMLElement, geyser_force_title: HTMLElement;
+const GEYSER_PLACEHOLDER: geyser_t = {
+    uv: new Float32Array(2), angle: 0, strength: 0, color: [1, 1, 1], rgba: new Float16Array(4), dye: true, force: true,
+    dye_radius: 0, dye_strength: 0, velocity_radius: 0, velocity_strength: 0,
+};
+function ui_init_geyser_editor() {
+    const el = geyser_editor = document.createElement("div");
+    el.id = "geyser-editor";
+    el.hidden = true;
+    isolate(el);
+    const head = document.createElement("div");
+    head.className = "ge-head";
+    head.innerHTML = `<span>GEYSER</span><button type="button" class="ge-del" title="Delete this geyser">delete</button><button type="button" class="ge-close" title="Close [Esc]">×</button>`;
+    head.querySelector(".ge-close")!.addEventListener("click", () => ui_geyser_editor_close());
+    head.querySelector(".ge-del")!.addEventListener("click", () => {
+        const g = geysers.editing;
+        if (!g) return;
+        geysers.list = geysers.list.filter(q => q !== g);
+        geysers.version++;
+        ui_geyser_editor_close();
+    });
+
+    const target = () => geysers.editing ?? GEYSER_PLACEHOLDER;
+    const changed = () => geyser_changed(target());
+    const s = geyser_section = new UI_SECTION("geyser");
+    geyser_dye_title = s.subtitle("dye");
+    s.color({label:"color", tooltip:"$Color$ {Dye this geyser blends in.}", obj:target, key:"color", visible:() => target().dye, onPick:changed});
+    geyser_force_title = s.subtitle("force");
+    s.vec2({label:"center", tooltip:"$Center$ {Where the geyser sits, as a fraction of the screen width (x) and height (y), from the bottom left.} $$Values$$ {[0 – 1] on both axes.}", obj:target, key:"uv", min:0, max:1, step:0.001, onChange:changed});
+    s.slider({label:"direction", tooltip:"$Direction$ {Where it pushes, in degrees.} $$Values$$ {[0]: right\n[90]: up\n[±180]: left\n[-90]: down}", obj:target, key:"angle", min:-180, max:180, step:1, unit:{symbol:"°", name:"degrees"}, visible:() => target().force, onChange:changed});
+    s.slider({label:"strength", tooltip:`$Strength$ {Speed of the flow it keeps up, in screen heights per second. Set by the length of the drag that placed it.} $$Values$$ {[0.2 – 1]: gentle stream\n[1 – 3]: jet\n[${GEYSER_MAX_STRENGTH}]: max}`, obj:target, key:"strength", min:0, max:GEYSER_MAX_STRENGTH, step:0.01, unit:{symbol:"h/s", name:"screen heights per second"}, visible:() => target().force, onChange:changed});
+
+    el.append(head, s.body);
+    $("hud").appendChild(el);
+}
+
+function ui_geyser_editor_open(g:geyser_t) {
+    geysers.editing = g;
+    geysers.version++;                       // marks the selected one
+    geyser_dye_title.hidden = !g.dye;
+    geyser_force_title.hidden = !g.force;     // a dye geyser's center row then sits under "dye"
+    geyser_section.refresh();
+    geyser_editor.hidden = false;
+    // beside the geyser, kept on screen
+    const [x, y] = uv_screen(g.uv), r = geyser_editor.getBoundingClientRect();
+    const left = x + 16 + r.width > innerWidth - 8 ? x - 16 - r.width : x + 16;
+    const top = Math.min(Math.max(8, y - 16), innerHeight - r.height - 8);
+    geyser_editor.style.left = `${Math.max(8, left)}px`;
+    geyser_editor.style.top = `${top}px`;
+}
+
+/** after the geyser changed from outside the editor (a re-aim drag). */
+function ui_geyser_editor_refresh() {
+    if (geysers.editing) geyser_section.refresh();
+}
+
+function ui_geyser_editor_close() {
+    if (!geysers.editing && geyser_editor?.hidden) return;
+    geysers.editing = null;
+    geysers.version++;
+    if (geyser_editor) geyser_editor.hidden = true;
+    (document.activeElement as HTMLElement | null)?.blur();
 }
 
 /** a dark copy drawn under a ring, so it reads on any background. */
@@ -106,14 +316,15 @@ function set_ring(ring: HTMLElement, halo: HTMLElement, on: boolean, x = 0, y = 
 
 /** solid ring: dye or wall brush. dashed ring: force brush. */
 function ui_update_mouse_overlay() {
+    ui_update_geysers();
     const wall = mouse.mode === MOUSE_MODE_WALL;
     const erasing = ui_sync_tool();
     const on = mouse.over_canvas && !mouse.m2_down;
-    const line_on = on && wall && mouse.m1_down && keyboard.ctrl_down;
+    const line_on = wall_line_pending();     // also while the pointer is past the edge
     const solid_on = on && mouse.mode !== MOUSE_MODE_FORCE;
     const force_on = on && (mouse.mode & MOUSE_MODE_FORCE) !== 0;
     wall_line.style.display = line_on ? "" : "none";
-    if (!on) {
+    if (!on && !line_on) {
         set_ring(wall_ring, wall_ring_halo, false);
         set_ring(force_ring, force_ring_halo, false);
         return;
@@ -164,6 +375,7 @@ function init_ui() {
     ui_bounds    = new UI_BOUNDS();
     ui_status    = new UI_STATUS();
     ui_inspector = new UI_INSPECTOR();
+    ui_init_geyser_editor();
 
     brushes_capture_defaults();
     brushes_read();   // brush defaults in texels of the grid just built
@@ -306,13 +518,37 @@ function init_ui() {
         [MOUSE_MODE_FORCE]:"Force brush",
         [MOUSE_MODE_WALL]:"Wall brush"
     };
+    const W = MOUSE_MODE_WALL;
     ui_toolbar = new UI_TOOLBAR<mouse_mode_t>([
-        { id:MOUSE_MODE_DYE_FORCE, tip:"Dye + Force", icon:TOOL_ICONS[0], key:"q" },
-        { id:MOUSE_MODE_DYE, tip:"Dye", icon:TOOL_ICONS[1], key:"w" },
-        { id:MOUSE_MODE_FORCE, tip:"Force", icon:TOOL_ICONS[2], key:"e" },
-        { id:MOUSE_MODE_WALL, tip:"Wall · pick again: erase · Shift: invert · Ctrl: straight line", icon:TOOL_ICONS[3], key:"r", separator:true },
+        { id:MOUSE_MODE_DYE_FORCE, icon:TOOL_ICONS[0], key:"q",
+          tip:"Dye + Force · pick again: geysers · again: erase geysers",
+          tip_touch:"Dye + Force · tap again: geysers · again: erase geysers · swipe right: all modes",
+          variants:geyser_variants(MOUSE_MODE_DYE_FORCE, TOOL_ICONS[0], "Dye + Force", "Q", true) },
+        { id:MOUSE_MODE_DYE, icon:TOOL_ICONS[1], key:"w",
+          tip:"Dye · pick again: color geysers · again: erase geysers",
+          tip_touch:"Dye · tap again: color geysers · again: erase geysers · swipe right: all modes",
+          variants:geyser_variants(MOUSE_MODE_DYE, TOOL_ICONS[1], "Dye", "W", false) },
+        { id:MOUSE_MODE_FORCE, icon:TOOL_ICONS[2], key:"e",
+          tip:"Force · pick again: geysers · again: erase geysers",
+          tip_touch:"Force · tap again: geysers · again: erase geysers · swipe right: all modes",
+          variants:geyser_variants(MOUSE_MODE_FORCE, TOOL_ICONS[2], "Force", "E", true) },
+        { id:W, icon:TOOL_ICONS[3], key:"r", separator:true,
+          tip:"Wall · pick again: erase · Shift: invert · Ctrl: straight lines",
+          tip_touch:"Wall · tap again: erase · long-press: straight lines · swipe right: all modes",
+          variants:[
+              { icon:TOOL_ICONS[3], tip:"Wall  [R]", tip_touch:"Wall", pick:() => ui_select_tool(W, 0) },
+              { icon:with_badge(TOOL_ICONS[3], BADGE_ERASER), tip:"Erase walls  [R again · or hold Shift]", tip_touch:"Erase walls", pick:() => ui_select_tool(W, 1) },
+              { icon:with_badge(TOOL_ICONS[3], BADGE_LINE), tip:"Straight walls: press, drag, release  [or hold Ctrl]", tip_touch:"Straight walls: press, drag, release", pick:() => ui_select_tool(W, 2) },
+              { icon:with_badge(LINE_GLYPH("line-glyph"), BADGE_ERASER), tip:"Erase in straight lines  [or hold Ctrl + Shift]", tip_touch:"Erase in straight lines", pick:() => ui_select_tool(W, 3) },
+          ],
+          onHold:() => {                   // touch: sticky straight-line mode (ctrl's job on a keyboard)
+              if (mouse.mode !== MOUSE_MODE_WALL) { ui_toolbar.pick(MOUSE_MODE_WALL); obstacle_splat.line_mode = true; }
+              else obstacle_splat.line_mode = !obstacle_splat.line_mode;
+              ui_sync_tool(true);
+          } },
     ], mouse.mode, id => {
-        if (id !== MOUSE_MODE_WALL) obstacle_splat.erase_mode = false;   // leaving the wall tool ends erasing
+        if (id !== MOUSE_MODE_WALL) obstacle_splat.erase_mode = obstacle_splat.line_mode = false;   // leaving the wall tool ends erasing and lines
+        if (id !== mouse.mode) { geysers.mode = 0; ui_geyser_editor_close(); }   // and geyser mode
         ui_inspector.focus(SECTION_OF_TOOL[id]);
         if (mouse.mode === id) { ui_sync_tool(true); return; }
         const prev = mouse.mode;
@@ -322,10 +558,17 @@ function init_ui() {
         ui_visualizer_s.refresh();
     }, id => {
         if (id === MOUSE_MODE_WALL) obstacle_splat.erase_mode = !obstacle_splat.erase_mode;
+        // force / dye + force: brush -> geysers -> erase geysers -> brush
+        if (id !== MOUSE_MODE_WALL) {
+            geysers.mode = (geysers.mode + 1) % 3;
+            geysers.drag = null;
+            if (geysers.mode !== 1) ui_geyser_editor_close();
+        }
     });
 
     ui_force_btn = ui_toolbar.add_toggle({
-        tip: "Force field [F] · hold: edit the field [T]",
+        tip: "Force field [F] · edit the field [T]",
+        tip_touch: "Force field · long-press: edit the field",
         icon: FORCE_ICON, 
         initial: force.is_active, 
         onToggle: ui_set_force_active,
@@ -339,7 +582,8 @@ function init_ui() {
     fluid.display.arrows = saved_flag(ARROWS_KEY) ?? fluid.display.arrows;
 
     ui_borders_btn = ui_toolbar.add_toggle({
-        tip: "Open borders toogle [TAB]",
+        tip: "Open borders [TAB]",
+        tip_touch: "Open borders",
         icon: BORDERS_ICON,
         initial: fluid.open_borders === 0,
         onToggle: (v:boolean) => {

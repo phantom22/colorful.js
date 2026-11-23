@@ -5,7 +5,7 @@ let vao:WebGLVertexArrayObject;
 let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"source_kind", 4>, uniform<"palette_type", 4>, uniform<"blur_type", 4>, uniform<"reference_value", 5>, uniform<"value_rescale_threshold", 5>, uniform<"rescale_factor", 5>]>,
     checkboard_fill_p: shader_program<[uniform<"color_a", 9>, uniform<"color_b", 9>, uniform<"dims", 8>]>,
     curl_velocity_fill_p: shader_program<[uniform<"scale", 5>, uniform<"amp", 5>, uniform<"div_mix", 5>, uniform<"seed", 5>]>,
-    splat_p: shader_program<[uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>]>,
+    splat_p: shader_program<[uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>, uniform<"steps", 5>]>,
     obstacle_splat_p: shader_program<[uniform<"point", 8>, uniform<"prev", 8>, uniform<"brush_radius", 5>, uniform<"outline_width", 5>, uniform<"erase", 5>]>,
     forcefield_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"center_worldpos", 8>, uniform<"window_width", 5>, uniform<"force_strength", 5>, uniform<"dt", 5>]>,
     velocity_advect_p: shader_program<[uniform<"tex_velocity", 7>, uniform<"tex_obstacles", 7>, uniform<"dt", 5>, uniform<"dissipation", 5>]>,
@@ -126,6 +126,7 @@ function init_webgl() {
 
     splat_p = new shader_program("splat", quad_vert, sh_splat, [
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 1),
+        new uniform("steps", GL_FLOAT),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("point", GL_VEC2),
         new uniform("prev", GL_VEC2),

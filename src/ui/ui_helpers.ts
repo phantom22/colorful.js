@@ -99,3 +99,7 @@ function with_unit(row: HTMLElement, input: HTMLInputElement, unit?: UnitDef): H
     wrap.append(input, u);
     return wrap;
 }
+
+/** primary input is touch (phones / tablets): no hover, no keyboard. Used to
+ * skip autofocus (it opens the keyboard) and keyboard hints in tooltips. */
+function is_touch() { return matchMedia("(pointer: coarse)").matches; }

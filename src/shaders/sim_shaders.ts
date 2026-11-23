@@ -224,6 +224,7 @@ uniform vec4 value;         // color or velocity
 uniform float brush_radius; 
 uniform float brush_strength;
 uniform float additive;     // 1.0 or 0.0
+uniform float steps;        // mix mode: w is the blend per 1/60 s, applied over this many of those
 void main() {
     vec2 s  = vec2(ASPECT, 1.0);
     vec2 pa = (v_uv - prev) * s, ba = (point - prev) * s;
@@ -231,6 +232,7 @@ void main() {
     vec2 d = pa - ba * h;                          // distance to the segment
     float w = clamp(exp(-dot(d, d) / brush_radius) * brush_strength, 0.0, 1.0);
     w *= 1.0 - solid(v_uv);
+    if (steps != 1.0) w = 1.0 - pow(1.0 - w, steps);
     
     // additive: blend ONE, ONE                  -> old + w * value
     // mix:      blend ONE, ONE_MINUS_SRC_ALPHA  -> mix(old, value, w)

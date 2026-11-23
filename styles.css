@@ -51,6 +51,28 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 #tools button[data-tip]:hover::after { content: attr(data-tip); position: absolute; left: 44px; white-space: nowrap; padding: 4px 8px;
   background: #15171a; border: 1px solid var(--line); border-radius: 4px; color: var(--text); z-index: 20; }
 #tools hr { width: 70%; margin: 3px auto; border: 0; border-top: 1px solid var(--line); }
+/* tool modes: a row's flyout (hover / swipe right), one button per mode */
+#tools .flyout { position: absolute; left: calc(100% + 6px); display: flex; gap: 2px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; z-index: 15; }
+#tools .flyout[hidden] { display: none; }
+#tools .flyout::before { content: ""; position: absolute; right: 100%; top: 0; bottom: 0; width: 10px; }   /* hover bridge to the row */
+#tools .flyout button.on::before { left: 8px; right: 8px; top: auto; bottom: -3px; width: auto; height: 2px; }
+#tools .flyout button.hot { background: var(--bg2); color: var(--text); border-color: var(--accent); }
+#tools .flyout button[data-tip]:hover::after { left: 0; top: 42px; }
+#tools button.expanded[data-tip]:hover::after { display: none; }   /* the flyout's own tips take over */
+/* variant badges: solid shapes outlined in the background color */
+#tools .eraser rect { stroke: var(--bg); stroke-width: 1.3; paint-order: stroke; }
+#tools .eraser .er-body { fill: #ff7b7b; }
+#tools .eraser .er-tip { fill: #ffd9d3; }
+#tools .pin path { stroke: var(--bg); stroke-width: 1.3; paint-order: stroke; }
+#tools .pin circle { fill: var(--bg); stroke: none; }
+#tools .pin.badge-pin path, #tools .pin.pin-force path { fill: var(--force-c); }
+#tools .pin.pin-dye path { fill: var(--dye-c); }
+#tools .line-badge path { stroke: var(--accent); stroke-width: 2; }
+#tools .line-badge path.halo { stroke: var(--bg); stroke-width: 5; }
+#tools .line-badge circle { fill: var(--accent); stroke: var(--bg); stroke-width: 1.2; paint-order: stroke; }
+#tools .line-glyph path { stroke: var(--accent); }
+#tools .line-glyph circle { fill: var(--accent); stroke: none; }
 
 /* ---------- inspector ---------- */
 #inspector { position: absolute; right: 10px; top: 52px; width: 378px; display: flex; flex-direction: column;
@@ -346,6 +368,31 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 /* wall tool in erase mode (picked again, or shift held), same red as active toggles */
 #tools button.on.erase { color: #ff7b7b; background: #ff7b7b1c; border-color: #ff7b7b55; }
 #tools button.on.erase::before { background: #ff7b7b; }
+/* wall tool in straight-line mode (long-press) */
+#tools button.on.line { border-style: dashed; }
+/* force / dye + force tool in geyser mode (picked again) */
+#tools button.on.geyser { color: var(--force-c); background: color-mix(in srgb, var(--force-c) 12%, transparent); border-color: color-mix(in srgb, var(--force-c) 40%, transparent); }
+#tools button.on.geyser::before { background: var(--force-c); }
+/* geyser markers: faint unless geyser mode is on */
+#geysers { opacity: .35; transition: opacity .15s; }
+#geysers.active { opacity: 1; }
+.geyser-dot { fill: #f2f4f7; stroke: #0b0c0e; stroke-width: 1.5; }
+.geyser-tick { stroke: #0b0c0e; stroke-width: 4; stroke-linecap: round; }
+.geyser-tick.in { stroke: #f2f4f7; stroke-width: 1.5; }
+.geyser-dot.selected { stroke: var(--force-c); stroke-width: 2; }
+#geyser-aim .geyser-tick.in { stroke: var(--force-c); stroke-width: 2; }
+.geyser-aim-label { font: 11px var(--mono); fill: #f2f4f7; paint-order: stroke; stroke: #0b0c0e; stroke-width: 3px; }
+/* geyser editor: a small panel beside the clicked geyser, using the inspector's rows */
+#geyser-editor { position: absolute; width: 300px; max-width: calc(100vw - 16px); pointer-events: auto; z-index: 20;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px #000a; }
+#geyser-editor[hidden] { display: none; }
+#geyser-editor .ge-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--line);
+  letter-spacing: .16em; color: var(--dim); }
+#geyser-editor .ge-head span { flex: 1; }
+#geyser-editor .ge-head button { background: none; border: 1px solid transparent; border-radius: 3px; color: var(--dim); cursor: pointer; padding: 1px 6px; }
+#geyser-editor .ge-head button:hover { color: var(--text); border-color: var(--line); }
+#geyser-editor .ge-head .ge-del:hover { color: #ff7b7b; border-color: #ff7b7b55; }
+#geyser-editor .body { display: block; padding: 4px 12px 10px; }
 
 #inspector header .hbtns { display: flex; align-items: center; gap: 2px; }
 #inspector header button { display: grid; place-items: center; min-width: 22px; height: 20px; padding: 0; }

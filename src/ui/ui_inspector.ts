@@ -29,9 +29,10 @@ class UI_INSPECTOR {
 
     private init_drawer() {
         this.tab.addEventListener("click", e => { this.stow(!this.stowed); (e.currentTarget as HTMLElement).blur(); });
-        // first visit on a phone: start stowed so the sim is visible
-        const saved = localStorage.getItem("insp_stowed");
-        this.stow(saved !== null ? saved === "1" : matchMedia(INSPECTOR_SMALL_SCREEN).matches);
+        // phones always start stowed, so the sim is visible; elsewhere the last state is kept
+        let saved: string | null = null;
+        try { saved = localStorage.getItem("insp_stowed"); } catch {}
+        this.stow(matchMedia(INSPECTOR_SMALL_SCREEN).matches || saved === "1");
     }
 
     reset_all() {

@@ -36,6 +36,13 @@ class UI_FIELD_COLOR extends UI_FIELD<number[]> {
                 text: () => this.io.get()[i].toFixed(2),
             });
 
+            // typed values (Enter / leaving the box); drag and wheel go through scrub_number
+            input.addEventListener("change", () => {
+                const x = parseFloat(input.value);
+                if (Number.isNaN(x)) return this.refresh_value();
+                const v = this.io.get(); v[i] = x; this.apply(v);
+            });
+
             c.append(a, input);
             comps.appendChild(c);
             this.number_inputs.push(input);
