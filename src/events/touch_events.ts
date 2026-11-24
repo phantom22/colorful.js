@@ -74,8 +74,9 @@ function c_touchmove(e:TouchEvent) {
     e.preventDefault();
     const [x, y, d] = touch_center(e);
 
-    if (e.touches.length === 2 && force.is_active && touch.pinch_dist > 0 && d > 0) {
-        zoom_span(touch.pinch_dist / d);    // spread fingers: smaller span, zoom in
+    if (e.touches.length === 2 && touch.pinch_dist > 0 && d > 0) {
+        if (force.is_active) zoom_span(touch.pinch_dist / d);    // spread fingers: smaller span, zoom in
+        else ui_resize_brush(d / touch.pinch_dist);              // field off: spread fingers, bigger brush
         touch.pinch_dist = d;
     }
 
@@ -84,17 +85,20 @@ function c_touchmove(e:TouchEvent) {
         if (Math.hypot(x - touch.pending.x, y - touch.pending.y) <= GEYSER_HOLD_SLOP_PX) return;
         touch_pending_end(true);          // moved: an ordinary stroke from the touch point
     }
-    process_client_pos(x, y);
-    if (touch.multi && e.touches.length !== 2) return;
+    if (touch.multi && e.touches.length !== 2) return;   // the finger left after a pinch: nothing
+    process_client_pos(x, y);                            // two fingers: their midpoint (rings sit there)
+    mouse.over_canvas = true;
     move();
 }
 
 /** event called on canvas touchend and touchcancel */
 function c_touchend(e:TouchEvent) {
     e.preventDefault();
-    if (e.touches.length < 2 && mouse.m2_down) {
-        release(2);
+    if (e.touches.length < 2) {
+        if (mouse.m2_down) release(2);
         touch.pinch_dist = 0;
+        // one finger left after a pinch / pan: it doesn't draw, so no rings
+        if (touch.multi) mouse.over_canvas = false;
     }
     if (e.touches.length === 0) {
         if (touch.pending) touch_pending_end(true);   // a quick tap: the ordinary tap

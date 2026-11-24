@@ -25,7 +25,48 @@ class UI_INSPECTOR {
         try { localStorage.setItem("insp_stowed", v ? "1" : "0"); } catch {}
     }
 
+    /** touch: a swipe right on the inspector slides it out. It follows the
+     * finger; released past SWIPE_CLOSE_PX (or flicked) it stows, else it
+     * snaps back. Not from sliders, text boxes or scrubbed numbers: they own
+     * their horizontal drags. */
+    private init_swipe() {
+        const SWIPE_CLOSE_PX = 70, START_PX = 12;
+        let id = -1, x0 = 0, y0 = 0, t0 = 0, dx = 0, dragging = false;
+        this.root.addEventListener("pointerdown", e => {
+            if (e.pointerType === "mouse" || this.stowed || id !== -1) return;
+            if ((e.target as HTMLElement).closest("input, select, textarea, #insp-tab, #insp-resize")) return;
+            id = e.pointerId; x0 = e.clientX; y0 = e.clientY; t0 = performance.now(); dx = 0; dragging = false;
+        });
+        this.root.addEventListener("pointermove", e => {
+            if (e.pointerId !== id) return;
+            const mx = e.clientX - x0, my = e.clientY - y0;
+            if (!dragging) {
+                if (Math.abs(my) > START_PX && Math.abs(my) > Math.abs(mx)) { id = -1; return; }   // a vertical scroll
+                if (mx < START_PX || mx < Math.abs(my) * 1.5) return;
+                dragging = true;
+                this.root.setPointerCapture(id);
+                this.root.classList.add("no-anim");
+            }
+            dx = Math.max(0, mx);
+            this.root.style.transform = `translateX(${dx}px)`;
+        });
+        const end = (e: PointerEvent) => {
+            if (e.pointerId !== id) return;
+            id = -1;
+            if (!dragging) return;
+            dragging = false;
+            const flick = dx > 30 && dx / Math.max(1, performance.now() - t0) > 0.6;   // px per ms
+            this.root.classList.remove("no-anim");
+            void this.root.offsetWidth;                      // animate from where the finger left it
+            this.root.style.transform = "";
+            if (dx > SWIPE_CLOSE_PX || flick) this.stow(true);
+        };
+        this.root.addEventListener("pointerup", end);
+        this.root.addEventListener("pointercancel", end);
+    }
+
     private init_drawer() {
+        this.init_swipe();
         this.tab.addEventListener("click", e => { this.stow(!this.stowed); (e.currentTarget as HTMLElement).blur(); });
         // phones always start stowed, so the sim is visible; elsewhere the last state is kept
         let saved: string | null = null;

@@ -1,7 +1,8 @@
 // UI interaction tests: desktop (mouse + keyboard), phone (touch), the real
 // minified bundle, and the scene features (undo, saving, help overlay).
 //
-//   npm run build && node scripts/uitest.mjs
+//   npm run build && node scripts/uitest.mjs            (all suites)
+//   node scripts/uitest.mjs touch minified              (only these)
 //
 // Most suites load bundle/index.js (unminified: top-level names are globals,
 // so app state can be inspected) in place of bundle/index.min.js. The
@@ -361,17 +362,47 @@ async function phone() {
     await app.longPress(gx, gy, 800); s = await state(app);
     check("no hover arming on touch", !s.hover);
 
+    // toolbar tip hides at once on a canvas touch
+    const tl = await page.locator("#tools > button").nth(2).boundingBox();
+    await app.tap(tl.x + tl.width / 2, tl.y + tl.height / 2); await sleep(80);
+    await app.touch("touchStart", [[cx, cy + 150]]); await sleep(20);
+    check("toolbar tip hides when the canvas is touched", await page.evaluate(() => document.querySelector(".tb-tip").hidden));
+    await app.touch("touchEnd");
+    // pinch with the field off resizes the brush, rings between the fingers
+    await page.evaluate(() => { if (force.is_active) { ui_set_force_active(false); ui_force_btn.set(false, false); } ui_select_tool(MOUSE_MODE_DYE, 0); });
+    const r0 = await page.evaluate(() => brushes.dye_radius);
+    await app.touch("touchStart", [[cx - 50, cy + 100], [cx + 50, cy + 100]]);
+    for (let i = 1; i <= 6; i++) { await app.touch("touchMove", [[cx - 50 - i * 8, cy + 100], [cx + 50 + i * 8, cy + 100]]); await sleep(16); }
+    await app.frames(2);
+    const pr = await page.evaluate(() => { const r = document.getElementById("wall-ring"); return { r: brushes.dye_radius, shown: r.style.display !== "none", cx: +r.getAttribute("cx"), cy: +r.getAttribute("cy") }; });
+    check("pinch (field off) grows the brush", pr.r > r0, `${r0} -> ${pr.r}`);
+    check("ring sits between the fingers", pr.shown && Math.abs(pr.cx - cx) < 2 && Math.abs(pr.cy - (cy + 100)) < 2, JSON.stringify(pr));
+    await app.touch("touchEnd");
+    // swipe right on the inspector closes it
+    const tab = await page.locator("#insp-tab").boundingBox();
+    await app.tap(tab.x + tab.width / 2, tab.y + tab.height / 2); await sleep(350);
+    const h3 = await page.locator("#inspector h3").first().boundingBox();
+    await app.swipe([h3.x + 60, h3.y + h3.height / 2], [h3.x + 180, h3.y + h3.height / 2 + 4], { steps: 8, ms: 250 }); await sleep(350);
+    check("swipe right on the inspector closes it", await page.evaluate(() => document.getElementById("inspector").classList.contains("stowed")));
+
     // clear menu (bin): opens on tap, three labelled actions, no key chips on touch
     const bin = await page.locator("#tools > button.menu-btn").boundingBox();
     await app.tap(bin.x + bin.width / 2, bin.y + bin.height / 2); await sleep(100);
     const items = await page.evaluate(() => [...document.querySelectorAll("#tools .flyout.menu:not([hidden]) button")].map(b => b.innerText.trim()));
     check("clear menu: 3 labelled items, no keys", items.join("|") === "Clear dye|Clear walls|Clear everything", items.join("|"));
+    // a geyser to clear (close the menu first, place one, reopen)
+    await app.tap(bin.x + bin.width / 2, bin.y + bin.height / 2); await sleep(80);
+    await page.evaluate(() => { ui_select_tool(MOUSE_MODE_DYE, 1); ui_geyser_editor_close(); });
+    await app.tap(cx + 60, cy - 60); await app.frames(2);
+    await page.evaluate(() => { ui_geyser_editor_close(); ui_select_tool(MOUSE_MODE_DYE, 0); });
+    const nBefore = (await state(app)).n;
+    await app.tap(bin.x + bin.width / 2, bin.y + bin.height / 2); await sleep(100);
     const ce = await page.locator("#tools .flyout.menu button").nth(2).boundingBox();
     await app.tap(ce.x + ce.width / 2, ce.y + ce.height / 2); await app.frames(3);
-    s = await state(app); check("Clear everything clears geysers, toast offers undo", s.n === 0 && /Undo/.test(await page.evaluate(() => document.getElementById("toast").innerText)));
+    s = await state(app); check("Clear everything clears geysers, toast offers undo", nBefore > 0 && s.n === 0 && /Undo/.test(await page.evaluate(() => document.getElementById("toast").innerText)), `n ${nBefore} -> ${s.n}`);
     const ub = await page.locator("#toast button").boundingBox();
     await app.tap(ub.x + ub.width / 2, ub.y + ub.height / 2); await app.frames(2);
-    check("toast Undo brings geysers back", (await state(app)).n > 0);
+    check("toast Undo brings geysers back", (await state(app)).n === nBefore, `${nBefore} -> ${(await state(app)).n}`);
 
     check("no page errors (touch)", errs(app).length === 0, errs(app).slice(0, 3).join(" | "));
     await app.close();
@@ -524,10 +555,11 @@ await ph.page.screenshot({ path: path.join(OUT, "help-phone.png") });
 await ph.close();
 }
 
-await desktop().catch(e => check("desktop suite crashed", false, e.message.split("\n")[0]));
-await phone().catch(e => check("touch suite crashed", false, e.message.split("\n")[0]));
-await minified().catch(e => check("minified suite crashed", false, e.message.split("\n")[0]));
-await scene_suite().catch(e => check("scene suite crashed", false, e.message.split("\n")[0]));
+// node scripts/uitest.mjs [desktop] [touch] [minified] [scene]: only those suites
+const only = new Set(process.argv.slice(2));
+const SUITES = { desktop, touch: phone, minified, scene: scene_suite };
+for (const [name, fn] of Object.entries(SUITES))
+    if (!only.size || only.has(name)) await fn().catch(e => check(`${name} suite crashed`, false, e.message.split("\n")[0]));
 const bad = results.filter(r => !r.ok);
 console.log(`\n${results.length - bad.length}/${results.length} passed`);
 process.exitCode = bad.length ? 1 : 0;

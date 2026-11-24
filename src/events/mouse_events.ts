@@ -70,7 +70,19 @@ function update_geyser_hover() {
     }, GEYSER_HOVER_MS);
 }
 
+/** time of the last touch / pen contact. Taps also fire emulated mouse
+ * events at the tapped spot (a toolbar button, the inspector): those must not
+ * become the "resting pointer", or every frame would find the canvas not
+ * under it and hide the rings while a finger draws or pinches. */
+let _last_touch = -1e9;
+document.addEventListener("pointerdown", e => {
+    if (e.pointerType === "mouse") return;
+    _last_touch = performance.now();
+    mouse.client_known = false;
+}, true);
+
 function note_pointer(e:MouseEvent) {
+    if (performance.now() - _last_touch < 1000) return;   // emulated by a tap
     mouse.client[0] = e.clientX;
     mouse.client[1] = e.clientY;
     mouse.client_known = true;

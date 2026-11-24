@@ -129,6 +129,11 @@ class UI_TOOLBAR<T extends number> {
         private readonly onPick: (id: T) => void
     ) {
         isolate(this.nav);
+        // touch: a tip never lingers over the canvas or the inspector, any
+        // contact outside the toolbar hides it at once
+        document.addEventListener("pointerdown", e => {
+            if (e.pointerType !== "mouse" && !this.nav.contains(e.target as Node)) this.hide_tip();
+        }, true);
         this.tip_el.className = "tb-tip";
         this.tip_el.hidden = true;
         document.body.appendChild(this.tip_el);

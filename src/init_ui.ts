@@ -382,7 +382,8 @@ function ui_update_mouse_overlay() {
     const pointer = mouse.over_canvas && !mouse.m2_down && !geysers.editing;
     // placing geysers: a click is a point, not a brush, so a ghost marker
     // replaces the rings (erasing keeps the ring: it is the eraser's reach)
-    const placing = geysers_active() && !erasing;
+    const pinching = touch.pinch_dist > 0 && !force.is_active;   // touch: resizing the brush
+    const placing = geysers_active() && !erasing && !pinching;
     ui_update_geyser_ghost(pointer && placing);
     const on = pointer && !placing;
     const line_on = wall_line_pending();     // also while the pointer is past the edge

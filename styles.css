@@ -57,7 +57,9 @@ html, body { overscroll-behavior-x: none; }
 #toast { position: absolute; left: 50%; bottom: 42px; transform: translateX(-50%); z-index: 60; pointer-events: auto;
   display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 14px; max-width: calc(100% - 24px);
   background: #181a1e; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px #0009;
-  color: var(--text); animation: tt-in .12s ease-out; }
+  color: var(--text); animation: toast-in .12s ease-out; }
+/* its own entrance: tt-in would replace the centering translateX(-50%) */
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 4px); } }
 #toast button { padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 4px;
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); cursor: pointer; white-space: nowrap; }
 #toast button:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -141,7 +143,10 @@ html, body { overscroll-behavior-x: none; }
   background: var(--bg); border: 1px solid var(--line); border-radius: 6px; transition: transform .22s ease; }
 /* stowed (I, or the tab): slid off the right edge, past its 10px margin */
 #inspector.stowed { transform: translateX(calc(100% + 10px)); }
-#inspector.no-anim { transition: none; }   /* page load: start in place, don't slide */
+#inspector.no-anim { transition: none; }   /* page load, or following a swipe: no slide animation */
+/* horizontal swipes are ours (swipe right closes it), the browser keeps vertical
+ * scrolling. Also on the body: a scroll container starts its own touch-action chain */
+#inspector, #insp-body { touch-action: pan-y; }
 #inspector header { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line);
   letter-spacing: .16em; color: var(--dim); }
 #inspector header button { background: none; border: 0; cursor: pointer; font-size: 14px; color: var(--dim); }
