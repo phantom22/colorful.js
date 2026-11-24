@@ -41,18 +41,23 @@ function scrub_number(input: HTMLInputElement, o: {
     log?: boolean;               // multiplicative steps for log sliders
 }) {
     input.classList.add("scrub");   // gets the drag cursor, see styles.css
-    let active = false, moved = false, y0 = 0, v0 = 0, dead = 3;
+    // the drag surface: the box plus its unit label when it has one (see
+    // with_unit, which runs first), so a finger on the unit scrubs too
+    const host: HTMLElement = input.parentElement?.classList.contains("unit-wrap") ? input.parentElement : input;
+    host.classList.add("scrub-host");
+    let active = false, moved = false, y0 = 0, v0 = 0, dead = 3, on_unit = false;
     const mult = (e: { shiftKey: boolean; altKey: boolean }) => e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
 
     // keep the first click from focusing the box, so a drag doesn't start a text edit
     input.addEventListener("mousedown", e => { if (document.activeElement !== input) e.preventDefault(); });
-    input.addEventListener("pointerdown", e => {
+    host.addEventListener("pointerdown", e => {
         if (e.button !== 0 || o.frozen() || document.activeElement === input) return;
         active = true; moved = false; y0 = e.clientY; v0 = o.get();
+        on_unit = e.target !== input;                    // the unit: a tap shows its tooltip, no keyboard
         dead = e.pointerType === "mouse" ? 3 : 6;         // fingers wobble more before a tap
-        input.setPointerCapture(e.pointerId);
+        host.setPointerCapture(e.pointerId);
     });
-    input.addEventListener("pointermove", e => {
+    host.addEventListener("pointermove", e => {
         if (!active) return;
         if (!moved && Math.abs(e.clientY - y0) < dead) return;    // dead zone, so clicks / taps stay clicks
         if (!moved) input.classList.add("scrubbing");      // accent outline while the drag changes the value
@@ -64,11 +69,11 @@ function scrub_number(input: HTMLInputElement, o: {
         if (!active) return;
         active = false;
         input.classList.remove("scrubbing");
-        input.releasePointerCapture(e.pointerId);
-        if (!moved) { input.focus(); input.select(); }
+        host.releasePointerCapture(e.pointerId);
+        if (!moved && !on_unit) { input.focus(); input.select(); }
     };
-    input.addEventListener("pointerup", end);
-    input.addEventListener("pointercancel", end);
+    host.addEventListener("pointerup", end);
+    host.addEventListener("pointercancel", end);
 
     // wheel steps the value, only while the box is focused
     input.addEventListener("wheel", e => {
@@ -95,7 +100,8 @@ function with_unit(row: HTMLElement, input: HTMLInputElement, unit?: UnitDef): H
 
     const u = document.createElement("i");
     u.textContent = unit.symbol;
-    u.addEventListener("click", () => input.focus());
+    // mouse: a click on the unit edits the value; touch: a tap only shows its tooltip
+    u.addEventListener("click", e => { if ((e as PointerEvent).pointerType !== "touch" && (e as PointerEvent).pointerType !== "pen") input.focus(); });
     if (unit.name) UI_TOOLTIP.attach(u, `{${unit.name}}`);
 
     wrap.append(input, u);

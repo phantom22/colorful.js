@@ -501,7 +501,14 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 
 .row input[type=number].scrub:not(:focus) { cursor: ns-resize; }   /* only inputs with drag scrubbing */
 /* touch: a vertical drag on a scrub field scrubs instead of scrolling the inspector */
-.row input[type=number].scrub { touch-action: none; }
+.row input[type=number].scrub, .row .scrub-host, .row .scrub-host i { touch-action: none; }
+/* touch: finger-sized rows and number boxes (the desktop 18px boxes are easy to miss,
+ * and a miss scrolls the inspector instead of scrubbing) */
+@media (pointer: coarse) {
+  .row { height: 34px; }
+  .row input[type=number] { height: 28px; }
+  .row .swatch { width: 26px; height: 26px; }
+}
 /* while a drag scrubs the value: accent outline and glow on the box, and the
  * row's label lights up too (on touch the finger covers the box) */
 .row input[type=number].scrubbing { border-color: var(--accent); color: var(--accent);
