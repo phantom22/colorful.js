@@ -159,8 +159,10 @@ function scene_save(sync = false) {
             else localStorage.setItem(SCENE_KEY, JSON.stringify(data));
         } catch {}
     };
-    // the walls: R8, read back as RGBA (always readable), red channel kept
+    // the walls: R8, read back as RGBA (always readable), red channel kept.
+    // Where reads are falsified (readback_ok) only the geysers are saved
     const rgba = new Uint8Array(w * h * 4);
+    if (!readback_ok) { write(rgba); return; }
     if (!sync) { read_pixels_async(obstacles_fbo, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba, write); return; }
     gl.bindFramebuffer(gl.FRAMEBUFFER, obstacles_fbo);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);

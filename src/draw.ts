@@ -205,7 +205,7 @@ function sim_busy() {
 
 /** after a sim step: every IDLE_CHECK_STEPS steps, starts a still check. */
 function idle_tick() {
-    if (++idle.steps < IDLE_CHECK_STEPS || idle.pending) return;
+    if (!readback_ok || ++idle.steps < IDLE_CHECK_STEPS || idle.pending) return;
     idle.steps = 0;
     if (sim_busy()) { idle.still = 0; return; }
     const last = reduce_field(velocity_tex[velocity_read], KIND_VECTOR), gen = idle.gen;
@@ -213,7 +213,12 @@ function idle_tick() {
     read_pixels_async(last.fbo, 1, 1, gl.RGBA, gl.FLOAT, idle.stats, s => {
         if (gen !== idle.gen) return;            // woken meanwhile
         idle.pending = false;
-        idle.still = s[2] < IDLE_SPEED ? idle.still + 1 : 0;
+        // (sum of speed², fluid cell count, max speed): a real read has a whole
+        // count within the grid and an rms no higher than the max. Anything
+        // else is a bad read, never a still flow
+        const [sum, count, max] = s, valid = Number.isInteger(count) && count >= 1 &&
+            count <= N1 * N2 && max >= 0 && Math.sqrt(sum / count) <= max * 1.0001 + 1e-6;
+        idle.still = valid && max < IDLE_SPEED ? idle.still + 1 : 0;
         if (idle.still >= IDLE_CHECKS && !sim_busy()) {
             idle.on = true;
             ui_status.idle();

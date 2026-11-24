@@ -211,6 +211,7 @@ function resample(dst:WebGLFramebuffer, w:number, h:number, src:WebGLTexture,
  * texel density changes). No-op when the sizes come out the same. */
 function apply_resolution() {
     if (!velocity_tex) return;   // before init_textures
+    apply_canvas_size();         // the display cap follows the dye resolution
     const ar = canvas_el.height / canvas_el.width,
           s = resolution(eff_sim_resolution(), ar).dims,
           d = resolution(eff_dye_resolution(), ar).dims;

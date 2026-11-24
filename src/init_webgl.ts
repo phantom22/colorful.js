@@ -80,6 +80,7 @@ function init_webgl() {
 
     const ext1 = gl.getExtension("EXT_color_buffer_float");
     if (!ext1) throw "EXT_color_buffer_float is not supported on this hardware";
+    check_readback();
 
     apply_canvas_size();
     const quad = new Float32Array([

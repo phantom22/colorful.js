@@ -151,6 +151,33 @@ function texture_fill(tex_fbo:WebGLFramebuffer, _with:number[]|Float32Array) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+/** false when the browser falsifies pixel reads: Firefox with
+ * privacy.resistFingerprinting (on by default in forks like LibreWolf and
+ * Mullvad Browser) returns noise instead of the real values. Everything that
+ * reads pixels back (idle detection, saving the walls) is off then: noise
+ * read as a still flow froze the sim, read as walls it saved garbage. */
+let readback_ok = true;
+
+/** reads known values back once, see readback_ok. Called by init_webgl. */
+function check_readback() {
+    const t8 = create_texture(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE),
+          tf = create_texture(1, 1, gl.RGBA32F, gl.RGBA, gl.FLOAT),
+          f8 = frame_buffer(t8), ff = frame_buffer(tf);
+    const b = new Uint8Array(4), f = new Float32Array(4), want_f = [1.5, 1234.5, -3.25, 1];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f8);
+    gl.clearBufferfv(gl.COLOR, 0, [0.2, 0.4, 0.6, 0.8]);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, b);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ff);
+    gl.clearBufferfv(gl.COLOR, 0, want_f);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, f);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(f8); gl.deleteFramebuffer(ff);
+    gl.deleteTexture(t8); gl.deleteTexture(tf);
+    readback_ok = [51, 102, 153, 204].every((v, i) => Math.abs(b[i] - v) <= 1) &&
+                  want_f.every((v, i) => f[i] === v);
+    if (!readback_ok) console.warn("Colorful.js: this browser falsifies pixel reads (anti-fingerprinting), idle detection and wall saving are off.");
+}
+
 /** GPU -> CPU reads that don't stall. A plain readPixels into an array waits
  * for the GPU to finish everything queued before it (15 ms at sim 256, 70+ at
  * sim 1024). This one reads into a pixel pack buffer behind a fence, and

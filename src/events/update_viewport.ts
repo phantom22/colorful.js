@@ -18,9 +18,12 @@ const MAX_DISPLAY_PIXELS = 1920 * 1080;
 /** the canvas' CSS size as last applied, see apply_canvas_size. */
 const canvas_css: [number, number] = [0, 0];
 
-/** drawing buffer size for a CSS size, see MAX_DISPLAY_PIXELS. */
+/** drawing buffer size for a CSS size, see MAX_DISPLAY_PIXELS. Never fewer
+ * pixels than the dye resolution has texels (its inspector value, not the
+ * dynamic one): finer dye drawn into a smaller buffer loses its detail. */
 function canvas_buffer_size(w:number, h:number): [number, number] {
-    const s = Math.min(1, Math.sqrt(MAX_DISPLAY_PIXELS / (w * h)));
+    const max = Math.max(MAX_DISPLAY_PIXELS, fluid.dye_resolution ** 2),
+          s = Math.min(1, Math.sqrt(max / (w * h)));
     return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
 }
 
