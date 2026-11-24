@@ -34,6 +34,7 @@ class UI_FIELD_COLOR extends UI_FIELD<number[]> {
                 frozen: () => this.is_frozen,
                 base: () => 0.005,                         // channel units per pixel (0..1 range)
                 text: () => this.io.get()[i].toFixed(2),
+                def: () => this.io.def()[i],
             });
 
             // typed values (Enter / leaving the box); drag and wheel go through scrub_number

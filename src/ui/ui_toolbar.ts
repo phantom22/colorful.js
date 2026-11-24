@@ -70,6 +70,19 @@ function touch_tip(tip: string) {
 /** appends " [K]" to the first line of a tip. */
 const tip_with_key = (tip: string, key: string) => tip.replace(/^[^\n]*/, h => `${h}  [${key.toUpperCase()}]`);
 
+/** beside its button, shifted up when it would run off the bottom of the
+ * screen (short landscape phones, menus low in the toolbar). On touch it also
+ * stays above the status bar. */
+function place_flyout(fly: HTMLElement, b: HTMLElement) {
+    let top = b.offsetTop - 5;
+    fly.style.top = `${top}px`;
+    let floor = innerHeight - 6;
+    const st = document.getElementById("status");
+    if (st && is_touch() && st.offsetParent) floor = Math.min(floor, st.getBoundingClientRect().top - 6);
+    const r = fly.getBoundingClientRect(), over = r.bottom - floor;
+    if (over > 0) fly.style.top = `${top - Math.min(over, Math.max(0, r.top - 6))}px`;
+}
+
 /** touch: how long (ms) a tapped button's tip stays up. */
 const TOOLBAR_TIP_TOUCH_MS = 2500;
 
@@ -87,15 +100,21 @@ class UI_TOOLBAR<T extends number> {
     private tip_owner: HTMLElement | null = null;
     private tip_timer = 0;
 
-    /** the tooltip of b: mouse shows it on hover, touch on tap for a moment. */
-    private attach_tip(b: HTMLButtonElement, tip: string, below = false) {
+    /** the tooltip of b: mouse shows it on hover, touch on tap for a moment.
+     * row: a flyout's button; a tap closes the flyout, so its touch tip sits
+     * beside the tool's own button instead of floating where the flyout was. */
+    private attach_tip(b: HTMLButtonElement, tip: string, below = false, row?: HTMLButtonElement) {
         b.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") this.show_tip(b, tip, below); });
         b.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") this.hide_tip(b); });
         b.addEventListener("click", () => {
             if (!this.touch) return;
-            this.show_tip(b, tip, below);
-            clearTimeout(this.tip_timer);
-            this.tip_timer = window.setTimeout(() => this.hide_tip(b), TOOLBAR_TIP_TOUCH_MS);
+            const at = row ?? b;
+            const show = () => {
+                this.show_tip(at, tip, row ? false : below);
+                clearTimeout(this.tip_timer);
+                this.tip_timer = window.setTimeout(() => this.hide_tip(at), TOOLBAR_TIP_TOUCH_MS);
+            };
+            if (row) setTimeout(show); else show();   // after the flyout has closed
         });
     }
 
@@ -140,7 +159,9 @@ class UI_TOOLBAR<T extends number> {
         for (const it of items) {
             if (it.separator) this.nav.appendChild(document.createElement("hr"));
             const b = document.createElement("button");
-            this.attach_tip(b, this.touch ? (it.tip_touch ?? touch_tip(it.tip)) : it.key ? tip_with_key(it.tip, it.key) : it.tip);
+            // touch: a tool's tap picks it (a second one opens its modes), no tip in the way
+            if (!(this.touch && it.variants))
+                this.attach_tip(b, this.touch ? (it.tip_touch ?? touch_tip(it.tip)) : it.key ? tip_with_key(it.tip, it.key) : it.tip);
             b.innerHTML = `<svg viewBox="0 0 24 24">${it.icon}</svg>`;
             if (it.variants) { this.add_flyout(it.id, b, it.variants); b.classList.add("has-modes"); }
             // touch: a long-press shows the tool's modes (no swipe: the toolbar
@@ -175,7 +196,7 @@ class UI_TOOLBAR<T extends number> {
         fly.hidden = true;
         variants.forEach(v => {
             const vb = document.createElement("button");
-            this.attach_tip(vb, this.touch ? (v.tip_touch ?? touch_tip(v.tip)) : v.tip, true);
+            this.attach_tip(vb, this.touch ? (v.tip_touch ?? touch_tip(v.tip)) : v.tip, true, b);
             vb.innerHTML = `<svg viewBox="0 0 24 24">${v.icon}</svg>`;
             vb.addEventListener("click", e => { e.stopPropagation(); v.pick(); this.close_flyout(); vb.blur(); });
             fly.appendChild(vb);
@@ -196,8 +217,8 @@ class UI_TOOLBAR<T extends number> {
         if (this.open_row !== null && this.open_row !== id) this.close_flyout();
         const row = this.rows.get(id), b = this.buttons.get(id);
         if (!row || !b) return;
-        row.fly.style.top = `${b.offsetTop - 5}px`;
         row.fly.hidden = false;
+        place_flyout(row.fly, b);
         b.classList.add("expanded");
         this.hide_tip(b);
         this.open_row = id;
@@ -280,8 +301,8 @@ class UI_TOOLBAR<T extends number> {
             b.blur();
             if (!menu.hidden) { close(); return; }
             this.close_flyout();
-            menu.style.top = `${b.offsetTop - 5}px`;
             menu.hidden = false;
+            place_flyout(menu, b);
             b.classList.add("expanded");
             this.hide_tip(b);
             document.addEventListener("pointerdown", outside, true);

@@ -223,7 +223,9 @@ class UI_FIELD_GLSL extends UI_FIELD<string> {
         w.hidden = true;
         w.innerHTML = `
         <header>
-            ${this.o.library ? '<button class="lib" title="Browse saved and default fields">▾</button>' : ""}
+            ${this.o.library ? `<button class="lib" title="Open the library: your saved fields and the defaults" aria-haspopup="listbox">` +
+                `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M8 5v14"/><path d="M12.5 5.8l3.6-1 3.9 14.3-3.6 1z"/></svg>` +
+                `<span>Library</span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button>` : ""}
             <input class="title" spellcheck="false" maxlength="60" title="Click to rename">
             <span class="unsaved" hidden>(unsaved)</span>
             <button class="compile" data-state="idle" title="Ctrl+S">

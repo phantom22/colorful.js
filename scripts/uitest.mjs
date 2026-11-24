@@ -307,6 +307,49 @@ async function phone() {
     check("tap shows toolbar tip", tipShown);
     await sleep(2700);
     check("touch tip auto-hides", await page.evaluate(() => document.querySelector(".tb-tip").hidden));
+    // a tool tap just picks the tool: no "tap again" tip in the way
+    const t1 = await page.locator("#tools > button").nth(1).boundingBox();
+    await app.tap(t1.x + t1.width / 2, t1.y + t1.height / 2); await sleep(100);
+    check("tool tap shows no tip", await page.evaluate(() => document.querySelector(".tb-tip").hidden));
+
+    // the view button: page dots (one per view, the current one big), no arrow
+    {
+        const d = await page.evaluate(() => { const ds = [...document.querySelectorAll("#view-btn .dots span")]; const on = ds.findIndex(x => x.classList.contains("on"));
+            return { n: ds.length, on, cur: ui_views.picked, shown: getComputedStyle(document.querySelector("#view-btn .dots")).display !== "none", arrow: getComputedStyle(document.querySelector("#view-btn i")).display };
+        });
+        check("view button shows page dots on touch", d.shown && d.n === 5 && d.on === d.cur && d.arrow === "none", JSON.stringify(d));
+        const vb = await page.locator("#view-btn").boundingBox(), vy = vb.y + vb.height / 2, vx = vb.x + vb.width / 2;
+        const before = await page.evaluate(() => ui_views.picked);
+        await app.drag([[vx - 30, vy]], [[vx + 20, vy]], { ms: 200, steps: 8 }); await sleep(100);
+        const after = await page.evaluate(() => { const ds = [...document.querySelectorAll("#view-btn .dots span")]; return { cur: ui_views.picked, on: ds.findIndex(x => x.classList.contains("on")) }; });
+        check("swipe moves the big dot with the view", after.cur !== before && after.on === after.cur, JSON.stringify({ before, ...after }));
+        await page.evaluate(v => ui_views.pick(v), before);
+    }
+
+    // a picked mode's tip sits beside its tool's row, not where the flyout was
+    const wb = await page.locator("#tools > button").nth(3).boundingBox(), wc = [wb.x + wb.width / 2, wb.y + wb.height / 2];
+    await app.tap(...wc); await sleep(100); await app.tap(...wc); await sleep(150);
+    const eb = await page.locator("#tools .flyout:not([hidden]) button").nth(1).boundingBox();
+    await app.tap(eb.x + eb.width / 2, eb.y + eb.height / 2); await sleep(150);
+    const mt = await page.evaluate(() => { const t = document.querySelector(".tb-tip"); const r = t.getBoundingClientRect(); return { vis: !t.hidden, l: r.left, mid: r.top + r.height / 2, text: t.textContent }; });
+    check("mode tip glued to its tool row", mt.vis && mt.l < wb.x + wb.width + 20 && Math.abs(mt.mid - wc[1]) < 4, JSON.stringify({ ...mt, row: wc }));
+    await app.tap(...[vp.width / 2, vp.height / 2]); await sleep(100);
+    await page.evaluate(() => ui_select_tool(MOUSE_MODE_DYE, 0));
+
+    // phone landscape: the toolbar is a rail on the left edge, inside the screen,
+    // and the clear menu (low in it) stays on screen too
+    for (const [w, h] of [[852, 393], [740, 330]]) {
+        await page.setViewportSize({ width: w, height: h }); await app.frames(3);
+        const nb = await page.evaluate(() => { const r = document.getElementById("tools").getBoundingClientRect(); return { l: r.left, t: r.top, b: r.bottom, h: innerHeight }; });
+        check(`toolbar fits ${w}x${h}`, nb.l === 0 && nb.t >= 0 && nb.b <= nb.h, JSON.stringify(nb));
+        const bin = await page.locator("#tools > button.menu-btn").boundingBox();
+        await app.tap(bin.x + bin.width / 2, bin.y + bin.height / 2); await sleep(100);
+        const mb = await page.evaluate(() => { const m = document.querySelector("#tools .flyout.menu"); const r = m.getBoundingClientRect(); return { vis: !m.hidden, t: r.top, b: r.bottom, h: innerHeight, st: document.getElementById("status").getBoundingClientRect().top }; });
+        check(`clear menu on screen, above the status bar ${w}x${h}`, mb.vis && mb.t >= 0 && mb.b <= mb.st, JSON.stringify(mb));
+        await app.tap(w / 2, h / 2); await sleep(100);
+    }
+    await page.setViewportSize(vp); await app.frames(3);
+    await page.evaluate(() => { geysers.list = []; geysers.version++; });
 
     const c0 = (await state(app)).center;
     await app.drag([[cx - 40, cy], [cx + 40, cy]], [[cx - 40, cy + 80], [cx + 40, cy + 80]]);
@@ -363,7 +406,7 @@ async function phone() {
     check("no hover arming on touch", !s.hover);
 
     // toolbar tip hides at once on a canvas touch
-    const tl = await page.locator("#tools > button").nth(2).boundingBox();
+    const tl = await page.locator("#tools > button.toggle").nth(1).boundingBox();
     await app.tap(tl.x + tl.width / 2, tl.y + tl.height / 2); await sleep(80);
     await app.touch("touchStart", [[cx, cy + 150]]); await sleep(20);
     check("toolbar tip hides when the canvas is touched", await page.evaluate(() => document.querySelector(".tb-tip").hidden));
@@ -381,6 +424,27 @@ async function phone() {
     // swipe right on the inspector closes it
     const tab = await page.locator("#insp-tab").boundingBox();
     await app.tap(tab.x + tab.width / 2, tab.y + tab.height / 2); await sleep(350);
+    // a tap on a unit (a finger wobbles a little) shows its tooltip, no keyboard
+    const unb = await page.locator("#inspector .unit-wrap i").first().boundingBox();
+    await app.drag([[unb.x + unb.width / 2, unb.y + unb.height / 2]], [[unb.x + unb.width / 2 + 2, unb.y + unb.height / 2 + 3]], { ms: 80, steps: 3 }); await sleep(150);
+    const ut = await page.evaluate(() => ({ tt: !document.querySelector(".tt").hidden, focus: document.activeElement.tagName }));
+    check("unit tap shows its tooltip, no keyboard", ut.tt && ut.focus !== "INPUT", JSON.stringify(ut));
+    // touch scrub has a detent at the default: it holds for a bit of travel,
+    // values continue smoothly past it, and coming back lands on it again
+    {
+        const box = await page.evaluate(() => { const i = [...document.querySelectorAll("#inspector .row input.scrub")].find(i => { const r = i.getBoundingClientRect(); return r.top > 80 && r.bottom < innerHeight - 80 && !i.closest(".row").classList.contains("frozen"); }); i.id ||= "snap-probe"; const r = i.getBoundingClientRect(); return { id: i.id, x: r.x + r.width / 2, y: r.y + r.height / 2, v: i.value }; });
+        const val = () => page.evaluate(id => ({ v: document.getElementById(id).value, snapped: document.getElementById(id).classList.contains("snapped") }), box.id);
+        await app.touch("touchStart", [[box.x, box.y]]);
+        const seq = [];
+        for (const dy of [4, 8, 12, 16, 30, 60, 30, 10, 4]) { await app.touch("touchMove", [[box.x, box.y + dy]]); await sleep(30); seq.push(await val()); }
+        await app.touch("touchEnd"); await sleep(50);
+        const at = i => seq[i].v === box.v;
+        check("detent holds the default for a short drag", at(1) && at(2) && seq[2].snapped, JSON.stringify(seq.slice(0, 3)));
+        check("past the detent the value moves", !at(5) && !seq[5].snapped, JSON.stringify(seq[5]));
+        check("coming back lands on the default", at(7) && at(8) && seq[8].snapped, JSON.stringify(seq.slice(6)));
+        check("detent cue cleared after the drag", !(await val()).snapped);
+        check("scrub ends at the default", (await val()).v === box.v, JSON.stringify({ start: box.v, end: (await val()).v }));
+    }
     const h3 = await page.locator("#inspector h3").first().boundingBox();
     await app.swipe([h3.x + 60, h3.y + h3.height / 2], [h3.x + 180, h3.y + h3.height / 2 + 4], { steps: 8, ms: 250 }); await sleep(350);
     check("swipe right on the inspector closes it", await page.evaluate(() => document.getElementById("inspector").classList.contains("stowed")));

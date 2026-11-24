@@ -25,6 +25,7 @@ class UI_FIELD_FLOAT extends UI_FIELD<number> {
             get: () => this.io.get(), apply: v => this.apply(v), frozen: () => this.is_frozen,
             base: () => this.o.speed ?? (this.o.int ? 1 : this.o.step ?? 10 ** -this.decimals),
             text: () => this.io.get().toFixed(this.decimals),
+            def: () => this.io.def(),
         });
     }
 

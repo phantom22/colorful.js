@@ -34,6 +34,7 @@ class UI_FIELD_SLIDER extends UI_FIELD<number> {
             base: () => this.o.int ? 1 : this.o.step ?? 10 ** -this.decimals(),
             text: () => this.io.get().toFixed(this.decimals()),
             log: this.o.log,
+            def: () => this.io.def(),
         });
     }
 

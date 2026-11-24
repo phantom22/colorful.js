@@ -9,7 +9,7 @@ class UI_VIEW_SELECT<T extends number> {
     private readonly btn = $("view-btn");
     private readonly list = $("view-list");
     private readonly $name = $("view-name");
-    private readonly items = new Map<T, { name: string; li: HTMLLIElement }>();
+    private readonly items = new Map<T, { name: string; li: HTMLLIElement; dot: HTMLElement }>();
     private current: T;
 
     constructor(
@@ -18,13 +18,22 @@ class UI_VIEW_SELECT<T extends number> {
     ) {
         isolate(this.root);
         const keys = new Map<string, T>();
+        // touch: page dots under the name, one per view, the current one big:
+        // says the button can be swiped through (the list arrow is hidden there)
+        const dots = document.createElement("span");
+        dots.className = "dots";
+        dots.setAttribute("aria-hidden", "true");
+        this.$name.parentElement!.appendChild(dots);
+        if (is_touch()) this.root.classList.add("touch");
 
         for (const it of items) {
             const li = document.createElement("li");
             li.innerHTML = `<span>${it.name}</span>${it.key ? `<kbd>${it.key}</kbd>` : ""}`;
             li.addEventListener("click", () => { this.pick(it.id); this.close(); });
             this.list.appendChild(li);
-            this.items.set(it.id, { name: it.name, li });
+            const dot = document.createElement("span");
+            dots.appendChild(dot);
+            this.items.set(it.id, { name: it.name, li, dot });
             if (it.key) keys.set(it.key.toLowerCase(), it.id);
         }
 
@@ -85,6 +94,7 @@ class UI_VIEW_SELECT<T extends number> {
         this.current = id;
         this.items.forEach((v, k) => {
             v.li.classList.toggle("on", k === id);
+            v.dot.classList.toggle("on", k === id);
             if (k === id) this.$name.textContent = v.name;
         });
         if (notify) this.onPick(id);
