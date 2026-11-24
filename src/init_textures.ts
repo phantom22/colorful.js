@@ -262,6 +262,14 @@ function resize_simulation(old_w:number, old_h:number, new_w:number, new_h:numbe
     for (const t of old.textures) gl.deleteTexture(t);
     for (const f of old.fbos) gl.deleteFramebuffer(f);
 
+    // geysers are in screen fractions: move them like the walls (sh_resample)
+    if (uv_scale[0] !== 1 || uv_scale[1] !== 1) {
+        for (const g of geysers.list)
+            for (let i = 0; i < 2; i++) g.uv[i] = (g.uv[i] - 0.5) / uv_scale[i] + 0.5;
+        geysers.list = geysers.list.filter(g => g.uv[0] >= 0 && g.uv[0] <= 1 && g.uv[1] >= 0 && g.uv[1] <= 1);
+        geysers.version++;
+    }
+
     obstacle_splat.next_is_start = splat.next_is_start = true;
     ui_update_bounds();
     ui_sync_brushes();

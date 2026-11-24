@@ -20,6 +20,7 @@ let ui_toolbar: UI_TOOLBAR<mouse_mode_t>,
 
     ui_force_btn: { set: (on: boolean, notify?: boolean) => void; toggle: () => void; readonly on: boolean; },
     ui_borders_btn: { set: (on: boolean, notify?: boolean) => void; toggle: () => void; readonly on: boolean; },
+    ui_arrows_btn: { set: (on: boolean, notify?: boolean) => void; toggle: () => void; readonly on: boolean; },
     ui_fluid_bg: UI_FIELD_COLOR,
 
     ui_field_glsl: UI_FIELD_GLSL;
@@ -60,14 +61,20 @@ const BADGE_LINE = '<g class="line-badge"><path class="halo" d="M14 22l7.5-7.5"/
 
 /** brush / geysers / erase geysers, for the dye, force and dye + force tools. */
 function geyser_variants(id:mouse_mode_t, icon:string, name:string, key:string, push:boolean): ToolVariant[] {
-    const place = push ? "drag to place and aim, click one to edit" : "click to place, click one to edit";
+    const lname = name.toLowerCase();
+    const how = push
+        ? ["Drag to place and aim one", "Click one to edit it", "Drag from one to re-aim it"]
+        : ["Click to place one", "Click one to edit it", "Drag one to move it"];
+    const tap = (l:string) => l.replace(/Click/g, "Tap");
     return [
-        { icon, tip:`${name} brush  [${key}]`, tip_touch:`${name} brush`, pick:() => ui_select_tool(id, 0) },
-        { icon:with_badge(icon, BADGE_PIN), tip:`${name} geysers: ${place}  [${key} again]`,
-          tip_touch:`${name} geysers: ${place.replace(/click/g, "tap")}`, pick:() => ui_select_tool(id, 1) },
+        { icon, tip:`${name} brush  [${key}]\nWheel: brush size\n[G] geysers · hold [Shift] to erase them\nRest on a geyser: click edits, right-click deletes`,
+          tip_touch:`${name} brush\nLong-press a geyser to edit it`, pick:() => ui_select_tool(id, 0) },
+        { icon:with_badge(icon, BADGE_PIN), tip:[`${name} geysers  [G]`, ...how, "Hold [Shift] to erase", "[G] or [Esc]: back to the brush"].join("\n"),
+          tip_touch:[`${name} geysers`, ...how.map(tap)].join("\n"), pick:() => ui_select_tool(id, 1) },
         // erasing geysers: a big pin (in the tool's color) with the eraser
-        { icon:with_badge(PIN(12, 9.5, 1.35, push ? "pin-force" : "pin-dye"), BADGE_ERASER), tip:`Erase ${name.toLowerCase()} geysers  [${key} twice more · or Shift]`,
-          tip_touch:`Erase ${name.toLowerCase()} geysers`, pick:() => ui_select_tool(id, 2) },
+        { icon:with_badge(PIN(12, 9.5, 1.35, push ? "pin-force" : "pin-dye"), BADGE_ERASER),
+          tip:`Erase ${lname} geysers\nSticky: every press erases\nOr hold [Shift] in geyser mode`,
+          tip_touch:`Erase ${lname} geysers`, pick:() => ui_select_tool(id, 2) },
     ];
 }
 
@@ -87,6 +94,31 @@ function ui_select_tool(id:mouse_mode_t, variant:number) {
     ui_sync_tool(true);
 }
 
+/** scales the current tool's brush (the wheel, when the force field is off,
+ * has nothing to zoom). Dye + force scales both radii, keeping their ratio;
+ * goes through the inspector sliders, so limits, saving and the ring follow. */
+function ui_resize_brush(factor:number) {
+    // plain property access, not brushes[key]: the minifier renames these
+    // properties, a string key would read undefined (NaN radius)
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    const [dye, push, wall] = ui_brush_fields;
+    if (mouse.mode === MOUSE_MODE_WALL) { wall.apply(brushes.wall_radius * factor); return; }
+    if (mouse.mode & MOUSE_MODE_DYE) dye.apply(brushes.dye_radius * factor);
+    if (mouse.mode & MOUSE_MODE_FORCE) push.apply(brushes.force_radius * factor);
+}
+
+/** G: geyser mode on / off for the current tool. The wall tool has no
+ * geysers, so there G switches to dye + force geysers. */
+function ui_toggle_geysers() {
+    if (mouse.mode === MOUSE_MODE_WALL) { ui_select_tool(MOUSE_MODE_DYE_FORCE, 1); return; }
+    ui_select_tool(mouse.mode, geysers.mode === 0 ? 1 : 0);
+}
+
+/** Esc with nothing to close: back to the current tool's plain brush. */
+function ui_plain_brush() {
+    ui_select_tool(mouse.mode, 0);
+}
+
 /** the mode a tool is in, as its variant index (see ui_select_tool). */
 function tool_variant(id:mouse_mode_t) {
     if (id !== mouse.mode) return 0;
@@ -99,31 +131,34 @@ const FORCE_ICON =
     '<path d="M5.500 11.500h7"/>' +
     '<path d="M15.500 13.500l4.500 5.500m0-5.500l-4.500 5.500" stroke-width="1.400"/>';
 
-/** a vector field arrow. */
-/** velocity arrows toggle: arrows from the center out to the edge of an
- * invisible slanted ellipse, so they are longer along its long axis. */
+/** velocity arrows toggle: three staggered arrows, a flow that fans out
+ * (up-right, right, down-right). */
 const ARROWS_ICON = (() => {
-    const N = 8, A = 11, B = 7, tilt = -35 * Math.PI / 180;    // semi-axes, long axis up-right
-    const START = 1.2, H = 2.1, HA = 0.6;                       // gap at the center, head length / half angle
+    const L = 9, H = 3, HA = 0.65;              // arrow length, head length / half angle
     const f = (v:number) => v.toFixed(2);
     let d = "";
-    for (let k = 0; k < N; k++) {
-        const phi = (k + 0.5) * 2 * Math.PI / N;
-        const c = Math.cos(phi - tilt), s = Math.sin(phi - tilt);
-        const r = 1 / Math.hypot(c / A, s / B);                  // center to the ellipse along phi
-        const tx = Math.cos(phi), ty = Math.sin(phi);
-        const hx = 12 + tx * r, hy = 12 + ty * r;
+    for (const [x, y, a] of [[8, 6, -0.6], [16, 12, -0.05], [8, 18, 0.5]]) {   // center, angle (radians, y down)
+        const tx = Math.cos(a), ty = Math.sin(a);
+        const hx = x + tx * L / 2, hy = y + ty * L / 2;
         const ca = Math.cos(HA), sa = Math.sin(HA);
-        d += `M${f(12 + tx * START)} ${f(12 + ty * START)}L${f(hx)} ${f(hy)}` +
+        d += `M${f(x - tx * L / 2)} ${f(y - ty * L / 2)}L${f(hx)} ${f(hy)}` +
              `M${f(hx - H * (tx * ca - ty * sa))} ${f(hy - H * (ty * ca + tx * sa))}L${f(hx)} ${f(hy)}` +
              `L${f(hx - H * (tx * ca + ty * sa))} ${f(hy - H * (ty * ca - tx * sa))}`;
     }
-    return `<path d="${d}" stroke-width="1.4"/>`;
+    return `<path d="${d}"/>`;
 })();
 
-const BORDERS_ICON =
-    '<path d="M4 4h5M15 4h5"/>' + '<path d="M4 20h5M15 20h5"/>' +
-    '<path d="M4 4v5M4 15v5"/>' + '<path d="M20 4v5M20 15v5"/>';
+/** clear menu: a bin. */
+const CLEAR_ICON = '<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12M10.5 11v5M13.5 11v5"/>';
+
+/** controls overlay toggle: a question mark. */
+const HELP_ICON = '<path d="M9 9.2a3 3 0 1 1 4.4 2.66c-.86.46-1.4 1.1-1.4 2.04v.6"/><path d="M12 18.2v.1" stroke-width="2.2"/>';
+
+/** fullscreen toggle: four corner brackets. */
+const FULLSCREEN_ICON = '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>';
+
+/** closed borders toggle: a closed square (the edges are walls). */
+const BORDERS_ICON = '<rect x="4" y="4" width="16" height="16" rx="1.5"/>';
 
 /** splat weight the brush ring is drawn at. */
 const RING_WEIGHT = 0.1;
@@ -193,8 +228,14 @@ function geyser_tick(x:number, y:number, angle:number, strength:number) {
  * drag in progress. Markers are rebuilt only when something changed. */
 let _geyser_marks = "";
 function ui_update_geysers() {
-    const d = geysers.drag, aim = !!d && d.moved && !d.erase && mouse.mode !== MOUSE_MODE_DYE;
-    const key = `${geysers.version}|${canvas_rect.width}|${canvas_rect.height}|${canvas_rect.left}|${canvas_rect.top}|${geysers.editing ? geysers.list.indexOf(geysers.editing) : -1}`;
+    const d = geysers.drag, aim = !!d && d.moved && !d.erase && !geyser_drag_moves(d);
+    // the geyser a click would edit gets a bold outline: in geyser mode the
+    // one under the pointer (at once, not while erasing or dragging),
+    // elsewhere the one hovered long enough (geysers.hover)
+    const hl = geysers_active()
+        ? (mouse.over_canvas && !geysers.drag && !geysers_erasing() ? geyser_at(mouse.uv_pos) : null)
+        : geysers.hover;
+    const key = `${geysers.version}|${canvas_rect.width}|${canvas_rect.height}|${canvas_rect.left}|${canvas_rect.top}|${geysers.editing ? geysers.list.indexOf(geysers.editing) : -1}|${hl ? geysers.list.indexOf(hl) : -1}`;
     const g = document.getElementById("geysers"), arrow = document.getElementById("geyser-aim");
     if (arrow) {
         arrow.style.display = aim ? "" : "none";
@@ -217,8 +258,11 @@ function ui_update_geysers() {
         const line = (c:string) => q.force ? `<line class="${c}" x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}"/>` : "";
         const fill = q.dye ? ` style="fill:${css_color(q.color)}"` : "";
         const sel = q === geysers.editing ? " selected" : "";
-        return line("geyser-tick") + line("geyser-tick in") +
-               `<circle class="geyser-dot${sel}"${fill} cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${sel ? 5 : 3.5}"/>`;
+        const bold = q === hl;
+        return `<g class="geyser${bold ? " hover" : ""}">` + line("geyser-tick") + line("geyser-tick in") +
+               `<circle class="geyser-halo" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(sel ? 7 : 5.5) + (bold ? 2.5 : 0)}"/>` +
+               `<circle class="geyser-dot${sel}"${fill} cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${sel ? 5 : 3.5}"/>` +
+               `</g>`;
     }).join("");
 }
 
@@ -245,11 +289,7 @@ function ui_init_geyser_editor() {
     head.innerHTML = `<span>GEYSER</span><button type="button" class="ge-del" title="Delete this geyser">delete</button><button type="button" class="ge-close" title="Close [Esc]">×</button>`;
     head.querySelector(".ge-close")!.addEventListener("click", () => ui_geyser_editor_close());
     head.querySelector(".ge-del")!.addEventListener("click", () => {
-        const g = geysers.editing;
-        if (!g) return;
-        geysers.list = geysers.list.filter(q => q !== g);
-        geysers.version++;
-        ui_geyser_editor_close();
+        if (geysers.editing) geyser_delete(geysers.editing);
     });
 
     const target = () => geysers.editing ?? GEYSER_PLACEHOLDER;
@@ -314,12 +354,37 @@ function set_ring(ring: HTMLElement, halo: HTMLElement, on: boolean, x = 0, y = 
     }
 }
 
-/** solid ring: dye or wall brush. dashed ring: force brush. */
+/** geyser mode: the marker a click would place, at the pointer (or where a
+ * drag that places one started). Hidden over an existing geyser, whose bold
+ * outline says a click edits it, and while a drag moves / re-aims one. */
+let geyser_ghost: HTMLElement | null = null;
+function ui_update_geyser_ghost(on:boolean) {
+    geyser_ghost ??= document.getElementById("geyser-ghost");
+    if (!geyser_ghost) return;
+    const d = geysers.drag;
+    const at = d ? (d.target || d.erase ? null : d.from) : (geyser_at(mouse.uv_pos) ? null : mouse.uv_pos);
+    if (!on || !at) { geyser_ghost.style.display = "none"; return; }
+    const [x, y] = uv_screen(at);
+    geyser_ghost.style.display = "";
+    for (const c of geyser_ghost.querySelectorAll("circle")) { c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1)); }
+    // the color it would get: the palette color for dye tools, white for force
+    const dot = geyser_ghost.querySelector(".geyser-dot") as SVGElement;
+    dot.style.fill = mouse.mode & MOUSE_MODE_DYE ? css_color(stroke.choosen_palette[stroke.palette_color].fcolor) : "";
+}
+
+/** brush rings (all dashed): dye or wall ring, force ring. */
 function ui_update_mouse_overlay() {
+    sync_pointer_over_canvas();
     ui_update_geysers();
     const wall = mouse.mode === MOUSE_MODE_WALL;
     const erasing = ui_sync_tool();
-    const on = mouse.over_canvas && !mouse.m2_down;
+    // no rings while a geyser is being edited: the editor is the focus then
+    const pointer = mouse.over_canvas && !mouse.m2_down && !geysers.editing;
+    // placing geysers: a click is a point, not a brush, so a ghost marker
+    // replaces the rings (erasing keeps the ring: it is the eraser's reach)
+    const placing = geysers_active() && !erasing;
+    ui_update_geyser_ghost(pointer && placing);
+    const on = pointer && !placing;
     const line_on = wall_line_pending();     // also while the pointer is past the edge
     const solid_on = on && mouse.mode !== MOUSE_MODE_FORCE;
     const force_on = on && (mouse.mode & MOUSE_MODE_FORCE) !== 0;
@@ -341,9 +406,15 @@ function ui_update_mouse_overlay() {
         ? obstacle_splat.radius + (erasing ? 0.045 : 0)
         : gaussian_extent(splat.dye_radius, splat.dye_strength, RING_WEIGHT)));
 
-    set_ring(wall_ring, wall_ring_halo, solid_on, x, y, r);
-    set_ring(force_ring, force_ring_halo, force_on, x, y,
-        Math.max(0.5, gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) * h));
+    if (geysers_active() && erasing) {
+        // erasing geysers: one ring, at the eraser's actual reach
+        set_ring(wall_ring, wall_ring_halo, on, x, y, Math.max(0.5, geyser_erase_reach() * h));
+        set_ring(force_ring, force_ring_halo, false);
+    } else {
+        set_ring(wall_ring, wall_ring_halo, solid_on, x, y, r);
+        set_ring(force_ring, force_ring_halo, force_on, x, y,
+            Math.max(0.5, gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) * h));
+    }
 
     if (line_on) {
         const [ax, ay] = px(mouse.wall_anchor);
@@ -361,6 +432,7 @@ function ui_update_bounds() {
 function ui_set_force_active(on: boolean) {
     if (on === force.is_active) return;
     force.is_active = on;
+    ui_status.show_cursor(on);
     ui_field_s.toggle_visibility();
     ui_bounds.toggle_visibility();
 }
@@ -374,6 +446,7 @@ function init_ui() {
     
     ui_bounds    = new UI_BOUNDS();
     ui_status    = new UI_STATUS();
+    ui_status.show_cursor(force.is_active);
     ui_inspector = new UI_INSPECTOR();
     ui_init_geyser_editor();
 
@@ -409,13 +482,13 @@ function init_ui() {
         if (v !== undefined) store.del(from);
     }
     sim.subtitle("resolution");
-    sim.float({label:"simulation", tooltip:`$Simulation resolution$ {Velocity / pressure grid size. The grid has about res² cells, shaped to the window. Applied on enter, rebuilding the textures (the flow is carried over).} {While [dynamic res.] is on, this row is locked and shows the resolution in use.} {Settings given in texels are tuned at ${SIM_REF_RESOLUTION} and scaled with this, so the flow keeps the same feel: only the detail and the cost change.} $$Values$$ {[64 – 192]: fast, coarse eddies\n[${SIM_RESOLUTION}]: default, balanced\n[512 – 1024]: fine detail\n[> 1536]: very fine, heavy}`, obj:fluid, key:"sim_resolution", min:32, max:2048, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution, frozen:() => fluid.dynamic_resolution ? eff_sim_resolution() : undefined});
-    sim.float({label:"dye", tooltip:`$Dye resolution$ {Dye texture size, about res² texels shaped to the window. Applied on enter, rebuilding the textures (the dye is carried over).} {The diffusion radius is tuned at ${DYE_REF_RESOLUTION} and scaled with this.} $$Values$$ {[128 – 384]: fast, softer\n[${DYE_RESOLUTION}]: default, sharp\n[1024 – 2048]: very sharp\n[4096]: heavy}`, obj:fluid, key:"dye_resolution", min:64, max:4096, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution});
+    sim.float({label:"simulation", tooltip:`$Simulation resolution$ {Velocity / pressure grid size. The grid has about res² cells, shaped to the window. Applied on enter, rebuilding the textures (the flow is carried over).} {While [dynamic res.] is on, this row is locked and shows the resolution in use.} {Settings given in texels are tuned at ${SIM_REF_RESOLUTION} and scaled with this, so the flow keeps the same feel: only the detail and the cost change.} $$Values$$ {[64 – 192]: fast, coarse eddies\n[${SIM_RESOLUTION}]: default, balanced\n[512 – 1024]: fine detail\n[> 1536]: very fine, heavy}`, unit:{symbol:"tx", name:"texels per side, about res² in total"}, obj:fluid, key:"sim_resolution", min:32, max:2048, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution, frozen:() => fluid.dynamic_resolution ? eff_sim_resolution() : undefined});
+    sim.float({label:"dye", tooltip:`$Dye resolution$ {Dye texture size, about res² texels shaped to the window. Applied on enter, rebuilding the textures (the dye is carried over).} {The diffusion radius is tuned at ${DYE_REF_RESOLUTION} and scaled with this.} $$Values$$ {[128 – 384]: fast, softer\n[${DYE_RESOLUTION}]: default, sharp\n[1024 – 2048]: very sharp\n[4096]: heavy}`, unit:{symbol:"tx", name:"texels per side, about res² in total"}, obj:fluid, key:"dye_resolution", min:64, max:4096, int:true, scrub:false, keep_on_reset:true, onChange:apply_resolution});
     sim.slider({label:"target fps", tooltip:() => `$Target fps$ {Simulation steps per second. Each step simulates 1/target s, so the flow moves at the same speed whatever the value: higher is smoother and more accurate, but costs more GPU time per second. Capped at the screen's refresh rate (${pacing.refresh} Hz detected).} $$Values$$ {[30]: half the work, choppier\n[${DEF.target_fps}]: default\n[${pacing.refresh}]: one step per screen refresh}`, obj:renderer, key:"target_fps", min:10, max:() => Math.max(pacing.refresh, saved_target_fps()), int:true, unit:{symbol:"fps", name:"steps per second"}, persist:true});
     sim.toggle({label:"dynamic res.", tooltip:"$Dynamic resolution$ {Lowers the sim and dye resolution (to as little as 40%) while the device can't hold the target fps, and raises them again when it can. The resolutions above are the ceiling. While it is on, the [simulation] row shows the resolution in use.} {Each change rebuilds the textures, a short hitch.}", obj:fluid, key:"dynamic_resolution", int:true, onChange:() => pacing.toggled(), persist:true});
     sim.subtitle("time");
     sim.float({label:"elapsed time", tooltip:"$Elapsed time$ {Elapsed time in seconds.}", obj:renderer, key:"time", min:0.0, step:0.15, unit:{symbol:"s", name:"seconds"}, persist:false, track:false});
-    sim.slider({label:"time scale", tooltip:"$Time scale$ {Multiplies the simulated time that passes per frame.} $$Values$$ {[0]: paused\n[0.1 – 0.9]: slow motion\n[1]: real time\n[1 – 2]: fast forward, less stable}", obj:renderer, key:"time_scale", min:0.0, max:2.0});
+    sim.slider({label:"time scale", tooltip:"$Time scale$ {Multiplies the simulated time that passes per frame.} $$Values$$ {[0]: paused\n[0.1 – 0.9]: slow motion\n[1]: real time\n[1 – 2]: fast forward, less stable}", unit:{symbol:"×", name:"times real time"}, obj:renderer, key:"time_scale", min:0.0, max:2.0});
     sim.subtitle("pressure solve");
     sim.slider({label:"v-cycles", tooltip:`$Pressure solve$ {Multigrid V-cycles per step. Each cycle fixes pressure at every scale at once, so few are needed. One costs about 8 Jacobi passes (at the default smoothing).} $$Values$$ {[0]: no projection, the fluid compresses\n[1]: fast, slightly soft\n[2 – 3]: good quality\n[> 4]: little visible gain}`, obj:fluid, key:"pressure_cycles", min:0, max:8, int:true});
     sim.slider({label:"smoothing", tooltip:`$Smoothing sweeps$ {Jacobi sweeps on every level before and after each coarse correction. More sweeps make each cycle stronger but slower.} $$Values$$ {[1]: cheapest\n[${DEF.smoothing}]: default\n[3 – 6]: helps around thin walls}`, obj:fluid, key:"pressure_smoothing", min:1, max:6, int:true});
@@ -457,7 +530,7 @@ function init_ui() {
     ui_force_brush_s = ui_inspector.section("force brush", () => mouse.mode & MOUSE_MODE_FORCE);
     ui_brush_fields.push(ui_force_brush_s.slider({label:"radius", tooltip:() => `$Force radius$ {Size of the push applied by the brush, in sim texels. Wider pushes survive the pressure projection and carry flow farther.} $$Values$$ {[1 – 10]: sharp, dies quickly\n[${brush_default.force_radius()}]: default\n[> 80]: broad, slow currents}`, obj:brushes, key:"force_radius", def:brush_default.force_radius, unit:{symbol:"tx", name:"texel"}, min:0.5, max:200, step:0.1, log:true, persist:true, onChange:brushes_apply}));
     ui_force_brush_s.slider({label:"strength", tooltip:`$Force strength$ {Scales the push at the center of the brush. The push is added to the existing flow (it doesn't replace it), fading out with the Gaussian.} $$Values$$ {[0 – 0.3]: gentle\n[${DEF.force_strength}]: default\n[0.8 – 1]: full push}`, obj:splat, key:"velocity_strength", min:0, max:1, persist:true});
-    ui_force_brush_s.slider({label:"speed sensitivity", tooltip:"$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", obj:splat, key:"force_scale", min:0, max:2, persist:true});
+    ui_force_brush_s.slider({label:"speed sensitivity", tooltip:"$Speed sensitivity$ {Converts mouse speed into fluid speed.} $$Values$$ {[0]: the brush injects no motion\n[0.2 – 0.5]: normal\n[> 1]: small movements make violent jets}", unit:{symbol:"×", name:"fluid speed per unit of pointer speed"}, obj:splat, key:"force_scale", min:0, max:2, persist:true});
 
     ui_wall_s = ui_inspector.section("wall brush", () => mouse.mode === MOUSE_MODE_WALL);
     ui_brush_fields.push(ui_wall_s.slider({label:"radius", tooltip:() => `$Wall radius$ {Half thickness of the wall stroke, in sim texels. Total thickness is twice this value. The eraser reaches a bit further (+0.045 screen heights) so it clears walls cleanly.} $$Values$$ {[< 3]: leaks\n[${brush_default.wall_radius()}]: default\n[> 30]: big blocks}`, obj:brushes, key:"wall_radius", def:brush_default.wall_radius, unit:{symbol:"tx", name:"texel"}, min:1, max:150, step:0.1, log:true, persist:true, onChange:brushes_apply}));
@@ -482,35 +555,35 @@ function init_ui() {
         }
     });
     ui_field_center = ui_field_s.vec2({label:"center", tooltip:"$Center$ {World coordinates that sit at the middle of the screen. Right-drag pans it.} $$Values$$ {Any value. The corner labels show the result.}", obj:force, key:"center", step:0.01, onChange:ui_update_bounds, persist:true});
-    ui_field_strength = ui_field_s.slider({label:"strength", tooltip:`$Force strength$ {Scales the velocity returned by [get_velocity], in texels/s of the ${SIM_REF_RESOLUTION} reference grid (scaled with the sim resolution).} {Higher values push the fluid harder and hit the speed cap sooner.} $$Values$$ {[1 – 100]: gentle drift\n[100 – 1000]: strong flow\n[> 1000]: saturates [max velocity]}`, obj:force, key:"strength", min:1, max:10000, persist:true});
-    ui_field_span = ui_field_s.slider({label:"window", tooltip:"$Window$ {World width that the screen shows. Mouse wheel zooms it.} $$Values$$ {[0.5 – 5]: zoomed in on the details\n[10 – 40]: a few periods of the field\n[> 100]: whole field in view}", obj:force, key:"span", min:0.5, max:200, log:true, onChange:ui_update_bounds, persist:true});
+    ui_field_strength = ui_field_s.slider({label:"strength", tooltip:`$Force strength$ {Scales the velocity returned by [get_velocity], in texels/s of the ${SIM_REF_RESOLUTION} reference grid (scaled with the sim resolution).} {Higher values push the fluid harder and hit the speed cap sooner.} $$Values$$ {[1 – 100]: gentle drift\n[100 – 1000]: strong flow\n[> 1000]: saturates [max velocity]}`, unit:{symbol:"tx/s", name:`texels per second at the ${SIM_REF_RESOLUTION} reference grid`}, obj:force, key:"strength", min:1, max:10000, persist:true});
+    ui_field_span = ui_field_s.slider({label:"window", tooltip:"$Window$ {World width that the screen shows. Mouse wheel zooms it.} $$Values$$ {[0.5 – 5]: zoomed in on the details\n[10 – 40]: a few periods of the field\n[> 100]: whole field in view}", unit:{symbol:"u", name:"world units"}, obj:force, key:"span", min:0.5, max:200, log:true, onChange:ui_update_bounds, persist:true});
     ui_field_s.separator();
     ui_field_s.subtitle("vector field")
     ui_field_s.toggle({label:"pure field", tooltip:"$Pure field$ {Pulls the velocity back toward the field after the pressure solve, so the picture follows the vector field and the fluid only adds perturbations.} {Off: the field is a plain force and the solver reshapes it.}", obj:force, key:"pure_vector_field", int:true, persist:true});
-    ui_field_s.slider({label:"relaxation", tooltip:`$Relaxation$ {With [pure field] on: how quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field\n[${DEF.relaxation}]: default}`, obj:force, key:"relaxation", min:0.0, max:500.0, visible:() => force.pure_vector_field, persist:true})
+    ui_field_s.slider({label:"relaxation", tooltip:`$Relaxation$ {With [pure field] on: how quickly the velocity returns to the field, in 1/s.} $$Values$$ {[0 – 1]: loose, the fluid dominates\n[2 – 5]: field plus eddies\n[> 15]: practically the raw field\n[${DEF.relaxation}]: default}`, unit:{symbol:"/s", name:"per second"}, obj:force, key:"relaxation", min:0.0, max:500.0, visible:() => force.pure_vector_field, persist:true})
 
     ui_fluid_s = ui_inspector.section("simulation");
     ui_fluid_bg = ui_fluid_s.color(({
         label: "background", tooltip:"$Background$ {Color of the empty fluid. Changing it clears the dye. Locked while a non-dye view is shown.} $$Values$$ {Each channel [0 – 1].}", obj: fluid, key: "bg_arr", onPick: () => {
             color_logarithm(fluid.bg, fluid.bg_arr);
-            renderer.request_color_clear(false, false);
+            renderer.request_color_clear(false, false, true);   // walls and geysers stay
         },
         frozen: () => fluid.display_mode === DISPLAY_DYE ? undefined : fluid.bg_arr,
         persist:true
     }));
     ui_fluid_s.slider({label:"jacobi scale", tooltip:`$Pressure carry-over$ {Fraction of last frame's pressure used as the solver's starting guess. High values converge faster over time.} $$Values$$ {[0 – 0.5]: restarts, needs more v-cycles\n[${DEF.jacobi_scale}]: default\n[1]: never forgets: steadier pressure view, but can add noise to the velocity near closed borders}`, obj:fluid, key:"jacobi_scale", min:0, max:1, persist:true});
     ui_fluid_s.slider({label:"curl strength", tooltip:"$Vorticity confinement$ {Re-injects the swirl lost to numerical blur, so eddies live longer.} $$Values$$ {[0]: smooth, dies quickly\n[5 – 20]: lively\n[> 35]: noisy, can go unstable}", obj:fluid, key:"curl_strength", min:0, max:60, persist:true});
-    ui_fluid_s.slider({label:"velocity decay", tooltip:"$Velocity decay$ {Multiplier applied to the velocity every step. Below 1 acts like friction.} $$Values$$ {[1]: motion never fades\n[0.999 – 0.9999]: slow fade\n[< 0.99]: thick, syrup-like}", obj:fluid, key:"velocity_dissipation", min:0.9, max:1, step:0.0001, persist:true});
-    ui_fluid_s.slider({label:"max velocity", tooltip:`$Max velocity$ {Speed cap in texels/s of the ${SIM_REF_RESOLUTION} reference grid (scaled with the sim resolution, so it is the same speed on screen). It keeps the solver stable.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: lively\n[${DEF.max_velocity}]: default\n[> 3000]: only with a small dt}`, obj:fluid, key:"max_velocity", min:0, max:10000, persist:true});
-    ui_fluid_s.slider({label:"drag", tooltip:`$Drag$ {Quadratic drag: slows fast flow much more than slow flow. The velocity loses drag·(speed / max velocity)² per second, so it only bites near the speed cap.} $$Values$$ {[0]: off\n[${DEF.drag}]: default, barely noticeable\n[1 – 10]: fast jets tame quickly\n[> 100]: hard ceiling well below [max velocity]}`, obj:fluid, key:"drag", min:0, max:1500, persist:true});
-    ui_fluid_s.slider({label:"arrow resolution", tooltip:`$Arrow resolution$ {Number of arrows per screen height (toggle the arrows from the toolbar). The grid cells are square, so the columns follow the window shape.} $$Values$$ {[10 – 15]: coarse, big arrows\n[${DEF.arrow_rows}]: default\n[25 – 30]: dense, small arrows}`, obj:fluid.display, key:"arrow_rows", min:10, max:30, int:true, visible:() => fluid.display.arrows === 1, persist:true});
+    ui_fluid_s.slider({label:"velocity decay", tooltip:"$Velocity decay$ {Multiplier applied to the velocity every step. Below 1 acts like friction.} $$Values$$ {[1]: motion never fades\n[0.999 – 0.9999]: slow fade\n[< 0.99]: thick, syrup-like}", unit:{symbol:"×/step", name:"multiplier per simulation step"}, obj:fluid, key:"velocity_dissipation", min:0.9, max:1, step:0.0001, persist:true});
+    ui_fluid_s.slider({label:"max velocity", tooltip:`$Max velocity$ {Speed cap in texels/s of the ${SIM_REF_RESOLUTION} reference grid (scaled with the sim resolution, so it is the same speed on screen). It keeps the solver stable.} $$Values$$ {[50 – 300]: calm\n[400 – 1500]: lively\n[${DEF.max_velocity}]: default\n[> 3000]: only with a small dt}`, unit:{symbol:"tx/s", name:`texels per second at the ${SIM_REF_RESOLUTION} reference grid`}, obj:fluid, key:"max_velocity", min:0, max:10000, persist:true});
+    ui_fluid_s.slider({label:"drag", tooltip:`$Drag$ {Quadratic drag: slows fast flow much more than slow flow. The velocity loses drag·(speed / max velocity)² per second, so it only bites near the speed cap.} $$Values$$ {[0.01]: practically off\n[${DEF.drag}]: default, barely noticeable\n[1 – 10]: fast jets tame quickly\n[> 100]: hard ceiling well below [max velocity]}`, unit:{symbol:"/s", name:"per second"}, obj:fluid, key:"drag", min:0.01, max:1500, step:0.01, log:true, persist:true});
+    ui_fluid_s.slider({label:"arrow resolution", tooltip:`$Arrow resolution$ {Number of arrows per screen height (toggle the arrows from the toolbar). The grid cells are square, so the columns follow the window shape.} $$Values$$ {[10 – 15]: coarse, big arrows\n[${DEF.arrow_rows}]: default\n[25 – 30]: dense, small arrows}`, unit:{symbol:"/h", name:"arrows per screen height"}, obj:fluid.display, key:"arrow_rows", min:10, max:30, int:true, visible:() => fluid.display.arrows === 1, persist:true});
 
     ui_diffusion_s = ui_inspector.section("diffusion");
-    ui_diffusion_s.slider({label:"base diff.", tooltip:`$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[${DEF.base_diffusion}]: default, crisp, only advection mixes\n[0.5 – 2]: soft\n[> 5]: washes out fast}`, obj:fluid, key:"base_diffusion", min:0, max:10, persist:true});
+    ui_diffusion_s.slider({label:"base diff.", tooltip:`$Base diffusion$ {Rate at which dye blends with its surroundings everywhere, in 1/s.} $$Values$$ {[${DEF.base_diffusion}]: default, crisp, only advection mixes\n[0.5 – 2]: soft\n[> 5]: washes out fast}`, unit:{symbol:"/s", name:"per second"}, obj:fluid, key:"base_diffusion", min:0, max:10, persist:true});
     ui_diffusion_s.slider({label:"curl diff.", tooltip:`$Curl diffusion$ {Extra blending where the flow swirls, like eddy mixing: rate per unit of curl.} $$Values$$ {[0]: off\n[${DEF.curl_diffusion}]: default, swirls soften slowly\n[0.1 – 0.5]: swirls blend\n[> 1]: vortex cores dissolve}`, obj:fluid, key:"curl_diffusion", min:0, max:2, persist:true});
-    ui_diffusion_s.slider({label:"vel. diff.", tooltip:`$Speed diffusion$ {Extra blending proportional to the local speed (rate per texel/s of the ${SIM_REF_RESOLUTION} reference grid). Fast regions easily reach [max diff.], so this mostly decides where the cap applies.} $$Values$$ {[0]: off\n[${DEF.velocity_diffusion}]: default, barely noticeable\n[0.01 – 0.05]: moving dye smears gently\n[> 0.1]: fast dye blends quickly}`, obj:fluid, key:"velocity_diffusion",min:0, max:0.5, persist:true});
-    ui_diffusion_s.slider({label:"max diff.", tooltip:`$Max diffusion$ {Upper limit of the total blending rate, in 1/s.} $$Values$$ {[0]: off, no diffusion at all\n[${DEF.max_diffusion}]: default, slow\n[2 – 10]: noticeable within seconds\n[> 15]: can wash out the dye in under a second}`, obj:fluid, key:"max_diffusion", min:0, max:30, persist:true});
-    ui_diffusion_s.slider({label:"diff. radius", tooltip:`$Diffusion radius$ {Radius of the blending ring, in texels of the ${DYE_REF_RESOLUTION} reference dye grid (scaled with the dye resolution, so it covers the same part of the screen): each step mixes a texel with 8 samples on this ring. Larger rings spread color farther per step.} $$Values$$ {[${DEF.diffusion_radius}]: default\n[1 – 4]: fine, local blending\n[10 – 30]: wide\n[> 40]: very wide soft spread; the 8 taps can show as a faint star}`, obj:fluid, key:"diffusion_texel_radius", min:1, max:51, persist:true});
+    ui_diffusion_s.slider({label:"vel. diff.", tooltip:`$Speed diffusion$ {Extra blending proportional to the local speed (rate per texel/s of the ${SIM_REF_RESOLUTION} reference grid). Fast regions easily reach [max diff.], so this mostly decides where the cap applies.} $$Values$$ {[0]: off\n[${DEF.velocity_diffusion}]: default, barely noticeable\n[0.01 – 0.05]: moving dye smears gently\n[> 0.1]: fast dye blends quickly}`, unit:{symbol:"/tx", name:`per texel: blending rate (1/s) per texel/s of the ${SIM_REF_RESOLUTION} reference grid`}, obj:fluid, key:"velocity_diffusion",min:0, max:0.5, persist:true});
+    ui_diffusion_s.slider({label:"max diff.", tooltip:`$Max diffusion$ {Upper limit of the total blending rate, in 1/s.} $$Values$$ {[0]: off, no diffusion at all\n[${DEF.max_diffusion}]: default, slow\n[2 – 10]: noticeable within seconds\n[> 15]: can wash out the dye in under a second}`, unit:{symbol:"/s", name:"per second"}, obj:fluid, key:"max_diffusion", min:0, max:30, persist:true});
+    ui_diffusion_s.slider({label:"diff. radius", tooltip:`$Diffusion radius$ {Radius of the blending ring, in texels of the ${DYE_REF_RESOLUTION} reference dye grid (scaled with the dye resolution, so it covers the same part of the screen): each step mixes a texel with 8 samples on this ring. Larger rings spread color farther per step.} $$Values$$ {[${DEF.diffusion_radius}]: default\n[1 – 4]: fine, local blending\n[10 – 30]: wide\n[> 40]: very wide soft spread; the 8 taps can show as a faint star}`, unit:{symbol:"tx", name:`texels at the ${DYE_REF_RESOLUTION} reference dye grid`}, obj:fluid, key:"diffusion_texel_radius", min:1, max:51, persist:true});
 
     const SECTION_OF_TOOL: Record<number, string> = {
         [MOUSE_MODE_DYE_FORCE]:"Dye brush",
@@ -521,34 +594,34 @@ function init_ui() {
     const W = MOUSE_MODE_WALL;
     ui_toolbar = new UI_TOOLBAR<mouse_mode_t>([
         { id:MOUSE_MODE_DYE_FORCE, icon:TOOL_ICONS[0], key:"q",
-          tip:"Dye + Force · pick again: geysers · again: erase geysers",
-          tip_touch:"Dye + Force · tap again: geysers · again: erase geysers · swipe right: all modes",
+          tip:"Dye + Force\n[G] geysers · hold [Shift] to erase\nHover for all modes",
+          tip_touch:"Dye + Force\nTap again or long-press: all modes",
           variants:geyser_variants(MOUSE_MODE_DYE_FORCE, TOOL_ICONS[0], "Dye + Force", "Q", true) },
         { id:MOUSE_MODE_DYE, icon:TOOL_ICONS[1], key:"w",
-          tip:"Dye · pick again: color geysers · again: erase geysers",
-          tip_touch:"Dye · tap again: color geysers · again: erase geysers · swipe right: all modes",
+          tip:"Dye\n[G] geysers · hold [Shift] to erase\nHover for all modes",
+          tip_touch:"Dye\nTap again or long-press: all modes",
           variants:geyser_variants(MOUSE_MODE_DYE, TOOL_ICONS[1], "Dye", "W", false) },
         { id:MOUSE_MODE_FORCE, icon:TOOL_ICONS[2], key:"e",
-          tip:"Force · pick again: geysers · again: erase geysers",
-          tip_touch:"Force · tap again: geysers · again: erase geysers · swipe right: all modes",
+          tip:"Force\n[G] geysers · hold [Shift] to erase\nHover for all modes",
+          tip_touch:"Force\nTap again or long-press: all modes",
           variants:geyser_variants(MOUSE_MODE_FORCE, TOOL_ICONS[2], "Force", "E", true) },
         { id:W, icon:TOOL_ICONS[3], key:"r", separator:true,
-          tip:"Wall · pick again: erase · Shift: invert · Ctrl: straight lines",
-          tip_touch:"Wall · tap again: erase · long-press: straight lines · swipe right: all modes",
+          tip:"Wall\nHold [Shift]: erase · [Ctrl]: straight lines\nHover for all modes",
+          tip_touch:"Wall\nTap again or long-press: all modes",
           variants:[
-              { icon:TOOL_ICONS[3], tip:"Wall  [R]", tip_touch:"Wall", pick:() => ui_select_tool(W, 0) },
-              { icon:with_badge(TOOL_ICONS[3], BADGE_ERASER), tip:"Erase walls  [R again · or hold Shift]", tip_touch:"Erase walls", pick:() => ui_select_tool(W, 1) },
-              { icon:with_badge(TOOL_ICONS[3], BADGE_LINE), tip:"Straight walls: press, drag, release  [or hold Ctrl]", tip_touch:"Straight walls: press, drag, release", pick:() => ui_select_tool(W, 2) },
-              { icon:with_badge(LINE_GLYPH("line-glyph"), BADGE_ERASER), tip:"Erase in straight lines  [or hold Ctrl + Shift]", tip_touch:"Erase in straight lines", pick:() => ui_select_tool(W, 3) },
-          ],
-          onHold:() => {                   // touch: sticky straight-line mode (ctrl's job on a keyboard)
-              if (mouse.mode !== MOUSE_MODE_WALL) { ui_toolbar.pick(MOUSE_MODE_WALL); obstacle_splat.line_mode = true; }
-              else obstacle_splat.line_mode = !obstacle_splat.line_mode;
-              ui_sync_tool(true);
-          } },
+              { icon:TOOL_ICONS[3], tip:"Wall  [R]\nWheel: brush size\nHold [Shift]: erase\nHold [Ctrl]: straight lines", tip_touch:"Wall\nLong-press a geyser to edit it", pick:() => ui_select_tool(W, 0) },
+              { icon:with_badge(TOOL_ICONS[3], BADGE_ERASER), tip:"Erase walls\nSticky: every stroke erases\nOr hold [Shift] with the wall brush", tip_touch:"Erase walls", pick:() => ui_select_tool(W, 1) },
+              { icon:with_badge(TOOL_ICONS[3], BADGE_LINE), tip:"Straight walls\nPress, drag, release\nOr hold [Ctrl] with the wall brush", tip_touch:"Straight walls\nPress, drag, release", pick:() => ui_select_tool(W, 2) },
+              { icon:with_badge(LINE_GLYPH("line-glyph"), BADGE_ERASER), tip:"Erase in straight lines\nOr hold [Ctrl] [Shift] with the wall brush", tip_touch:"Erase in straight lines", pick:() => ui_select_tool(W, 3) },
+          ] },
     ], mouse.mode, id => {
-        if (id !== MOUSE_MODE_WALL) obstacle_splat.erase_mode = obstacle_splat.line_mode = false;   // leaving the wall tool ends erasing and lines
-        if (id !== mouse.mode) { geysers.mode = 0; ui_geyser_editor_close(); }   // and geyser mode
+        // every pick (key, click, repeat) starts the plain brush: no erase,
+        // no straight lines, no geyser mode. Modes come from G, Shift, Ctrl
+        // or the flyout.
+        obstacle_splat.erase_mode = obstacle_splat.line_mode = false;
+        geysers.mode = 0;
+        geysers.drag = null;
+        ui_geyser_editor_close();
         ui_inspector.focus(SECTION_OF_TOOL[id]);
         if (mouse.mode === id) { ui_sync_tool(true); return; }
         const prev = mouse.mode;
@@ -556,19 +629,11 @@ function init_ui() {
         ui_sync_tool(true);
         ui_fluid_bg.refresh();
         ui_visualizer_s.refresh();
-    }, id => {
-        if (id === MOUSE_MODE_WALL) obstacle_splat.erase_mode = !obstacle_splat.erase_mode;
-        // force / dye + force: brush -> geysers -> erase geysers -> brush
-        if (id !== MOUSE_MODE_WALL) {
-            geysers.mode = (geysers.mode + 1) % 3;
-            geysers.drag = null;
-            if (geysers.mode !== 1) ui_geyser_editor_close();
-        }
     });
 
     ui_force_btn = ui_toolbar.add_toggle({
-        tip: "Force field [F] · edit the field [T]",
-        tip_touch: "Force field · long-press: edit the field",
+        tip: "Force field  [F]\n[T] edit the field\nRight-drag: pan · wheel: zoom",
+        tip_touch: "Force field\nLong-press: edit the field\nTwo fingers: pan and zoom",
         icon: FORCE_ICON, 
         initial: force.is_active, 
         onToggle: ui_set_force_active,
@@ -582,18 +647,19 @@ function init_ui() {
     fluid.display.arrows = saved_flag(ARROWS_KEY) ?? fluid.display.arrows;
 
     ui_borders_btn = ui_toolbar.add_toggle({
-        tip: "Open borders [TAB]",
-        tip_touch: "Open borders",
+        tip: "Closed borders  [Tab]\nOn: the screen edges are solid walls\nOff: fluid leaves through the edges",
+        tip_touch: "Closed borders\nOn: the screen edges are solid walls\nOff: fluid leaves through the edges",
         icon: BORDERS_ICON,
-        initial: fluid.open_borders === 0,
-        onToggle: (v:boolean) => {
-            if (v === !fluid.open_borders) return;
-            fluid.open_borders = v ? 0 : 1;
+        initial: fluid.open_borders === 0,     // on = closed, the default
+        onToggle: (closed:boolean) => {
+            if ((closed ? 0 : 1) === fluid.open_borders) return;
+            fluid.open_borders = closed ? 0 : 1;
             store.set(OPEN_BORDERS_KEY, fluid.open_borders);
         }
     });
-    ui_toolbar.add_toggle({
-        tip: "Arrows: pressure push in the pressure view, flow elsewhere",
+    ui_arrows_btn = ui_toolbar.add_toggle({
+        tip: "Arrows  [A]\nPressure view: pressure push\nOther views: flow",
+        tip_touch: "Arrows\nPressure view: pressure push\nOther views: flow",
         icon: ARROWS_ICON,
         initial: fluid.display.arrows === 1,
         onToggle: (v:boolean) => {
@@ -601,6 +667,43 @@ function init_ui() {
             store.set(ARROWS_KEY, fluid.display.arrows);
             ui_fluid_s.refresh();
         },
+    });
+
+    // fullscreen: only where the page may go fullscreen (not e.g. iPhone Safari)
+    if (document.fullscreenEnabled) {
+        const fs_btn = ui_toolbar.add_toggle({
+            tip: "Fullscreen\n[Esc] leaves it · [H] hides the UI",
+            tip_touch: "Fullscreen",
+            icon: FULLSCREEN_ICON,
+            initial: !!document.fullscreenElement,
+            onToggle: async (on:boolean) => {
+                try {
+                    if (on && !document.fullscreenElement) await document.documentElement.requestFullscreen();
+                    else if (!on && document.fullscreenElement) await document.exitFullscreen();
+                } catch { fs_btn.set(!!document.fullscreenElement, false); }   // refused: show the real state
+            },
+        });
+        // also follows exits via Esc / F11
+        document.addEventListener("fullscreenchange", () => fs_btn.set(!!document.fullscreenElement, false));
+    }
+
+    ui_toolbar.add_menu({
+        tip: "Clear\nDye, walls or everything\nUndo in the message that follows",
+        tip_touch: "Clear\nDye, walls or everything\nUndo in the message that follows",
+        icon: CLEAR_ICON,
+        items: [
+            { label: "Clear dye", keys: "Shift+Backspace", run: () => { renderer.dye_clear_pending = true; } },
+            { label: "Clear walls", keys: "Ctrl+Backspace", run: () => renderer.request_color_clear(true, true, false, true) },
+            { label: "Clear everything", keys: "Backspace", danger: true, run: () => renderer.request_color_clear(true, false, false, true) },
+        ],
+    });
+
+    ui_help_btn = ui_toolbar.add_toggle({
+        tip: "Controls  [?]\nEvery key and gesture",
+        tip_touch: "Controls\nEvery gesture",
+        icon: HELP_ICON,
+        initial: false,
+        onToggle: (on:boolean) => ui_help_show(on),
     });
 
     const display_obj = () => {
@@ -645,7 +748,7 @@ function init_ui() {
     ui_visualizer_s.slider({label:"adapt time", tooltip:"$Adaptation time$ {How quickly auto exposure follows changes in the field.} $$Values$$ {[0]: instant, can flicker\n[0.3 – 1]: smooth\n[> 2]: slow, lags behind bursts}", obj:fluid.display, key:"adapt_time", min:0, max:5, unit:{symbol:"s", name:"seconds"}, visible:auto_on, persist:true});
     ui_visualizer_s.slider({label:"ref", tooltip:`$Reference$ {Value that maps to about 63% of the palette. Everything is compressed smoothly above it. Velocity and pressure are measured at the ${SIM_REF_RESOLUTION} reference grid, so the same ref fits any sim resolution.} $$Values$$ {Small: sensitive, detail in weak regions\nLarge: only strong regions light up}`, obj:display_obj, key:"ref", min:0, max:display_max, visible:() => !auto_on()});
     ui_visualizer_s.slider({label:"thresh", tooltip:"$Threshold$ {Palette position below which values are scaled by [k]. Values above it are stretched to meet them, so there's no jump at the threshold.} $$Values$$ {[0]: off\n[0.05 – 0.3]: lifts or hides weak values}", obj:display_obj, key:"thresh", min:0, max:1});
-    ui_visualizer_s.slider({label:"k", tooltip:"$Low-end scale$ {Factor for values below the threshold.} $$Values$$ {[1]: no change\n[0 – 0.5]: compresses weak values toward the darkest color}", obj:display_obj, key:"k", min:0, max:1});
+    ui_visualizer_s.slider({label:"k", tooltip:"$Low-end scale$ {Factor for values below the threshold.} $$Values$$ {[1]: no change\n[0 – 0.5]: compresses weak values toward the darkest color}", unit:{symbol:"×", name:"multiplier"}, obj:display_obj, key:"k", min:0, max:1});
     
     if (!force.is_active)
         ui_bounds.toggle_visibility();
@@ -669,4 +772,5 @@ function init_ui() {
     ui_update_bounds();
 
     ui_container?.classList.toggle("hidden");
+    ui_help_first_hint();
 }

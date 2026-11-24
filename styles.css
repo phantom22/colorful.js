@@ -15,6 +15,11 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 /* pinned to the viewport: without a definite box here, the canvas' height:100%
  * falls back to its intrinsic 2:1 (300x150) shape and never fills a portrait screen */
 #container { position: fixed; inset: 0; overflow: hidden; }
+/* sideways swipes never navigate back (Chrome, Android); iOS edge swipes can't be blocked */
+html, body { overscroll-behavior-x: none; }
+
+/* until init_ui has built the UI (it removes the class): nothing half-built shows */
+#hud.hidden { visibility: hidden; }
 #hud { position: absolute; inset: 0; pointer-events: none; font: 11px/1.3 var(--mono); color: var(--text); user-select: none; }
 #hud button, #hud nav, #hud aside, #hud ul, #view-select, #status { pointer-events: auto; }
 #hud button { font: inherit; color: inherit; }
@@ -48,18 +53,74 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 #tools button:not(.on) .ic-dye, #tools button:not(.on) .ic-force { opacity: .7; }
 #tools button.on { color: var(--accent); background: var(--bg2); border-color: var(--line); }
 #tools button.on::before { content: ""; position: absolute; left: -5px; top: 8px; bottom: 8px; width: 2px; background: var(--accent); border-radius: 2px; }
-#tools button[data-tip]:hover::after { content: attr(data-tip); position: absolute; left: 44px; white-space: nowrap; padding: 4px 8px;
-  background: #15171a; border: 1px solid var(--line); border-radius: 4px; color: var(--text); z-index: 20; }
+/* toast: a short message above the status bar, with an optional action */
+#toast { position: absolute; left: 50%; bottom: 42px; transform: translateX(-50%); z-index: 60; pointer-events: auto;
+  display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 14px; max-width: calc(100% - 24px);
+  background: #181a1e; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px #0009;
+  color: var(--text); animation: tt-in .12s ease-out; }
+#toast button { padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); cursor: pointer; white-space: nowrap; }
+#toast button:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* controls overlay (?) */
+#help { position: absolute; inset: 0; z-index: 120;   /* above the toolbar tooltip */ pointer-events: auto; display: grid; place-items: center;
+  background: #0008; padding: 12px; }
+#help .help-card { width: min(620px, 100%); max-height: min(86vh, 100%); display: flex; flex-direction: column;
+  background: #181a1e; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 20px 60px #000b; animation: tt-in .12s ease-out; }
+#help header { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--line); letter-spacing: .16em; color: var(--dim); }
+#help .help-close { background: none; border: 0; color: var(--dim); font-size: 18px; cursor: pointer; padding: 0 6px; }
+#help .help-close:hover { color: var(--text); }
+#help .help-body { overflow-y: auto; padding: 4px 14px 14px; columns: 2 260px; column-gap: 28px; }
+/* one key column per section, so the descriptions line up */
+#help section { break-inside: avoid; padding-top: 10px; display: grid; grid-template-columns: max-content 1fr; column-gap: 14px; }
+#help h4 { grid-column: 1 / -1; margin: 0 0 6px; font-size: 9px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+#help .help-row { display: contents; color: #aab1bc; }
+#help .help-row > span { padding: 3px 0; color: #aab1bc; }
+#help .help-row > .help-keys { color: var(--text); white-space: nowrap; }
+/* narrow screens: each row stacks, the gesture over its description */
+@media (max-width: 640px) {
+  #help section { grid-template-columns: 1fr; }
+  #help .help-row > .help-keys { padding: 6px 0 0; white-space: normal; }
+  #help .help-row > span:not(.help-keys) { padding: 1px 0 3px 12px; }
+}
+#help kbd, .tb-tip kbd { display: inline-block; min-width: 1.6em; padding: 0 4px; text-align: center; font: 10px/1.6 var(--mono);
+  color: var(--text); background: var(--bg2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; }
+
+/* toolbar tooltip: a title with its key chips, then one short row per line */
+.tb-tip { position: fixed; z-index: 100; width: max-content; max-width: 240px; padding: 10px 12px; pointer-events: none;
+  background: #181a1e; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px #0009;
+  font: 11px/1.45 var(--mono); color: #aab1bc; animation: tt-in .1s ease-out; }
+.tb-tip .tbt-head { display: flex; align-items: center; gap: 14px; justify-content: space-between; }
+.tb-tip .tbt-title { font-size: 12px; font-weight: 700; color: #e6eaf0; }
+.tb-tip .tbt-keys { display: flex; gap: 3px; flex-shrink: 0; }
+.tb-tip .tbt-head + .tbt-row { margin-top: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
+/* one interaction per row: a small accent dot and clear air between rows */
+.tb-tip .tbt-row { padding-left: 11px; }
+.tb-tip .tbt-row::before { content: ""; display: inline-block; vertical-align: middle; width: 4px; height: 4px;
+  margin: -2px 7px 0 -11px; border-radius: 50%; background: var(--accent); opacity: .7; }   /* hangs in the indent */
+.tb-tip .tbt-row + .tbt-row { margin-top: 7px; }
 #tools hr { width: 70%; margin: 3px auto; border: 0; border-top: 1px solid var(--line); }
 /* tool modes: a row's flyout (hover / swipe right), one button per mode */
 #tools .flyout { position: absolute; left: calc(100% + 6px); display: flex; gap: 2px; padding: 4px;
   background: var(--bg); border: 1px solid var(--line); border-radius: 6px; z-index: 15; }
 #tools .flyout[hidden] { display: none; }
+/* tools with modes (and the clear menu): a small corner mark */
+#tools button.has-modes::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 0; height: 0;
+  border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .55; pointer-events: none; }
+/* text menu (clear): a column of labelled actions */
+#tools .flyout.menu { flex-direction: column; gap: 2px; padding: 4px; }
+#tools .flyout.menu button { width: auto; height: auto; min-height: 34px; display: flex; justify-content: space-between; align-items: center;
+  gap: 18px; padding: 6px 10px; white-space: nowrap; color: var(--text); text-align: left; }
+#tools .flyout.menu button:hover { background: var(--bg2); }
+#tools .flyout.menu button.danger { color: #ff7b7b; }
+#tools .flyout.menu button.danger:hover { background: #ff7b7b1c; }
+#tools .flyout.menu .keys { display: flex; gap: 3px; }
+#tools .flyout.menu kbd { display: inline-block; padding: 0 4px; font: 10px/1.6 var(--mono); color: var(--dim);
+  border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; }
 #tools .flyout::before { content: ""; position: absolute; right: 100%; top: 0; bottom: 0; width: 10px; }   /* hover bridge to the row */
 #tools .flyout button.on::before { left: 8px; right: 8px; top: auto; bottom: -3px; width: auto; height: 2px; }
 #tools .flyout button.hot { background: var(--bg2); color: var(--text); border-color: var(--accent); }
-#tools .flyout button[data-tip]:hover::after { left: 0; top: 42px; }
-#tools button.expanded[data-tip]:hover::after { display: none; }   /* the flyout's own tips take over */
 /* variant badges: solid shapes outlined in the background color */
 #tools .eraser rect { stroke: var(--bg); stroke-width: 1.3; paint-order: stroke; }
 #tools .eraser .er-body { fill: #ff7b7b; }
@@ -77,33 +138,35 @@ html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
 /* ---------- inspector ---------- */
 #inspector { position: absolute; right: 10px; top: 52px; width: 378px; display: flex; flex-direction: column;
   max-height: calc(100% - 52px - 36px);
-  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; transition: transform .22s ease; }
+/* stowed (I, or the tab): slid off the right edge, past its 10px margin */
+#inspector.stowed { transform: translateX(calc(100% + 10px)); }
+#inspector.no-anim { transition: none; }   /* page load: start in place, don't slide */
 #inspector header { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line);
   letter-spacing: .16em; color: var(--dim); }
 #inspector header button { background: none; border: 0; cursor: pointer; font-size: 14px; color: var(--dim); }
 #insp-body { scrollbar-gutter: stable; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-#inspector.min #insp-body { display: none; }
 
 #insp-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 5; }
 #insp-resize::after { content: ""; position: absolute; left: 3px; top: 50%; width: 2px; height: 36px; margin-top: -18px;
   border-radius: 2px; background: var(--line); transition: background .15s, height .15s, margin-top .15s; }
 #insp-resize:hover::after, #insp-resize:active::after { background: var(--accent); height: 64px; margin-top: -32px; }
-#insp-tab { display: none; }
+/* edge tab: slides the inspector out and back (same on every device, also I) */
+#insp-tab { display: grid; place-items: center; position: absolute; left: -30px; top: 50%; transform: translateY(-50%); width: 30px; height: 44px;
+  padding: 0; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; cursor: pointer;
+  background: var(--bg); color: var(--dim); font-size: 18px; line-height: 1; touch-action: manipulation; }
+#insp-tab:hover, #insp-tab:active { color: var(--accent); }
+
 
 /* small screens (phones): the inspector is a drawer that stows to the right,
  * leaving only the tab on the screen edge. Keep the query in sync with
  * INSPECTOR_SMALL_SCREEN in ui_inspector.ts. */
 @media (max-width: 640px), (max-height: 500px) {
   #inspector { right: 0; width: min(378px, calc(100vw - 64px)) !important;   /* beats the desktop drag width */
-    border-right: 0; border-radius: 6px 0 0 6px; transition: transform .22s ease; }
+    border-right: 0; border-radius: 6px 0 0 6px; }
   #inspector.stowed { transform: translateX(100%); }
-  #insp-resize, #inspector header #insp-toggle { display: none; }   /* the tab replaces resizing and collapsing */
-  #inspector.min #insp-body { display: block; }      /* a desktop collapse can't be undone here */
-  #insp-tab { display: grid; place-items: center; position: absolute; left: -30px; top: 6px; width: 30px; height: 44px;
-    padding: 0; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; cursor: pointer;
-    background: var(--bg); color: var(--dim); font-size: 18px; line-height: 1; touch-action: manipulation; }
-  #insp-tab:hover, #insp-tab:active { color: var(--accent); }
+  #insp-resize { display: none; }   /* the width is fixed here */
 }
 
 #insp-body section { border-bottom: 1px solid var(--line); }
@@ -143,10 +206,6 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
   display: flex; gap: 16px; padding: 3px 10px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
 #st-tool { color: var(--accent); }
-/* fullscreen toggle: a link-like button so it reads as clickable */
-#status #st-fullscreen { padding: 0; border: 0; background: none; cursor: pointer; color: var(--text);
-  text-decoration: underline dotted; text-underline-offset: 3px; }
-#status #st-fullscreen:hover, #status #st-fullscreen:focus-visible { color: var(--accent); text-decoration-style: solid; }
 
 #screen { cursor: none; display: block; width: 100%; height: 100%; touch-action: none; }
 
@@ -217,15 +276,21 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row.frozen .swatch { opacity: .55; cursor: not-allowed; box-shadow: inset 0 0 0 1px var(--line); }
 .row.frozen .swatch input { cursor: not-allowed; }
 
-#tools button.toggle.active { color: #ff7b7b; background: #ff7b7b1c; border-color: #ff7b7b55;
-  box-shadow: 0 0 12px -2px #ff7b7b99, inset 0 0 8px -4px #ff7b7b; }
-#tools button.toggle.active::before { background: #ff7b7b; }
+/* toggles that are on: the accent color (red is kept for erasing) */
+#tools button.toggle.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--accent) 60%, transparent), inset 0 0 8px -4px var(--accent); }
+#tools button.toggle.active::before { background: var(--accent); }
 #tools button.toggle:not(.active):hover { color: var(--text); }
 
 .glsl-win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100% - 700px));
   min-width: 420px; height: min(560px, 70%); display: flex; flex-direction: column; pointer-events: auto; z-index: 50;
   background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 20px 60px #000b; overflow: hidden;
   animation: glsl-in .14s ease-out; }
+/* touch devices and small screens: the editor takes nearly the whole width */
+@media (pointer: coarse), (max-width: 640px) {
+  .glsl-win { width: calc(100% - 16px); min-width: 0; height: min(640px, calc(100% - 96px)); }
+}
 @keyframes glsl-in { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
 .glsl-win header { background: #00000026; flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 .glsl-win .t { flex: 1; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
@@ -318,6 +383,12 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .tt-p + .tt-p { margin-top: 6px; }
 .tt-list { padding-left: 8px; border-left: 2px solid var(--line); }
 .tt b.tv { color: #e6c07b; font-weight: 700; }
+/* touch: tapped tooltips are wider cards (up to the screen), and the labels
+ * that have one are marked as tappable */
+.tt.touch { max-width: min(340px, calc(100vw - 16px)); }
+@media (pointer: coarse) {
+  .has-tt { text-decoration: underline dotted; text-decoration-color: var(--dim); text-underline-offset: 3px; }
+}
 
 .glsl-win .title { flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 3px;
   color: var(--text); font: inherit; letter-spacing: .04em; padding: 3px 6px; text-overflow: ellipsis; cursor: text; }
@@ -355,9 +426,9 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 /* brush rings: a light core over a dark halo copy (see ring_halo in init_ui.ts),
  * so they read on light and dark dye alike. Styled by class so the halo, a
  * clone without the id, keeps the shape (e.g. the force ring's dashes). */
-.ring { fill: none; stroke: #f2f4f7; stroke-width: 1.5; }
+.ring { fill: none; stroke: #f2f4f7; stroke-width: 1.5; stroke-dasharray: 5 5; }   /* every brush ring is dashed */
 .ring.dye { stroke: var(--dye-c); }
-.ring.force { stroke: var(--force-c); stroke-width: 1.5; stroke-dasharray: 5 5; }
+.ring.force { stroke: var(--force-c); }
 .ring.erase { stroke: #ff7b7b; }
 /* wall tool: filled like the ctrl-line preview, so the ring shows the full painted width */
 .ring.wall { fill: var(--accent); fill-opacity: .35; }
@@ -365,7 +436,7 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .ring.halo { stroke: #0b0c0e; stroke-opacity: .9; stroke-width: 4; }   /* after the colors: halos stay dark */
 .ring.force.halo { stroke-width: 4; }
 #wall-line { stroke: var(--accent); stroke-opacity: .35; stroke-linecap: round; }
-/* wall tool in erase mode (picked again, or shift held), same red as active toggles */
+/* erase modes (wall or geysers, sticky or shift held): red is reserved for erasing */
 #tools button.on.erase { color: #ff7b7b; background: #ff7b7b1c; border-color: #ff7b7b55; }
 #tools button.on.erase::before { background: #ff7b7b; }
 /* wall tool in straight-line mode (long-press) */
@@ -374,13 +445,18 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 #tools button.on.geyser { color: var(--force-c); background: color-mix(in srgb, var(--force-c) 12%, transparent); border-color: color-mix(in srgb, var(--force-c) 40%, transparent); }
 #tools button.on.geyser::before { background: var(--force-c); }
 /* geyser markers: faint unless geyser mode is on */
-#geysers { opacity: .35; transition: opacity .15s; }
-#geysers.active { opacity: 1; }
+#geysers .geyser { opacity: .35; transition: opacity .15s; }
+#geysers.active .geyser, #geysers .geyser.hover { opacity: 1; }
+.geyser-halo { fill: #f2f4f7; }
+#geyser-ghost { opacity: .55; }   /* white outline: keeps the dot visible on any background */
 .geyser-dot { fill: #f2f4f7; stroke: #0b0c0e; stroke-width: 1.5; }
 .geyser-tick { stroke: #0b0c0e; stroke-width: 4; stroke-linecap: round; }
 .geyser-tick.in { stroke: #f2f4f7; stroke-width: 1.5; }
 .geyser-dot.selected { stroke: var(--force-c); stroke-width: 2; }
 #geyser-aim .geyser-tick.in { stroke: var(--force-c); stroke-width: 2; }
+/* the geyser a click would edit: thicker white ring (halo r grows) and dark edge */
+.geyser.hover .geyser-halo { stroke: #0b0c0e; stroke-width: 1; }
+.geyser.hover .geyser-dot { stroke-width: 2.5; }
 .geyser-aim-label { font: 11px var(--mono); fill: #f2f4f7; paint-order: stroke; stroke: #0b0c0e; stroke-width: 3px; }
 /* geyser editor: a small panel beside the clicked geyser, using the inspector's rows */
 #geyser-editor { position: absolute; width: 300px; max-width: calc(100vw - 16px); pointer-events: auto; z-index: 20;
@@ -421,6 +497,12 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
 .row input[type=number].scrub:not(:focus) { cursor: ns-resize; }   /* only inputs with drag scrubbing */
 /* touch: a vertical drag on a scrub field scrubs instead of scrolling the inspector */
 .row input[type=number].scrub { touch-action: none; }
+/* while a drag scrubs the value: accent outline and glow on the box, and the
+ * row's label lights up too (on touch the finger covers the box) */
+.row input[type=number].scrubbing { border-color: var(--accent); color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 10px -1px color-mix(in srgb, var(--accent) 70%, transparent); }
+.row:has(input.scrubbing) > label { color: var(--accent); }
+.row:has(input.scrubbing) .unit-wrap i { color: var(--accent); }
 #tools button { -webkit-touch-callout: none; user-select: none; touch-action: none; }   /* toolbar long-press: no browser gestures */
 
 .row.palette { height: auto; grid-template-columns: 1fr; }

@@ -131,18 +131,6 @@ const force = {
     center: new Float32Array([0.0, 0.0]),
     strength: 15.0,
     span: 10.0,
-    color_a_getter: () => {
-        let v = stroke.choosen_palette[stroke.palette_color].fcolor;
-        const t = new Float32Array(4);
-        color_logarithm(t, v);
-        return t;
-    },
-    color_b_getter: () => {
-        let v = complementary_fcolor(stroke.choosen_palette[stroke.palette_color].fcolor);
-        const t = new Float32Array(4);
-        color_logarithm(t, v);
-        return t;
-    },
     glsl: { ...FORCE_FIELD_DEFAULT },
     pure_vector_field: false,
     relaxation: 500.0

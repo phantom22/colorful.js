@@ -1,15 +1,3 @@
-function complementary_color(color:Uint8Array) {
-    return new Uint8Array([
-        255 - color[0], 255 - color[1], 255 - color[2], 255
-    ]);
-}
-
-function complementary_fcolor(color:Float16Array) {
-    return new Float16Array([
-        1 - color[0], 1 - color[1], 1 - color[2]
-    ]);
-}
-
 function uint8_to_float32(color:Uint8Array) {
     return new Float32Array([
         color[0] / 255, color[1] / 255, color[2] / 255, 1

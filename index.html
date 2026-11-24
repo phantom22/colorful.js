@@ -12,6 +12,8 @@
         <!-- brush rings: outside #hud, so they stay visible when Esc hides the UI -->
         <svg id="wall-overlay" aria-hidden="true">
             <g id="geysers"></g>
+            <!-- geyser mode: a faint marker at the pointer, where a click places one -->
+            <g id="geyser-ghost" style="display:none"><circle class="geyser-halo" r="5.5"/><circle class="geyser-dot" r="3.5"/></g>
             <g id="geyser-aim" style="display:none"><line class="geyser-tick"/><line class="geyser-tick in"/><text class="geyser-aim-label"/></g>
             <line id="wall-line"/>
             <circle id="force-ring" class="ring force"/>
@@ -35,15 +37,18 @@
 
             <!-- right: inspector -->
             <aside id="inspector">
+            <!-- before the first paint: start stowed if it was left stowed (or on a small
+                 screen, see INSPECTOR_SMALL_SCREEN), without the slide animation -->
+            <script>try { if (localStorage.getItem("insp_stowed") === "1" || matchMedia("(max-width: 640px), (max-height: 500px)").matches)
+                document.getElementById("inspector").classList.add("stowed", "no-anim"); } catch {}</script>
             <div id="insp-resize" title="Drag to resize"></div>
-            <!-- small screens: slides the inspector out of / back into view -->
+            <!-- edge tab: slides the inspector out of / back into view (also I) -->
             <button id="insp-tab" title="Hide inspector">›</button>
             <header><span>INSPECTOR</span>
             <div class="hbtns">
                 <button id="insp-reset" title="Reset all to defaults">
                 <svg viewBox="0 0 24 24"><path d="M15.5 5.94A7 7 0 1 1 8.5 5.94"/><path d="M7.02 9.11L8.5 5.94L5.01 5.64"/></svg>
                 </button>
-                <button id="insp-toggle" title="Collapse">–</button>
             </div>
             </header>
             <div id="insp-body"></div>
@@ -55,7 +60,7 @@
             <div class="corner bl" id="c-bl"></div>
             <div class="corner br" id="c-br"></div>
 
-            <footer id="status"><span id="st-cursor">x — y —</span><span id="st-tool"></span><button id="st-fullscreen" type="button">enter fullscreen</button><span id="st-fps"></span></footer>
+            <footer id="status"><span id="st-cursor">x — y —</span><span id="st-tool"></span><span id="st-fps"></span></footer>
         </div>
     </div>
     

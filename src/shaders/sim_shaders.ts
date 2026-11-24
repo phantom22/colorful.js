@@ -145,21 +145,6 @@ void main() {
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-const sh_checkerboard_fill = `
-#version 300 es
-precision highp float;
-in vec2 v_uv;
-out vec4 o;
-
-uniform vec2 dims;
-uniform vec3 color_a;
-uniform vec3 color_b;
-void main() {
-    vec2 c = floor(v_uv * dims);
-    float checker = mod(c.x + c.y, 2.0);
-    o = vec4(mix(-log(color_a), -log(color_b), checker), 1.0);
-}`;
-
 const sh_curl_velocity_noise = `
 #version 300 es
 precision highp float;

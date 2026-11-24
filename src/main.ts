@@ -3,6 +3,7 @@ function main() {
     init_webgl();
     init_textures();
     init_ui();
+    scene_restore();          // saved walls and geysers
 
     canvas_el.onmouseleave = c_mouseleave;
     document.documentElement.addEventListener("mouseleave", d_mouseleave);
@@ -10,6 +11,7 @@ function main() {
     new ResizeObserver(update_viewport).observe(canvas_el);
     window.addEventListener("resize", update_viewport);
     window.onmousemove = w_mousemove;
+    window.addEventListener("mouseover", w_mouseover);
     window.onmouseup = w_mouseup;
     // passive:false so preventDefault stops scrolling and the emulated mouse events
     canvas_el.addEventListener("touchstart", c_touchstart, {passive:false});

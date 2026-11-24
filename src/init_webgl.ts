@@ -3,7 +3,6 @@ let gl: WebGL2RenderingContext;
 let vao:WebGLVertexArrayObject;
 
 let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"source_kind", 4>, uniform<"palette_type", 4>, uniform<"blur_type", 4>, uniform<"reference_value", 5>, uniform<"value_rescale_threshold", 5>, uniform<"rescale_factor", 5>]>,
-    checkboard_fill_p: shader_program<[uniform<"color_a", 9>, uniform<"color_b", 9>, uniform<"dims", 8>]>,
     curl_velocity_fill_p: shader_program<[uniform<"scale", 5>, uniform<"amp", 5>, uniform<"div_mix", 5>, uniform<"seed", 5>]>,
     splat_p: shader_program<[uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>, uniform<"steps", 5>]>,
     obstacle_splat_p: shader_program<[uniform<"point", 8>, uniform<"prev", 8>, uniform<"brush_radius", 5>, uniform<"outline_width", 5>, uniform<"erase", 5>]>,
@@ -110,12 +109,6 @@ function init_webgl() {
 
     vao = create_vertex_array();
     create_buffer_vec2(quad, 0);
-
-    checkboard_fill_p = new shader_program("checkerboard_fill", quad_vert, sh_checkerboard_fill, [
-        new uniform("dims", GL_VEC2, U_INIT, [4,4]),
-        new uniform("color_a", GL_VEC3, U_UPDATE, force.color_a_getter),
-        new uniform("color_b", GL_VEC3, U_UPDATE, force.color_b_getter)
-    ]);
 
     curl_velocity_fill_p = new shader_program("curl_velocity_fill", quad_vert, sh_curl_velocity_noise, [
         new uniform("scale", GL_FLOAT),

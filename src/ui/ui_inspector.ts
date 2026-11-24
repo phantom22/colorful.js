@@ -4,7 +4,6 @@ const INSPECTOR_SMALL_SCREEN = "(max-width: 640px), (max-height: 500px)";
 class UI_INSPECTOR {
     private readonly root = $("inspector");
     private readonly body = $("insp-body");
-    private readonly toggle = $("insp-toggle");
     private readonly reset = $("insp-reset");
     private readonly resize = $("insp-resize");
     private readonly tab = $("insp-tab");
@@ -12,18 +11,17 @@ class UI_INSPECTOR {
 
     constructor() {
         isolate(this.root);
-        this.toggle.addEventListener("click", () => this.collapse(!this.collapsed));
         this.reset.addEventListener("click", e => { this.reset_all(); (e.currentTarget as HTMLElement).blur(); });
         this.init_resize();
         this.init_drawer();
     }
 
     get stowed() { return this.root.classList.contains("stowed"); }
-    /** slides the inspector off the right edge (only takes effect on small screens). */
+    /** slides the inspector off the right edge, leaving the tab to bring it back (I toggles it). */
     stow(v = true) {
         this.root.classList.toggle("stowed", v);
         this.tab.textContent = v ? "‹" : "›";
-        this.tab.title = v ? "Show inspector" : "Hide inspector";
+        this.tab.title = v ? "Show inspector  [I]" : "Hide inspector  [I]";
         try { localStorage.setItem("insp_stowed", v ? "1" : "0"); } catch {}
     }
 
@@ -32,7 +30,10 @@ class UI_INSPECTOR {
         // phones always start stowed, so the sim is visible; elsewhere the last state is kept
         let saved: string | null = null;
         try { saved = localStorage.getItem("insp_stowed"); } catch {}
+        this.root.classList.add("no-anim");     // the inline script in index.html may have stowed it already
         this.stow(matchMedia(INSPECTOR_SMALL_SCREEN).matches || saved === "1");
+        // the slide animation only for later toggles, once the start state is painted
+        requestAnimationFrame(() => requestAnimationFrame(() => this.root.classList.remove("no-anim")));
     }
 
     reset_all() {
@@ -44,12 +45,6 @@ class UI_INSPECTOR {
     restore_all() {
         for (const s of this.sections.values()) for (const e of s.fields) e.restore();
         this.refresh();
-    }
-
-    get collapsed() { return this.root.classList.contains("min"); }
-    collapse(v = true) {
-        this.root.classList.toggle("min", v);
-        this.toggle.textContent = v ? "+" : "–";
     }
 
     /** returns the section, creating it on first use. */
@@ -75,10 +70,6 @@ class UI_INSPECTOR {
         let n = 0;
         for (const s of this.sections.values()) n += s.refresh();
         this.reset.classList.toggle("dirty", n > 0);
-    }
-
-    toggle_visibility() {
-        this.root.hidden = !this.root.hidden;
     }
 
     private init_resize() {

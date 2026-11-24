@@ -1,7 +1,10 @@
 const renderer = {
     /** when true, the grid vertex color lut table will get cleared with grid_bg
      * color (initial grid color). */
-    color_clear_request: { noise:false, pending:false, only_walls:false },
+    color_clear_request: { noise:false, pending:false, only_walls:false, keep_scene:false, undoable:false },
+    /** Shift+Backspace: refill only the dye with the background, the flow,
+     * walls and geysers stay. */
+    dye_clear_pending: false,
     /** current frame id. */
     frame: 0,
     /** used to calculate delta_time. */
@@ -18,13 +21,17 @@ const renderer = {
     resizing: false,
     dt_getter: () => renderer.delta_time,
     fixed_dt_getter: () => renderer.fixed_delta_time * renderer.time_scale,
-    checkboard_fill: false,
     time_scale: 1.0,
     time: 0,
-    request_color_clear(noise:boolean, only_walls:boolean) {
-        renderer.color_clear_request.pending = true;
-        renderer.color_clear_request.noise = noise;
-        renderer.color_clear_request.only_walls = only_walls;
+    /** keep_scene: walls and geysers stay (only the dye and the flow reset),
+     * for the force field moving. undoable: a user clear, snapshot first. */
+    request_color_clear(noise:boolean, only_walls:boolean, keep_scene = false, undoable = false) {
+        const r = renderer.color_clear_request;
+        r.pending = true;
+        r.noise = noise;
+        r.only_walls = only_walls;
+        r.keep_scene = keep_scene;
+        r.undoable = undoable;
     }
 }
 
@@ -64,10 +71,13 @@ const pacing = {
     last_up: -1e9,
     good_since: 0,
 
+    fps_shown: -1e9,                // last status bar update (ms)
+
     stepped(t:number) {
         this.steps.push(t);
         while (this.steps.length && t - this.steps[0] > 1000) this.steps.shift();
-        ui_status.fps(this.rate());
+        // the readout 4 times a second, not every step
+        if (t - this.fps_shown >= 250) { this.fps_shown = t; ui_status.fps(this.rate()); }
     },
 
     /** steps per second over the last second. */
@@ -166,6 +176,7 @@ function draw(timestamp:number) {
         pacing.stepped(timestamp);
     }
     pacing.update(timestamp);
+    scene_tick(timestamp);
 
     requestAnimationFrame(draw);
 }
@@ -177,11 +188,16 @@ function sim_step() {
     gl.viewport(0, 0, N1, N2);
     gl.enable(gl.BLEND);
     gl.bindVertexArray(vao);
-    if (renderer.color_clear_request.pending) {
-        fill_grid(fluid.bg, renderer.color_clear_request.only_walls, renderer.color_clear_request.noise);
-        renderer.color_clear_request.pending = false;
-        renderer.color_clear_request.noise = false;
-        renderer.color_clear_request.only_walls = false;
+    const cr = renderer.color_clear_request;
+    if (cr.pending) {
+        if (cr.undoable) scene_snapshot(cr.only_walls ? "Walls cleared" : "Cleared");
+        fill_grid(fluid.bg, cr.only_walls, cr.noise, cr.keep_scene);
+        cr.pending = cr.noise = cr.only_walls = cr.keep_scene = cr.undoable = false;
+    }
+    if (renderer.dye_clear_pending) {
+        scene_snapshot("Dye cleared");
+        texture_fill(dye_fbo[dye_read], fluid.bg);
+        renderer.dye_clear_pending = false;
     }
 
     run_obstacle_splats();
@@ -296,16 +312,6 @@ function sim_step() {
 
     // 7. advect dye, with the vorticity-driven diffusion (step 8) merged in
     gl.viewport(0, 0, M1, M2);
-
-    if (renderer.checkboard_fill) {        
-        checkboard_fill_p.use_program();
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, dye_fbo[1-dye_read]);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        dye_read = 1 - dye_read;
-        renderer.checkboard_fill = false;
-    }
 
     dye_advect_p.use_program();
 

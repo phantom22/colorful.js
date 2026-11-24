@@ -55,6 +55,7 @@ function scrub_number(input: HTMLInputElement, o: {
     input.addEventListener("pointermove", e => {
         if (!active) return;
         if (!moved && Math.abs(e.clientY - y0) < dead) return;    // dead zone, so clicks / taps stay clicks
+        if (!moved) input.classList.add("scrubbing");      // accent outline while the drag changes the value
         moved = true;
         const dy = y0 - e.clientY, k = mult(e);
         o.apply(o.log ? v0 * Math.exp(dy * 0.01 * k) : v0 + dy * o.base() * k);
@@ -62,6 +63,7 @@ function scrub_number(input: HTMLInputElement, o: {
     const end = (e: PointerEvent) => {
         if (!active) return;
         active = false;
+        input.classList.remove("scrubbing");
         input.releasePointerCapture(e.pointerId);
         if (!moved) { input.focus(); input.select(); }
     };

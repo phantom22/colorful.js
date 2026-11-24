@@ -39,8 +39,11 @@ class UI_FIELD_PALETTE extends UI_FIELD<number> {
                     const cur = this.io.get();
                     this.onRemove!(i);
                     this.render();
-                    // keep the same color picked; removing the picked one picks its successor
-                    this.apply(cur > i ? cur - 1 : Math.min(cur, this.colors().length - 1));
+                    // keep the same color picked; removing the picked one picks its
+                    // successor, or the first color when it was the last one (not
+                    // the color before it: past the custom ones that is black)
+                    const n = this.colors().length;
+                    this.apply(cur > i ? cur - 1 : cur < i ? cur : i < n ? i : 0);
                 });
                 b.appendChild(del);
             }

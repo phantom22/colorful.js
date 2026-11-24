@@ -17,8 +17,6 @@ type ToolItem<T extends number> = {
     variants?: ToolVariant[];
 };
 
-/** touch swipe that opens a tool's flyout: travel (px) before it counts. */
-const FLYOUT_SWIPE_PX = 22;
 /** mouse: time (ms) the pointer may spend outside button and flyout before it closes. */
 const FLYOUT_CLOSE_MS = 220;
 
@@ -46,6 +44,35 @@ function attach_hold(b: HTMLButtonElement, onHold: () => void) {
     return () => { const h = held; held = false; return h; };
 }
 
+/** toolbar tooltip markup. The first line is the title; [K] anywhere is a
+ * key chip, and chips at the end of the title line sit on its right. Each
+ * further line is one short row. */
+function render_toolbar_tip(src: string) {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const chips = (s: string) => esc(s).replace(/\[([^\]]+)\]/g, "<kbd>$1</kbd>");
+    const [head, ...rows] = src.split("\n");
+    const m = /^(.*?)\s*((?:\[[^\]]+\]\s*)+)$/.exec(head);
+    const title = m ? m[1] : head, keys = m ? m[2].trim() : "";
+    return `<div class="tbt-head"><span class="tbt-title">${esc(title)}</span>` +
+        (keys ? `<span class="tbt-keys">${chips(keys)}</span>` : "") + `</div>` +
+        rows.map(r => `<div class="tbt-row">${chips(r)}</div>`).join("");
+}
+
+/** touch fallback for an item without tip_touch: drops the key chips from
+ * the title and every row about keys, the wheel, hovering or right-clicking. */
+function touch_tip(tip: string) {
+    const [head, ...rows] = tip.split("\n");
+    const mouse_only = /\[|\b(Shift|Ctrl|Esc|Wheel|wheel|[Hh]over|[Rr]ight-(click|drag)|Rest on)\b/;
+    return [head.replace(/\s*(\[[^\]]+\]\s*)+$/, ""), ...rows.filter(r => !mouse_only.test(r))]
+        .join("\n").replace(/\b[Cc]lick/g, m => m[0] === "C" ? "Tap" : "tap");
+}
+
+/** appends " [K]" to the first line of a tip. */
+const tip_with_key = (tip: string, key: string) => tip.replace(/^[^\n]*/, h => `${h}  [${key.toUpperCase()}]`);
+
+/** touch: how long (ms) a tapped button's tip stays up. */
+const TOOLBAR_TIP_TOUCH_MS = 2500;
+
 /** touch long-press duration on toolbar toggles. */
 const TOOLBAR_HOLD_MS = 500;
 
@@ -56,26 +83,70 @@ class UI_TOOLBAR<T extends number> {
     private open_row: T | null = null;
     private close_timer = 0;
     private readonly touch = is_touch();
+    private readonly tip_el = document.createElement("div");
+    private tip_owner: HTMLElement | null = null;
+    private tip_timer = 0;
+
+    /** the tooltip of b: mouse shows it on hover, touch on tap for a moment. */
+    private attach_tip(b: HTMLButtonElement, tip: string, below = false) {
+        b.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") this.show_tip(b, tip, below); });
+        b.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") this.hide_tip(b); });
+        b.addEventListener("click", () => {
+            if (!this.touch) return;
+            this.show_tip(b, tip, below);
+            clearTimeout(this.tip_timer);
+            this.tip_timer = window.setTimeout(() => this.hide_tip(b), TOOLBAR_TIP_TOUCH_MS);
+        });
+    }
+
+    /** beside the button (right), or under it for the flyout's buttons. */
+    private show_tip(b: HTMLElement, tip: string, below: boolean) {
+        if (b.classList.contains("expanded")) return;   // the flyout's own tips take over
+        const t = this.tip_el;
+        t.innerHTML = render_toolbar_tip(tip);
+        t.hidden = false;
+        this.tip_owner = b;
+        const r = b.getBoundingClientRect(), w = t.offsetWidth, h = t.offsetHeight;
+        let x = below ? r.left : r.right + 10, y = below ? r.bottom + 8 : r.top + r.height / 2 - h / 2;
+        x = Math.max(8, Math.min(x, innerWidth - w - 8));
+        y = Math.max(8, Math.min(y, innerHeight - h - 8));
+        t.style.left = `${x}px`;
+        t.style.top = `${y}px`;
+    }
+
+    private hide_tip(owner?: HTMLElement) {
+        if (owner && owner !== this.tip_owner) return;
+        this.tip_el.hidden = true;
+        this.tip_owner = null;
+    }
     private readonly keys = new Map<string, T>();
     private current: T;
 
     constructor(
         items: ToolItem<T>[], initial: T,
-        private readonly onPick: (id: T) => void,
-        /** called when the already selected tool is picked again (click, tap or key). */
-        private readonly onRepick?: (id: T) => void
+        /** a pick always starts the tool in its plain brush mode, even a
+         * repeat pick: there are no hidden modes to cycle through. */
+        private readonly onPick: (id: T) => void
     ) {
         isolate(this.nav);
+        this.tip_el.className = "tb-tip";
+        this.tip_el.hidden = true;
+        document.body.appendChild(this.tip_el);
         for (const it of items) {
             if (it.separator) this.nav.appendChild(document.createElement("hr"));
             const b = document.createElement("button");
-            b.dataset.tip = this.touch ? (it.tip_touch ?? it.tip) : it.key ? `${it.tip}  [${it.key.toUpperCase()}]` : it.tip;
+            this.attach_tip(b, this.touch ? (it.tip_touch ?? touch_tip(it.tip)) : it.key ? tip_with_key(it.tip, it.key) : it.tip);
             b.innerHTML = `<svg viewBox="0 0 24 24">${it.icon}</svg>`;
-            const was_hold = it.onHold ? attach_hold(b, it.onHold) : () => false;
-            const was_swipe = it.variants ? this.add_flyout(it.id, b, it.variants) : () => false;
+            if (it.variants) { this.add_flyout(it.id, b, it.variants); b.classList.add("has-modes"); }
+            // touch: a long-press shows the tool's modes (no swipe: the toolbar
+            // sits on the screen edge, where a swipe right means "back")
+            const hold = it.onHold ?? (it.variants ? () => this.open_flyout(it.id) : undefined);
+            const was_hold = hold ? attach_hold(b, hold) : () => false;
             b.addEventListener("click", () => {
-                if (was_hold() || was_swipe()) { b.blur(); return; }
-                this.choose(it.id);
+                if (was_hold()) { b.blur(); return; }
+                // touch: tapping the picked tool again shows its modes (no hover there)
+                if (this.touch && it.variants && it.id === this.current) { this.open_flyout(it.id); return; }
+                this.pick(it.id);
             });
             this.nav.appendChild(b);
             this.buttons.set(it.id, b);
@@ -84,24 +155,22 @@ class UI_TOOLBAR<T extends number> {
         addEventListener("keydown", e => {
             if (is_typing(e)) return;
             const id = this.keys.get(e.key.toLowerCase());
-            if (id !== undefined) this.choose(id);
+            if (id !== undefined) this.pick(id);
         });
         this.current = initial;
         this.pick(initial);
     }
 
     /** the flyout of a tool with variants. Mouse: opens on hover, closes a moment
-     * after the pointer left both. Touch: a swipe right from the button opens
-     * it; lifting the finger on a variant picks it, elsewhere leaves it open
-     * for a tap. A tap outside closes it. Returns whether the click that ends
-     * a swipe should be ignored. */
+     * after the pointer left both. Touch: tapping the picked tool again or a
+     * long-press opens it; a tap on a variant picks it, a tap outside closes it. */
     private add_flyout(id: T, b: HTMLButtonElement, variants: ToolVariant[]) {
         const fly = document.createElement("div");
         fly.className = "flyout";
         fly.hidden = true;
         variants.forEach(v => {
             const vb = document.createElement("button");
-            vb.dataset.tip = this.touch ? (v.tip_touch ?? v.tip) : v.tip;
+            this.attach_tip(vb, this.touch ? (v.tip_touch ?? touch_tip(v.tip)) : v.tip, true);
             vb.innerHTML = `<svg viewBox="0 0 24 24">${v.icon}</svg>`;
             vb.addEventListener("click", e => { e.stopPropagation(); v.pick(); this.close_flyout(); vb.blur(); });
             fly.appendChild(vb);
@@ -116,31 +185,6 @@ class UI_TOOLBAR<T extends number> {
             el.addEventListener("pointerleave", (e: PointerEvent) => { if (e.pointerType === "mouse") later(); });
         }
 
-        let x0 = 0, y0 = 0, tracking = false, swiped = false, hot: HTMLElement | null = null;
-        const under = (e: PointerEvent) => (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>(".flyout button") ?? null;
-        b.addEventListener("pointerdown", e => {
-            if (e.pointerType === "mouse") return;
-            tracking = true; swiped = false; x0 = e.clientX; y0 = e.clientY;
-        });
-        b.addEventListener("pointermove", e => {
-            if (!tracking) return;
-            const dx = e.clientX - x0;
-            if (!swiped && dx > FLYOUT_SWIPE_PX && dx > Math.abs(e.clientY - y0)) { swiped = true; this.open_flyout(id); }
-            if (!swiped) return;
-            const h = under(e);
-            if (h !== hot) { hot?.classList.remove("hot"); h?.classList.add("hot"); hot = h; }
-        });
-        const end = (e: PointerEvent) => {
-            if (!tracking) return;
-            tracking = false;
-            if (!swiped) return;
-            const h = under(e);
-            hot?.classList.remove("hot"); hot = null;
-            if (h && fly.contains(h)) h.click();
-        };
-        b.addEventListener("pointerup", end);
-        b.addEventListener("pointercancel", end);
-        return () => { const s = swiped; swiped = false; return s; };
     }
 
     private open_flyout(id: T) {
@@ -150,6 +194,7 @@ class UI_TOOLBAR<T extends number> {
         row.fly.style.top = `${b.offsetTop - 5}px`;
         row.fly.hidden = false;
         b.classList.add("expanded");
+        this.hide_tip(b);
         this.open_row = id;
         if (this.touch) document.addEventListener("pointerdown", this.outside, true);
     }
@@ -187,12 +232,6 @@ class UI_TOOLBAR<T extends number> {
         if (notify) this.onPick(id);
     }
 
-    /** user pick: a repeat pick of the current tool also calls onRepick. */
-    private choose(id: T) {
-        if (id === this.current) this.onRepick?.(id);
-        this.pick(id);
-    }
-
     /** toggles a class on one tool's button (e.g. "erase"). */
     mark(id: T, cls: string, on: boolean) {
         this.buttons.get(id)?.classList.toggle(cls, on);
@@ -204,12 +243,54 @@ class UI_TOOLBAR<T extends number> {
         this.nav.hidden = !this.nav.hidden;
     }
 
+    /** a button that opens a small menu of text actions (e.g. Clear). Opens on
+     * click / tap (not hover: the actions can be destructive), closes after a
+     * choice, a click / tap elsewhere, or Esc. */
+    add_menu(o: { tip: string; tip_touch?: string; icon: string;
+                  items: { label: string; keys?: string; danger?: boolean; run: () => void }[] }) {
+        this.nav.appendChild(document.createElement("hr"));
+        const b = document.createElement("button");
+        b.className = "menu-btn has-modes";
+        this.attach_tip(b, this.touch ? (o.tip_touch ?? touch_tip(o.tip)) : o.tip);
+        b.innerHTML = `<svg viewBox="0 0 24 24">${o.icon}</svg>`;
+        const menu = document.createElement("div");
+        menu.className = "flyout menu";
+        menu.hidden = true;
+        const close = () => {
+            menu.hidden = true;
+            b.classList.remove("expanded");
+            document.removeEventListener("pointerdown", outside, true);
+        };
+        const outside = (e: PointerEvent) => { if (!menu.contains(e.target as Node) && !b.contains(e.target as Node)) close(); };
+        for (const it of o.items) {
+            const mb = document.createElement("button");
+            mb.type = "button";
+            if (it.danger) mb.classList.add("danger");
+            mb.innerHTML = `<span>${it.label}</span>` +
+                (it.keys && !this.touch ? `<span class="keys">${it.keys.split("+").map(k => `<kbd>${k}</kbd>`).join("")}</span>` : "");
+            mb.addEventListener("click", e => { e.stopPropagation(); close(); mb.blur(); it.run(); });
+            menu.appendChild(mb);
+        }
+        b.addEventListener("click", () => {
+            b.blur();
+            if (!menu.hidden) { close(); return; }
+            this.close_flyout();
+            menu.style.top = `${b.offsetTop - 5}px`;
+            menu.hidden = false;
+            b.classList.add("expanded");
+            this.hide_tip(b);
+            document.addEventListener("pointerdown", outside, true);
+        });
+        addEventListener("keydown", e => { if (e.key === "Escape" && !menu.hidden) close(); });
+        this.nav.append(b, menu);
+    }
+
     /** onHold: touch / pen long-press action (the press then doesn't toggle). */
     add_toggle(o: { tip: string; tip_touch?: string; icon: string; initial: boolean; onToggle: (on: boolean) => void; separator?: boolean; onHold?: () => void }) {
         if (o.separator !== false) this.nav.appendChild(document.createElement("hr"));
         const b = document.createElement("button");
         b.className = "toggle";
-        b.dataset.tip = this.touch ? (o.tip_touch ?? o.tip) : o.tip;
+        this.attach_tip(b, this.touch ? (o.tip_touch ?? touch_tip(o.tip)) : o.tip);
         b.innerHTML = `<svg viewBox="0 0 24 24">${o.icon}</svg>`;
         let state = o.initial;
         const set = (on: boolean, notify = true) => {

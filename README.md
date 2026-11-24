@@ -32,39 +32,10 @@ The inspector exposes the solver and the visuals:
 - brush sizes (in sim texels) and strengths
 - palette, visualizer scaling, auto exposure and the arrow grid
 
-Hover any label for an explanation and a guide to useful value ranges. Double-click a field to reset it; each section and the inspector header have reset buttons (the resolutions survive a full reset).
+Hover any label (tap it on touch devices) for an explanation and a guide to useful value ranges. Double-click a field to reset it; each section and the inspector header have reset buttons (the resolutions survive a full reset).
 
 ## Controls
-### Mouse and touch
-| Input                        | Action                                              |
-|------------------------------|-----------------------------------------------------|
-| Left mouse / one finger      | Use the current brush                               |
-| Right mouse + drag           | Pan the force field                                 |
-| Wheel / trackpad / pinch     | Zoom the force field                                |
-| `Ctrl` + drag (wall brush)   | Draw a straight wall line                           |
-| `Shift` (wall brush)         | Invert the wall mode while held (draw ⇄ erase)      |
-
-### Keyboard
-| Key                | Action                                                        |
-|--------------------|---------------------------------------------------------------|
-| `Q` `W` `E` `R`    | Dye + force, dye, force, wall brush (`R` again: wall eraser)  |
-| `1` - `5`          | Dye, velocity, pressure, curl, divergence views               |
-| `←` `→`            | Previous / next palette of the non-dye views                  |
-| `↑` `↓`            | Increase / decrease the force field strength                  |
-| `F`                | Toggle the force field                                        |
-| `Tab`              | Toggle open borders                                           |
-| `T`                | Open the force field editor                                   |
-| `Ctrl+S`           | Compile the force field (in the editor)                       |
-| `Space`            | Fill the dye with a checkerboard                              |
-| `Backspace`        | Clear the simulation (`Ctrl+Backspace`: clear only the walls) |
-| `I`                | Toggle the inspector                                          |
-| `H`                | Toggle the UI                                                 |
-| `Escape`           | Close an open editor (geyser, force field)                    |
-
-### Buttons
-- Toolbar: brushes, force field, open borders and the arrow overlay.
-- Status bar: enter / exit fullscreen.
-- Inspector: drag its left edge to resize it. On small screens it stows to the right behind a tab.
+Every key and gesture is listed in the app: press `?` or use the `?` button at the bottom of the toolbar (on touch devices it shows the touch gestures).
 
 ---
 

@@ -269,7 +269,9 @@ const geysers = {
     /** bumped on every change, for the screen markers. */
     version: 0,
     /** the press in progress: where it started, the geyser it started on. */
-    drag: null as null | { from: Float32Array, target: geyser_t | null, moved: boolean, erase: boolean },
+    drag: null as null | { from: Float32Array, target: geyser_t | null, moved: boolean, erase: boolean, hover?: boolean },
+    /** geyser the pointer has rested on (outside geyser mode): a press on it edits it. */
+    hover: null as geyser_t | null,
     /** geyser shown in the editor popup. */
     editing: null as geyser_t | null,
 };
@@ -289,9 +291,9 @@ function uv_px(a:ArrayLike<number>, b:ArrayLike<number>) {
     return Math.hypot((a[0] - b[0]) * canvas_rect.width, (a[1] - b[1]) * canvas_rect.height);
 }
 
-/** the geyser under a point, if any. */
-function geyser_at(uv:ArrayLike<number>) {
-    let best: geyser_t | null = null, bd = GEYSER_PICK_PX;
+/** the geyser under a point, if any (within `px` screen pixels). */
+function geyser_at(uv:ArrayLike<number>, px = GEYSER_PICK_PX) {
+    let best: geyser_t | null = null, bd = px;
     for (const g of geysers.list) { const d = uv_px(g.uv, uv); if (d <= bd) { bd = d; best = g; } }
     return best;
 }
@@ -303,19 +305,34 @@ function geyser_changed(g:geyser_t) {
 }
 
 /** erasing reaches as far as the brush ring (dye ring if bigger). */
-function geyser_erase_at(uv:ArrayLike<number>) {
-    const r = Math.max(
+/** how far (screen heights) the geyser eraser reaches: the tool's brush
+ * ring, the bigger one for dye + force. The eraser ring shows exactly this. */
+function geyser_erase_reach() {
+    return Math.max(
         mouse.mode & MOUSE_MODE_FORCE ? gaussian_extent(splat.velocity_radius, splat.velocity_strength, RING_WEIGHT) : 0,
         mouse.mode & MOUSE_MODE_DYE ? gaussian_extent(splat.dye_radius, splat.dye_strength, RING_WEIGHT) : 0);
+}
+
+function geyser_erase_at(uv:ArrayLike<number>) {
+    const r = geyser_erase_reach();
     const n = geysers.list.length;
     geysers.list = geysers.list.filter(g => Math.hypot((g.uv[0] - uv[0]) * ASPECT_NUM, g.uv[1] - uv[1]) > r);
     if (geysers.list.length === n) return;
+    if (geysers.hover && !geysers.list.includes(geysers.hover)) geysers.hover = null;
     if (geysers.editing && !geysers.list.includes(geysers.editing)) ui_geyser_editor_close();
     geysers.version++;
 }
 
-function geyser_press(uv:Float32Array) {
-    const erase = geysers_erasing();
+/** `erase` overrides the mode (the right-click shorthand: shift erases). */
+/** removes one geyser (closing its editor if open). */
+function geyser_delete(g:geyser_t) {
+    geysers.list = geysers.list.filter(q => q !== g);
+    if (geysers.hover === g) geysers.hover = null;
+    if (geysers.editing === g) ui_geyser_editor_close();
+    geysers.version++;
+}
+
+function geyser_press(uv:Float32Array, erase = geysers_erasing()) {
     geysers.drag = { from: Float32Array.from(uv), target: erase ? null : geyser_at(uv), moved: false, erase };
     if (geysers.drag.target) geysers.drag.from.set(geysers.drag.target.uv);
     if (erase) geyser_erase_at(uv);
@@ -334,11 +351,17 @@ function geyser_aim(from:ArrayLike<number>, uv:ArrayLike<number>): [number, numb
     return [Math.atan2(dy, dx) * 180 / Math.PI, Math.min(Math.hypot(dx, dy) * GEYSER_GAIN, GEYSER_MAX_STRENGTH)];
 }
 
+/** a drag of this press moves the geyser (or places it) rather than aiming it:
+ * the dye tool's, or a dye-only geyser picked by hovering. */
+function geyser_drag_moves(d:NonNullable<typeof geysers.drag>) {
+    return d.hover ? !d.target?.force : mouse.mode === MOUSE_MODE_DYE;
+}
+
 function geyser_release(uv:Float32Array) {
     const d = geysers.drag;
     geysers.drag = null;
     if (!d || d.erase) return;
-    const dye_only = mouse.mode === MOUSE_MODE_DYE;
+    const dye_only = geyser_drag_moves(d);
     if (!d.moved && d.target) { ui_geyser_editor_open(d.target); return; }   // a click on one: edit it
     if (!d.moved && (!dye_only || geysers.editing)) { ui_geyser_editor_close(); return; }   // on nothing: close
     if (d.target && dye_only) {           // dye tool: a drag from a geyser moves it
@@ -422,6 +445,7 @@ function run_geysers() {
 function clear_geysers() {
     if (geysers.list.length === 0) return;
     geysers.list = [];
+    geysers.hover = null;
     ui_geyser_editor_close();
     geysers.version++;
 }
@@ -429,11 +453,15 @@ function clear_geysers() {
 /** curl noise speed at the reference grid, texels/s. */
 const CURL_NOISE_AMP = 50;
 
-function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
+/** keep_scene: walls and geysers stay, only the dye and the flow reset. */
+function fill_grid(color?:Float32Array, only_walls=false, add_noise=false, keep_scene=false) {
     const rgba16fv = new Float32Array([0.0,0.0,0.0,0.0]);
-    texture_fill(obstacles_fbo, rgba16fv);
-    obstacle_mask_dirty = true;
-    clear_geysers();
+    if (!keep_scene) {
+        texture_fill(obstacles_fbo, rgba16fv);
+        obstacle_mask_dirty = true;
+        clear_geysers();
+        scene_changed();
+    }
 
     if (only_walls) return;
 
@@ -462,6 +490,7 @@ function fill_grid(color?:Float32Array, only_walls=false, add_noise=false) {
 
 function run_obstacle_splats() {
     if (obstacle_splat.queue.length === 0) return;
+    scene_changed();
 
     obstacle_splat_p.use_program();
     obstacle_mask_dirty = true;
