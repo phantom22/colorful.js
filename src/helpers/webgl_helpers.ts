@@ -151,6 +151,48 @@ function texture_fill(tex_fbo:WebGLFramebuffer, _with:number[]|Float32Array) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+/** GPU -> CPU reads that don't stall. A plain readPixels into an array waits
+ * for the GPU to finish everything queued before it (15 ms at sim 256, 70+ at
+ * sim 1024). This one reads into a pixel pack buffer behind a fence, and
+ * poll_readbacks (once per frame) copies the result out once the fence has
+ * signalled, usually a frame or two later. */
+const readbacks: { buf: WebGLBuffer, sync: WebGLSync, out: ArrayBufferView, done: (out: any) => void }[] = [];
+
+/** reads w x h texels from the framebuffer into `out`, then calls done(out). */
+function read_pixels_async<T extends ArrayBufferView>(fbo:WebGLFramebuffer, w:number, h:number,
+                                                    format:number, type:number, out:T, done:(out:T) => void) {
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, out.byteLength, gl.STREAM_READ);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.readPixels(0, 0, w, h, format, type, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (sync === null) { gl.deleteBuffer(buf); return; }
+    gl.flush();                                   // the fence only signals once submitted
+    readbacks.push({ buf, sync, out, done });
+}
+
+/** finishes the reads whose fence has signalled. Never waits. */
+function poll_readbacks() {
+    for (let i = 0; i < readbacks.length;) {
+        const r = readbacks[i];
+        const s = gl.clientWaitSync(r.sync, 0, 0);
+        if (s === gl.TIMEOUT_EXPIRED) { i++; continue; }
+        readbacks.splice(i, 1);
+        gl.deleteSync(r.sync);
+        const ok = s !== gl.WAIT_FAILED;
+        if (ok) {
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, r.buf);
+            gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, r.out);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        }
+        gl.deleteBuffer(r.buf);
+        if (ok) r.done(r.out);
+    }
+}
+
 function reduction_textures(out_tex:WebGLTexture[], out_fbo:WebGLFramebuffer[], m:number, n:number, block_size:number) {
     while (n > 1 || m > 1) {
         m = Math.ceil(m / block_size);

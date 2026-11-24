@@ -9,9 +9,28 @@ function canvas_css_size(): [number, number] {
     return [Math.max(1, Math.round(canvas_rect.width)), Math.max(1, Math.round(canvas_rect.height))];
 }
 
-/** sizes the canvas drawing buffer to its CSS size. Returns true if it changed. */
+/** most pixels the canvas draws (1920x1080). A bigger canvas gets a smaller
+ * drawing buffer that the browser stretches to fit: the display pass costs
+ * per pixel (84% of the frame at 4K, vs 41% at 1440x900) and the sim and dye
+ * grids are much coarser than such a screen anyway. */
+const MAX_DISPLAY_PIXELS = 1920 * 1080;
+
+/** the canvas' CSS size as last applied, see apply_canvas_size. */
+const canvas_css: [number, number] = [0, 0];
+
+/** drawing buffer size for a CSS size, see MAX_DISPLAY_PIXELS. */
+function canvas_buffer_size(w:number, h:number): [number, number] {
+    const s = Math.min(1, Math.sqrt(MAX_DISPLAY_PIXELS / (w * h)));
+    return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
+}
+
+/** sizes the canvas drawing buffer to its CSS size (capped, see
+ * MAX_DISPLAY_PIXELS). Returns true if the buffer changed. */
 function apply_canvas_size() {
-    const [w, h] = canvas_css_size();
+    const css = canvas_css_size();
+    canvas_css[0] = css[0];
+    canvas_css[1] = css[1];
+    const [w, h] = canvas_buffer_size(css[0], css[1]);
     if (w === canvas_el.width && h === canvas_el.height)
         return false;
 
@@ -24,9 +43,14 @@ function apply_canvas_size() {
  * (the browser keeps stretching the last frame), the rebuild happens once the
  * resize settles. */
 function update_viewport() {
-    const [w, h] = canvas_css_size();
-    if (w === canvas_el.width && h === canvas_el.height && !renderer.resizing)
+    const css = canvas_css_size(), [w, h] = canvas_buffer_size(css[0], css[1]);
+    if (w === canvas_el.width && h === canvas_el.height && !renderer.resizing) {
+        // above the cap a CSS change can keep the same buffer: nothing to
+        // rebuild, the picture just stretches, so the state now spans this size
+        canvas_css[0] = css[0];
+        canvas_css[1] = css[1];
         return;
+    }
 
     if (!renderer.resizing) {
         renderer.resizing = true;
@@ -37,8 +61,11 @@ function update_viewport() {
 }
 
 function finish_resize() {
-    const old_w = canvas_el.width, old_h = canvas_el.height;
+    // CSS sizes: the state is carried over in screen space (sh_resample), and
+    // the buffer is scaled differently from the CSS size on big screens
+    const [old_w, old_h] = canvas_css;
     if (apply_canvas_size())
-        resize_simulation(old_w, old_h, canvas_el.width, canvas_el.height);
+        resize_simulation(old_w, old_h, canvas_css[0], canvas_css[1]);
     renderer.resizing = false;
+    sim_wake();
 }

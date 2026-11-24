@@ -1,3 +1,4 @@
 /js/
 /node_modules/
 /bundle/index.js
+/.claude/settings.local.json

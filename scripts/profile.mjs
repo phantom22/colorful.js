@@ -1,17 +1,20 @@
-// GPU time per shader pass, via timer queries. Usage:
+// GPU time per shader pass, per sim step, via timer queries. Usage:
 //   node scripts/profile.mjs <sim res> <width> <height> <dpr>
 //   env NOAA=1: canvas without MSAA; STORE='{"precision.v-cycles":1}': saved inspector values
-// Passes are labeled by their first uniforms (the multigrid ones share "extent,ghost_lo,kappa").
+// Passes are labeled by their shader id. The sim is uncapped (target fps 1000,
+// no vsync) so the GPU stays busy: at 60 steps/s an integrated GPU clocks down
+// to fill the frame and every pass reads slower than it is. Times are divided
+// by sim steps, not by animation frames (most frames skip the sim when uncapped).
+// Serves the unminified bundle so the app's globals keep their names.
 import { chromium } from "playwright";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import path from "node:path";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ARGS = ["--use-angle=vulkan","--enable-features=Vulkan","--ignore-gpu-blocklist","--enable-privileged-webgl-extensions","--enable-webgl-draft-extensions","--disable-gpu-vsync","--disable-frame-rate-limit"];
 const hook = () => {
   const P = WebGL2RenderingContext.prototype, names = new Map(); let cur = "?", ext = null, gl0 = null;
   const stats = {}; const pending = [];
-  const oLink = P.linkProgram; P.linkProgram = function (p) {
-    const fs = this.getAttachedShaders(p).map(s => this.getShaderSource(s)).find(s => /out vec4/.test(s)) || "";
-    const u = [...fs.matchAll(/uniform\s+\w+\s+(\w+)/g)].map(m => m[1]).filter(n => !/^(TEXEL|DTEXEL|ASPECT|open_borders|tex_mask|tex_obstacles)$/.test(n)).slice(0, 3).join(",");
-    names.set(p, u); return oLink.call(this, p); };
+  window.__names = names;
   const oUse = P.useProgram; P.useProgram = function (p) { cur = names.get(p) ?? "?"; return oUse.call(this, p); };
   const oDraw = P.drawArrays; P.drawArrays = function (...a) {
     if (!ext) { ext = this.getExtension("EXT_disjoint_timer_query_webgl2"); gl0 = this; }
@@ -39,20 +42,27 @@ const extra = JSON.parse(process.env.STORE || "{}");
 if (process.env.TRIVIAL) await ctx.addInitScript(() => { const o = WebGL2RenderingContext.prototype.shaderSource; WebGL2RenderingContext.prototype.shaderSource = function (sh, src) { if (/source_kind/.test(src) && /o_color/.test(src)) src = src.replace(/void main\(\)\s*\{[\s\S]*$/, "void main() { o_color = vec4(0.0, 0.0, 0.0, 1.0); }"); return o.call(this, sh, src); }; });
 await ctx.addInitScript(r => { if (!sessionStorage.x) { sessionStorage.x = 1; localStorage.setItem("fluid_ui_v1", JSON.stringify({ "precision.simulation": r[0], ...r[1] })); } }, [res, extra]);
 const p = await ctx.newPage();
-await p.goto(pathToFileURL(process.cwd() + "/index.html").href);
+await ctx.route(/index\.min\.js$/, r => r.fulfill({ path: path.join(ROOT, "bundle/index.js"), contentType: "text/javascript" }));
+await p.goto(pathToFileURL(path.join(ROOT, "index.html")).href);
+await p.waitForFunction(() => typeof renderer !== "undefined" && renderer.frame > 2);
+await p.evaluate(() => {
+  for (const [id, s] of Object.entries(shaders)) __names.set(s.program, id);
+  renderer.target_fps = 1000; pacing.refresh = 1000;           // uncapped
+  window.__steps = 0; const o = window.sim_step; window.sim_step = function () { __steps++; return o(); };
+});
 await p.waitForTimeout(1500);
 // stir the fluid so it is not idle
 await p.mouse.move(w * .2, h * .5); await p.mouse.down();
 for (let i = 0; i < 30; i++) { await p.mouse.move(w * (.2 + i * .02), h * (.5 + .2 * Math.sin(i / 4))); await p.waitForTimeout(16); }
 await p.mouse.up();
-const fps = await p.evaluate(() => new Promise(r => { let n = 0; const t0 = performance.now(); const f = t => { n++; t - t0 < 2000 ? requestAnimationFrame(f) : r(n * 1000 / (t - t0)); }; requestAnimationFrame(f); }));
-await p.evaluate(() => { window.__prof = 1; });
-const frames = 60; await p.evaluate(n => new Promise(r => { const f = () => --n ? requestAnimationFrame(f) : r(); requestAnimationFrame(f); }), frames);
-await p.evaluate(() => { window.__prof = 0; }); await p.waitForTimeout(500);
+const fps = await p.evaluate(() => new Promise(r => { const s0 = __steps, t0 = performance.now(); setTimeout(() => r((__steps - s0) * 1000 / (performance.now() - t0)), 2000); }));
+const steps0 = await p.evaluate(() => { window.__prof = 1; return __steps; });
+await p.evaluate(() => new Promise(r => { const s0 = __steps; const f = () => __steps - s0 >= 60 ? r() : requestAnimationFrame(f); requestAnimationFrame(f); }));
+const frames = await p.evaluate(s0 => { window.__prof = 0; return __steps - s0; }, steps0); await p.waitForTimeout(500);
 const { stats, ext } = await p.evaluate(() => window.__collect());
-console.log(`sim ${res}, ${w}x${h}@${dpr}: uncapped ${fps.toFixed(0)} fps, timer ext ${ext}`);
+console.log(`sim ${res}, ${w}x${h}@${dpr}: ${fps.toFixed(0)} sim steps/s uncapped, ${frames} steps timed, timer ext ${ext}`);
 const rows = Object.entries(stats).map(([k, v]) => [k, v.ms / frames, v.n / frames]).sort((a, b) => b[1] - a[1]);
 const tot = rows.reduce((s, r) => s + r[1], 0);
 for (const [k, ms, n] of rows) if (ms > 0.01) console.log(`  ${ms.toFixed(3).padStart(7)} ms  ${(100*ms/tot).toFixed(0).padStart(3)}%  ${n.toFixed(0).padStart(3)} draws  ${k}`);
-console.log(`  ${tot.toFixed(3).padStart(7)} ms  total GPU per frame`);
+console.log(`  ${tot.toFixed(3).padStart(7)} ms  total GPU per sim step`);
 await b.close();

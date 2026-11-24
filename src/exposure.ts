@@ -65,9 +65,11 @@ function alloc_exposure() {
     exposure.last_mode = -1;   // the new textures hold nothing, snap next time
 }
 
-/** updates exposure.tex[exposure.read] from the field `src` (sim resolution).
- * Leaves the sim viewport set and blending off. */
-function run_exposure(src:WebGLTexture, kind:fluid_display_kind_t) {
+/** reduces the field `src` (sim resolution) through the chain to one texel of
+ * (sum m², fluid cell count, max m), see sh_exposure_reduce, and returns that
+ * last 1x1 level. Also used by the idle check (draw.ts) on the velocity: the
+ * levels are scratch, only exposure.tex carries state. Leaves blending off. */
+function reduce_field(src:WebGLTexture, kind:fluid_display_kind_t) {
     gl.disable(gl.BLEND);
 
     exposure_reduce_p.use_program();
@@ -86,6 +88,13 @@ function run_exposure(src:WebGLTexture, kind:fluid_display_kind_t) {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         input = l.tex;
     }
+    return exposure.levels[exposure.levels.length - 1];
+}
+
+/** updates exposure.tex[exposure.read] from the field `src` (sim resolution).
+ * Leaves the sim viewport set and blending off. */
+function run_exposure(src:WebGLTexture, kind:fluid_display_kind_t) {
+    const input = reduce_field(src, kind).tex;
 
     // ease toward the new value; snap after a view change or a realloc
     const snap = exposure.last_mode !== fluid.display_mode,

@@ -85,7 +85,8 @@ const SCENE_KEY = "fluid_scene_v1";
 /** wait this long (ms) after the last change before saving. */
 const SCENE_SAVE_DELAY = 1000;
 
-const scene = { dirty: false, changed_at: 0, geyser_version: -1 };
+/** save_seq: bumped by every save, so a slow async one can't overwrite a newer one. */
+const scene = { dirty: false, changed_at: 0, geyser_version: -1, save_seq: 0 };
 
 /** walls changed (geysers are watched through geysers.version). */
 function scene_changed() {
@@ -128,38 +129,54 @@ function from_base64(s:string) {
     return b;
 }
 
-function scene_save() {
+/** saves the walls and geysers. The walls are read back from the GPU without
+ * stalling (read_pixels_async), so the write lands a frame or two later.
+ * sync: read and write now, for when the page is going away and later frames
+ * may never come. */
+function scene_save(sync = false) {
     scene.dirty = false;
-    // the walls: R8, read back as RGBA (always readable), red channel kept
-    const rgba = new Uint8Array(N1 * N2 * 4), walls = new Uint8Array(N1 * N2);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, obstacles_fbo);
-    gl.readPixels(0, 0, N1, N2, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    let any = false;
-    for (let i = 0; i < walls.length; i++) { walls[i] = rgba[i * 4]; any ||= walls[i] !== 0; }
-    const r = canvas_el.getBoundingClientRect();
-    const data = {
-        "v": 1, "w": N1, "h": N2, "cw": r.width, "ch": r.height,
-        "walls": any ? to_base64(rle_encode(walls)) : null,
-        "geysers": geysers.list.map(g => ({
-            "uv": [g.uv[0], g.uv[1]], "angle": g.angle, "strength": g.strength, "color": g.color.slice(0, 3),
-            "dye": g.dye, "force": g.force,
-            "dye_radius": g.dye_radius, "dye_strength": g.dye_strength,
-            "velocity_radius": g.velocity_radius, "velocity_strength": g.velocity_strength,
-        })),
+    const seq = ++scene.save_seq;
+    // everything but the walls is captured now, as it is at this moment
+    const w = N1, h = N2, r = canvas_el.getBoundingClientRect();
+    const geys = geysers.list.map(g => ({
+        "uv": [g.uv[0], g.uv[1]], "angle": g.angle, "strength": g.strength, "color": g.color.slice(0, 3),
+        "dye": g.dye, "force": g.force,
+        "dye_radius": g.dye_radius, "dye_strength": g.dye_strength,
+        "velocity_radius": g.velocity_radius, "velocity_strength": g.velocity_strength,
+    }));
+    const write = (rgba:Uint8Array) => {
+        if (seq !== scene.save_seq) return;       // a newer save has started (or finished)
+        const walls = new Uint8Array(w * h);
+        let any = false;
+        for (let i = 0; i < walls.length; i++) { walls[i] = rgba[i * 4]; any ||= walls[i] !== 0; }
+        const data = {
+            "v": 1, "w": w, "h": h, "cw": r.width, "ch": r.height,
+            "walls": any ? to_base64(rle_encode(walls)) : null,
+            "geysers": geys,
+        };
+        try {
+            if (!any && geys.length === 0) localStorage.removeItem(SCENE_KEY);
+            else localStorage.setItem(SCENE_KEY, JSON.stringify(data));
+        } catch {}
     };
-    try {
-        if (!any && data["geysers"].length === 0) localStorage.removeItem(SCENE_KEY);
-        else localStorage.setItem(SCENE_KEY, JSON.stringify(data));
-    } catch {}
+    // the walls: R8, read back as RGBA (always readable), red channel kept
+    const rgba = new Uint8Array(w * h * 4);
+    if (!sync) { read_pixels_async(obstacles_fbo, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba, write); return; }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, obstacles_fbo);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    write(rgba);
 }
 
-addEventListener("pagehide", () => { if (scene.dirty) scene_save(); });
-document.addEventListener("visibilitychange", () => { if (document.hidden && scene.dirty) scene_save(); });
+addEventListener("pagehide", () => { if (scene.dirty) scene_save(true); });
+document.addEventListener("visibilitychange", () => { if (document.hidden && scene.dirty) scene_save(true); });
 
 /** at load, after init_textures / init_ui: puts the saved walls and geysers
  * back, scaled about the screen center like a window resize (sh_resample). */
 function scene_restore() {
+    // in sync before any early return: with nothing saved, the first scene_tick
+    // used to see version -1 as a change and save (and stall) a second after load
+    scene.geyser_version = geysers.version;
     let d: any;
     try { d = JSON.parse(localStorage.getItem(SCENE_KEY) ?? "null"); } catch { return; }
     if (!d || d["v"] !== 1) return;

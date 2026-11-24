@@ -222,6 +222,7 @@ input[type=range]::-moz-range-thumb { width: 8px; height: 12px; border: 0; backg
   display: flex; gap: 16px; padding: 3px 10px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
 #st-tool { color: var(--accent); }
+#st-fps { cursor: pointer; user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
 
 #screen { cursor: none; display: block; width: 100%; height: 100%; touch-action: none; }
 

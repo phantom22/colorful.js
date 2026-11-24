@@ -17,8 +17,13 @@ class UI_INSPECTOR {
     }
 
     get stowed() { return this.root.classList.contains("stowed"); }
+    /** false while stowed or with the HUD hidden: draw then skips refresh. */
+    get shown() {
+        return !this.stowed && !(ui_container && (ui_container.hidden || ui_container.classList.contains("hidden")));
+    }
     /** slides the inspector off the right edge, leaving the tab to bring it back (I toggles it). */
     stow(v = true) {
+        if (!v && this.stowed) this.refresh();     // values may be stale, it isn't refreshed while stowed
         this.root.classList.toggle("stowed", v);
         this.tab.textContent = v ? "‹" : "›";
         this.tab.title = v ? "Show inspector  [I]" : "Hide inspector  [I]";

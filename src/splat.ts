@@ -165,8 +165,10 @@ function run_splats() {
     splat_p.use_program();
     splat_p.uniforms["steps"].set(1);
 
-    const _k1 = N1 * splat.force_scale / renderer.fixed_delta_time,
-          _k2 = N2 * splat.force_scale / renderer.fixed_delta_time,
+    // the brush moved this far in real_step real seconds: its own speed,
+    // whatever the time scale
+    const _k1 = N1 * splat.force_scale / renderer.real_step(),
+          _k2 = N2 * splat.force_scale / renderer.real_step(),
           vel_extent = gaussian_extent(splat.velocity_radius, splat.velocity_strength),
           dye_extent = gaussian_extent(splat.dye_radius, splat.dye_strength);
 

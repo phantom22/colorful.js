@@ -2,7 +2,7 @@ let gl: WebGL2RenderingContext;
 
 let vao:WebGLVertexArrayObject;
 
-let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"source_kind", 4>, uniform<"palette_type", 4>, uniform<"blur_type", 4>, uniform<"reference_value", 5>, uniform<"value_rescale_threshold", 5>, uniform<"rescale_factor", 5>]>,
+let quad_p: shader_program<[uniform<"tex_source", 7>, uniform<"tex_obstacles", 7>, uniform<"source_kind", 4>, uniform<"palette_type", 4>, uniform<"blur_type", 4>, uniform<"reference_value", 5>, uniform<"value_rescale_threshold", 5>, uniform<"rescale_factor", 5>, uniform<"interp", 5>, uniform<"interp_dt", 5>, uniform<"interp_blend", 4>]>,
     curl_velocity_fill_p: shader_program<[uniform<"scale", 5>, uniform<"amp", 5>, uniform<"div_mix", 5>, uniform<"seed", 5>]>,
     splat_p: shader_program<[uniform<"tex_obstacles", 7>, uniform<"point", 8>, uniform<"prev", 8>, uniform<"value", 10>, uniform<"brush_radius", 5>, uniform<"brush_strength", 5>, uniform<"additive", 5>, uniform<"steps", 5>]>,
     obstacle_splat_p: shader_program<[uniform<"point", 8>, uniform<"prev", 8>, uniform<"brush_radius", 5>, uniform<"outline_width", 5>, uniform<"erase", 5>]>,
@@ -37,7 +37,7 @@ function recompile_forcefield(get_velocity:string): null | string {
             new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
             new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
-            new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.velocity_dissipation),
+            new uniform("dissipation", GL_FLOAT, U_UPDATE, () => per_step(fluid.velocity_dissipation)),
             new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
             new uniform("center_worldpos", GL_VEC2, U_UPDATE, () => force.center),
             new uniform("window_width", GL_FLOAT, U_UPDATE, () => force.span),
@@ -46,7 +46,7 @@ function recompile_forcefield(get_velocity:string): null | string {
             new uniform("replace", GL_FLOAT, U_UPDATE, () => mouse.m2_down ? 1.0 : 0.0),
             new uniform("relax", GL_FLOAT, U_UPDATE, () => force.pure_vector_field ? force.relaxation : -1.0),
             new uniform("time", GL_FLOAT, U_UPDATE, () => renderer.time)
-        ]);
+        ]).finish();     // compile errors now, for the editor
         const { program, vertex, fragment } = shaders["forcefield"];
         gl.deleteShader(vertex);
         gl.deleteShader(fragment);
@@ -96,6 +96,10 @@ function init_webgl() {
         new uniform("reference_value", GL_FLOAT),
         new uniform("value_rescale_threshold", GL_FLOAT),
         new uniform("rescale_factor", GL_FLOAT),
+        new uniform("interp", GL_FLOAT),
+        new uniform("interp_dt", GL_FLOAT),
+        new uniform("interp_blend", GL_INT),
+        new uniform("tex_prev", GL_TEXTURE, U_INIT, 4),
         new uniform("auto_exposure", GL_INT, U_UPDATE, () => fluid.display.auto_exposure),
         new uniform("tex_exposure", GL_TEXTURE, U_INIT, 2),
         new uniform("exposure", GL_FLOAT, U_UPDATE, () => fluid.display.exposure),
@@ -142,7 +146,7 @@ function init_webgl() {
         new uniform("tex_velocity", GL_TEXTURE, U_INIT, 0),
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("tex_wall", GL_TEXTURE, U_INIT, 4),
-        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.velocity_dissipation),
+        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => per_step(fluid.velocity_dissipation)),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("center_worldpos", GL_VEC2, U_UPDATE, () => force.center),
         new uniform("window_width", GL_FLOAT, U_UPDATE, () => force.span),
@@ -159,7 +163,7 @@ function init_webgl() {
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
-        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.velocity_dissipation)
+        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => per_step(fluid.velocity_dissipation))
     ]);
 
     dye_advect_p = new shader_program("dye_advect", quad_vert, sh_sim_dye_advect, [
@@ -169,7 +173,7 @@ function init_webgl() {
         new uniform("tex_obstacles", GL_TEXTURE, U_INIT, 2),
         new uniform("open_borders", GL_INT, U_UPDATE, () => fluid.open_borders),
         new uniform("dt", GL_FLOAT, U_UPDATE, renderer.fixed_dt_getter),
-        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => fluid.dye_dissipation),
+        new uniform("dissipation", GL_FLOAT, U_UPDATE, () => per_step(fluid.dye_dissipation)),
         new uniform("bg_log", GL_VEC3, U_UPDATE, () => fluid.bg.subarray(0, 3)),
         new uniform("tex_curl", GL_TEXTURE, U_INIT, 3),
         new uniform("diffuse", GL_INT, U_UPDATE, () => diffusion_active() ? 1 : 0),

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(node scripts/uitest.mjs)",
+      "Bash(node scripts/uitest.mjs *)",
+      "Bash(node scripts/drive.mjs)",
+      "Bash(node scripts/drive.mjs *)",
+      "Bash(node scripts/profile.mjs *)",
+      "Bash(node --check *)"
+    ]
+  }
+}

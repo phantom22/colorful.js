@@ -705,6 +705,12 @@ uniform vec2  screen_px;        // drawing buffer size
 uniform sampler2D tex_velocity; // raw sim velocity, whatever the view shows
 uniform float arrow_ref;        // speed that maps to ~63% of the full arrow length
 uniform int   arrow_gradient;   // 1: pressure view, arrows show its push (-gradient)
+// slow motion, between two steps (see render_view)
+uniform float interp;           // 0..1, from the last step to the next
+uniform float interp_dt;        // sim seconds per step
+uniform int   interp_blend;     // 1: blend tex_prev (one step back) into tex_source
+uniform sampler2D tex_prev;
+uniform vec2  TEXEL;            // sim texel, in uv
 
 const float border_size = 0.0025;
 
@@ -768,7 +774,17 @@ vec3 palette(float t, float hue) {
 }
 
 vec3 get_color() {
-    vec4 s = sample_blurred(v_uv);
+    // slow motion, between two steps. Dye: the previous step carried forward
+    // along the flow, blended into the last one carried back, so it starts
+    // and ends exactly on the two stored steps. Other views: the current
+    // field carried forward, like the advection does (sh_sim_dye_advect).
+    vec2 uv = v_uv, d = vec2(0.0);
+    if (interp > 0.0) d = interp_dt * texture(tex_velocity, v_uv).xy * TEXEL;   // no extra fetch at 1x
+    vec4 s;
+    if (interp_blend == 1)
+        s = mix(texture(tex_prev, uv - interp * d), texture(tex_source, uv + (1.0 - interp) * d), interp);
+    else
+        s = sample_blurred(uv - interp * d);
 
     if (source_kind == 0) {
         return exp(-s.rgb);

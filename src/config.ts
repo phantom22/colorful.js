@@ -104,7 +104,7 @@ const fluid = {
     open_borders: 0,
     /** 1: lower the sim and dye resolution while the target fps isn't met
      * (see pacing in draw.ts). The inspector resolutions are the ceiling. */
-    dynamic_resolution: 0,
+    dynamic_resolution: is_touch() ? 1 : 0,       // on by default on phones and tablets
     drag: 0.05
 };
 color_logarithm(fluid.bg, bg);

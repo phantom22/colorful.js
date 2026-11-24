@@ -99,6 +99,7 @@ function alloc_textures() {
     velocity_read = 0;
     pressure_read = 0;
     dye_read = 0;
+    renderer.dye_prev_valid = false;
 
     alloc_multigrid();
     alloc_exposure();

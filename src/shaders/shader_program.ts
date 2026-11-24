@@ -138,27 +138,45 @@ const shared_uniforms = () => [
     new uniform("ASPECT", GL_FLOAT, U_UPDATE, () => ASPECT_NUM),
 ];
 
+/** lets the driver compile and link programs on its own threads; nothing to
+ * set, enabling it is enough (see shader_program). */
+let parallel_compile_ext: object | null | undefined;
+
+/** A program. The constructor only queues the compile and link; the status
+ * checks and uniform lookups, which make the CPU wait for the driver, happen in
+ * finish(), on first use. At startup every program is created before most are
+ * used, so the compiles overlap instead of running one after another with a
+ * wait after each (48 shaders: about 50 ms of waiting here). */
 class shader_program<Us extends readonly uniform[] = readonly uniform[]> {
+    readonly id: string;
     readonly vertex: WebGLShader;
     readonly fragment: WebGLShader;
     readonly program: WebGLProgram;
-    readonly uniforms: uniform_map<Us>;
+    private _uniforms: uniform_map<Us> | null = null;
+    private readonly uniform_list: readonly uniform[];
     private readonly to_update: uniform[] = [];
+
+    /** the uniforms by name. Finishes the program first. */
+    get uniforms(): uniform_map<Us> {
+        if (this._uniforms === null) this.finish();
+        return this._uniforms!;
+    }
 
     constructor(id: string, vert_src: string, frag_src: string, uniforms: [...Us]) {
         if (shaders[id] !== undefined)
             throw `shader_program: a program with id '${id}' already exists.`;
+        if (parallel_compile_ext === undefined)
+            parallel_compile_ext = gl.getExtension("KHR_parallel_shader_compile");
 
         const compile = (type: number, src: string, label: string) => {
             const s = gl.createShader(type);
             if (s === null) throw `shader_program: failed to create ${label} shader`;
             gl.shaderSource(s, src.trim());
             gl.compileShader(s);
-            if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-                throw `Shader{${id}}: failed to compile ${label} shader, reason:` + gl.getShaderInfoLog(s);
             return s;
         };
 
+        this.id = id;
         this.vertex = compile(gl.VERTEX_SHADER, vert_src, "vertex");
         this.fragment = compile(gl.FRAGMENT_SHADER, frag_src, "fragment");
 
@@ -166,13 +184,30 @@ class shader_program<Us extends readonly uniform[] = readonly uniform[]> {
         gl.attachShader(p, this.vertex);
         gl.attachShader(p, this.fragment);
         gl.linkProgram(p);
-        if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-            throw `Shader{${id}}: failed to link, reason: ${gl.getProgramInfoLog(p)}`;
         this.program = p;
+        this.uniform_list = uniforms;
+        shaders[id] = this;
+    }
+
+    /** waits for the link, throws the compile or link error if there is one,
+     * then looks up the uniforms and uploads the U_INIT ones. Runs once, on
+     * first use; call it right away to get errors at construction time.
+     * Leaves the current program as it was. */
+    finish(): this {
+        if (this._uniforms !== null) return this;
+        const id = this.id, p = this.program;
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+            delete shaders[id];                  // the id can be used again
+            for (const [s, label] of [[this.vertex, "vertex"], [this.fragment, "fragment"]] as const)
+                if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+                    throw `Shader{${id}}: failed to compile ${label} shader, reason:` + gl.getShaderInfoLog(s);
+            throw `Shader{${id}}: failed to link, reason: ${gl.getProgramInfoLog(p)}`;
+        }
+        const prev = gl.getParameter(gl.CURRENT_PROGRAM);
         gl.useProgram(p);
 
         const map: Record<string, uniform> = {};
-        for (const u of uniforms) {
+        for (const u of this.uniform_list) {
             u.owner = id;
             u.loc = gl.getUniformLocation(p, u.name);
             if (u.loc === null)
@@ -191,11 +226,13 @@ class shader_program<Us extends readonly uniform[] = readonly uniform[]> {
             if (u.loc !== null) this.to_update.push(u);
         }
 
-        this.uniforms = map as unknown as uniform_map<Us>;
-        shaders[id] = this;
+        this._uniforms = map as unknown as uniform_map<Us>;
+        gl.useProgram(prev);
+        return this;
     }
 
     use_program(): void {
+        if (this._uniforms === null) this.finish();
         gl.useProgram(this.program);
         for (const u of this.to_update) u.update_value();
     }

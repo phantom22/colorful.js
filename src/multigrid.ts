@@ -156,7 +156,20 @@ const MG_REACH_UNLIMITED = 1000;
  * same continuous equation needs the term scaled by size² too. */
 function mg_kappa(l:mg_level) {
     const r = fluid.pressure_reach;   // at the reference grid
-    return r >= MG_REACH_UNLIMITED ? 0 : (l.size / (r * res_scale.sim)) ** 2;
+    return r >= MG_REACH_UNLIMITED ? 0 : (l.size / (r * res_scale.sim)) ** 2 * mg_kappa_time();
+}
+
+/** The screened solve removes only part of the divergence each step (at the
+ * reach's own scale, half of it), and the rest is worked on again next step,
+ * so more steps per second of sim time (slow motion, a higher target fps)
+ * would make the fluid stiffer. This rescales the screening so that the
+ * fraction left at the reach scale after one second stays what it is at 60
+ * steps/s: left per step at that scale is k / (1 + k) with k this factor,
+ * and it has to equal (1/2)^step_ratio. Other scales follow closely. */
+function mg_kappa_time() {
+    const s = Math.max(0.05, step_ratio()),   // time scale 0 (paused): keep it finite
+          q = 2 ** -s;
+    return q / (1 - q);
 }
 
 /** builds the level pyramid at the current N1,N2. Called by alloc_textures
